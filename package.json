@@ -1,0 +1,32 @@
+{
+  "name": "pi-flows",
+  "version": "0.1.0",
+  "description": "Flow engine, dashboard, and orchestration extensions for pi",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/provider-register.ts",
+      "./extensions/file-tracker.ts",
+      "./extensions/flow-engine",
+      "./extensions/flow-dashboard",
+      "./extensions/flow-summary",
+      "./extensions/flow-context",
+      "./extensions/flow-workspace",
+      "./extensions/flow-footer.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}
