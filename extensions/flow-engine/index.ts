@@ -52,6 +52,7 @@ let flows = new Map<string, FlowConfig>();
 let packageRoot = "";
 const extraAgentsDirs: string[] = [];
 const extraFlowsDirs: string[] = [];
+const extraGuardExtPaths: string[] = [];
 
 /** Collect all agent names referenced by a flow (agent steps). */
 export function extractAgentNames(flow: FlowConfig): string[] {
@@ -176,6 +177,7 @@ class FlowManager {
       task,
       cwd: getProjectRoot(),
       guardExtPath: getGuardExtPath(),
+      extraGuardExtPaths: [...extraGuardExtPaths],
       signal: abortController.signal,
       getModelRole: (role) => getModelRole()?.(role),
       getAgent: (agentName) => getAgents().get(agentName),
@@ -653,6 +655,15 @@ export function activate(pi: ExtensionAPI) {
     if (dir) registerExtraSkillsDir(dir);
   });
 
+  // Guard extension registration: dependent packages register additional
+  // guard extensions that are loaded into spawned subagent processes.
+  pi.events?.on("flow:register-guard-extension", (data) => {
+    const path = (data as { path: string }).path;
+    if (path && !extraGuardExtPaths.includes(path)) {
+      extraGuardExtPaths.push(path);
+    }
+  });
+
   // Register tools
   registerSubagentTool(
     pi,
@@ -660,6 +671,7 @@ export function activate(pi: ExtensionAPI) {
     (role) => getModelRole(role),
     guardExtPath,
     projectRoot,
+    extraGuardExtPaths,
   );
 
   registerAskUserTool(pi);

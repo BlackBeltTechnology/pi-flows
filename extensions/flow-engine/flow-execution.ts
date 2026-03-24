@@ -19,6 +19,7 @@ export interface FlowRunOptions {
   task: string;
   cwd: string;
   guardExtPath: string;
+  extraGuardExtPaths?: string[];
   getModelRole?: (role: string) => string | undefined;
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
@@ -355,6 +356,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     getModelRole: options.getModelRole,
     cwd: options.cwd,
     guardExtPath: options.guardExtPath,
+    extraGuardExtPaths: options.extraGuardExtPaths,
     onToolCall: (name, input) => options.onToolCall?.(step.agent, name, input),
     onToolResult: (name, output, err) => options.onToolResult?.(step.agent, name, output, err),
     onAssistantText: (text) => options.onAssistantText?.(step.agent, text),
@@ -412,6 +414,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
       getModelRole: options.getModelRole,
       cwd: options.cwd,
       guardExtPath: options.guardExtPath,
+    extraGuardExtPaths: options.extraGuardExtPaths,
       decisionBranches: branchNames,
       signal: options.signal,
     });
@@ -503,6 +506,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     getModelRole: options.getModelRole,
     cwd: options.cwd,
     guardExtPath: options.guardExtPath,
+    extraGuardExtPaths: options.extraGuardExtPaths,
     decisionBranches: branchNames,
     signal: options.signal,
   });
@@ -566,6 +570,7 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     getModelRole: options.getModelRole,
     cwd: options.cwd,
     guardExtPath: options.guardExtPath,
+    extraGuardExtPaths: options.extraGuardExtPaths,
     decisionBranches: ["loop", "exit"],
     signal: options.signal,
   });

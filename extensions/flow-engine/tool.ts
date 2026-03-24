@@ -8,7 +8,8 @@ export function registerSubagentTool(
   getAgents: () => Map<string, AgentConfig>,
   getModelRole: (role: string) => string | undefined,
   guardExtPath: string,
-  cwd: string
+  cwd: string,
+  extraGuardExtPaths?: string[],
 ): void {
   pi.registerTool({
     name: "subagent",
@@ -31,7 +32,7 @@ export function registerSubagentTool(
 
         const result = await spawnAgent({
           agent: agentConfig, task: params.task || "", templateContext: templateCtx,
-          getModelRole, cwd, guardExtPath,
+          getModelRole, cwd, guardExtPath, extraGuardExtPaths,
         });
         return { content: [{ type: "text" as const, text: result.output }], details: {} };
       }
@@ -42,7 +43,7 @@ export function registerSubagentTool(
           if (!agentConfig) return `Agent not found: ${entry.agent}`;
           const result = await spawnAgent({
             agent: agentConfig, task: entry.task, templateContext: { ...templateCtx, task: entry.task },
-            getModelRole, cwd, guardExtPath,
+            getModelRole, cwd, guardExtPath, extraGuardExtPaths,
           });
           return `=== Parallel Task ${i + 1} (${entry.agent}) ===\n${result.output}`;
         }));

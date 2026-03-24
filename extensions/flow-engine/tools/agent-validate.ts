@@ -19,13 +19,14 @@ export interface Diagnostic {
 
 // ---- Known constants ------------------------------------------------------
 
-// Tools that agents can declare in frontmatter `tools:` field.
-// Only these are valid for the architect to wire into agent definitions.
+// Base tools that agents can always declare in frontmatter `tools:` field.
+// These are the pi-core built-in tools. Extension-registered tools (e.g.,
+// model_cli from pi-judo) are discovered dynamically via pi.getAllTools().
 // `finish` is auto-injected by the guard and must NOT be declared.
 // `ask_user`, `subagent`, and architect tools (agent_catalog, agent_validate,
 // agent_write, flow_validate, flow_write, flow_preview) are main-session-only
 // or guard-blocked — they must NOT be declared in agent frontmatter.
-const KNOWN_TOOLS = new Set([
+const BASE_TOOLS = new Set([
   "read",
   "write",
   "edit",
@@ -34,27 +35,30 @@ const KNOWN_TOOLS = new Set([
   "find",
   "ls",
   "bash",
-  "model_cli",
-  "model_cli_readonly",
   "skill_read",
 ]);
 
+// Well-known model roles. Unknown roles produce a warning (not error) since
+// domain packages may define custom roles resolved at runtime.
 const KNOWN_MODEL_ROLES = new Set([
   "@planning",
   "@coding",
-  "@modelling",
   "@compact",
   "@fast",
   "@vision",
+  "@research",
 ]);
 
 // ---- Public validation function -------------------------------------------
 
 /**
  * Validate agent .md content and return diagnostics.
+ * @param knownTools Optional set of additional tool names (from pi.getAllTools()).
+ *   Unioned with BASE_TOOLS for validation. When omitted, only BASE_TOOLS are accepted.
  */
 export function validateAgentContent(
   content: string,
+  knownTools?: Set<string>,
 ): { valid: boolean; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   const lines = content.split("\n");
@@ -156,16 +160,19 @@ export function validateAgentContent(
 
   // ---- 3. Tool name validation --------------------------------------------
 
+  // Merge base tools with dynamically discovered extension tools
+  const allTools = knownTools ? new Set([...BASE_TOOLS, ...knownTools]) : BASE_TOOLS;
+
   if (fields.has("tools")) {
     const toolsEntry = fields.get("tools")!;
     const toolNames = toolsEntry.value.split(",").map((t) => t.trim()).filter(Boolean);
     for (const tool of toolNames) {
-      if (!KNOWN_TOOLS.has(tool)) {
+      if (!allTools.has(tool)) {
         diagnostics.push({
           line: toolsEntry.line,
           severity: "error",
           message: `Unknown tool "${tool}"`,
-          suggestion: `Known tools: ${[...KNOWN_TOOLS].join(", ")}`,
+          suggestion: `Known tools: ${[...allTools].join(", ")}`,
         });
       }
     }
@@ -182,9 +189,9 @@ export function validateAgentContent(
       if (!KNOWN_MODEL_ROLES.has(role)) {
         diagnostics.push({
           line: modelEntry.line,
-          severity: "error",
-          message: `Unknown model role "${role}"`,
-          suggestion: `Known roles: ${[...KNOWN_MODEL_ROLES].join(", ")}`,
+          severity: "warning",
+          message: `Unknown model role "${role}" (not in base set — may be defined by a domain package)`,
+          suggestion: `Base roles: ${[...KNOWN_MODEL_ROLES].join(", ")}`,
         });
       }
     }
@@ -280,7 +287,8 @@ export function registerAgentValidateTool(pi: ExtensionAPI): void {
       content: Type.String({ description: "The agent .md content to validate" }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const result = validateAgentContent(params.content);
+      const dynamicTools = new Set(pi.getAllTools().map(t => t.name));
+      const result = validateAgentContent(params.content, dynamicTools);
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
         details: {},

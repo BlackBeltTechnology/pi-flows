@@ -15,81 +15,15 @@ interface AccessRules {
   bash?: { deny: string[] };
 }
 
-// ---------------------------------------------------------------------------
-// .model file protection helpers
-// ---------------------------------------------------------------------------
-
-const MODEL_EXT = ".model";
-const BLOCK_REASON =
-  "Direct .model file access is blocked. Use the model_cli tool to query or modify model content.";
-
-function isModelFile(path: string): boolean {
-  return path.endsWith(MODEL_EXT);
-}
-
-function hasModelGlob(str: string): boolean {
-  return str.includes("*.model");
-}
-
-/** Commands that read file content (blocked on .model files). */
-const CONTENT_READING_CMDS = new Set([
-  "cat", "head", "tail", "grep", "sed", "awk",
-  "less", "more", "vi", "vim", "nano", "bat",
-]);
-
-function bashReadsModelFile(command: string): boolean {
-  for (const segment of command.split(/[;|&]+/)) {
-    const parts = segment.trim().split(/\s+/);
-    if (parts.length === 0) continue;
-    const cmd = parts[0].replace(/^.*\//, ""); // strip path prefix
-    if (!CONTENT_READING_CMDS.has(cmd)) continue;
-    for (const arg of parts.slice(1)) {
-      if (arg.startsWith("-")) continue;
-      if (isModelFile(arg) || hasModelGlob(arg)) return true;
-    }
-  }
-  return false;
-}
-
 /**
  * Guard extension injected into spawned agent processes.
  * Loaded via --extension flag. Reads access rules from AGENT_ACCESS_RULES env (temp file path).
+ *
+ * File-type guards (e.g., .model blocking) are NOT hardcoded here — they are
+ * registered by domain packages via flow:register-guard-extension and loaded
+ * as separate --extension files alongside this guard.
  */
 export default function guardExtension(pi: ExtensionAPI) {
-  // ── Universal: block all direct .model file access ──
-  pi.on("tool_call", (event: any) => {
-    const toolName = (event.toolName || event.name || "").toLowerCase();
-    const params = event.params || event.input || {};
-
-    // Read / Write / Edit — block if file_path targets a .model file
-    if (["read", "write", "edit"].includes(toolName)) {
-      if (isModelFile(params.file_path || "")) {
-        return { block: true, reason: BLOCK_REASON };
-      }
-    }
-
-    // Grep — block content mode on .model files; allow files_with_matches / count
-    if (toolName === "grep") {
-      const mode = params.output_mode || "files_with_matches";
-      if (mode === "content") {
-        const path = params.path || "";
-        const glob = params.glob || "";
-        if (isModelFile(path) || hasModelGlob(glob)) {
-          return { block: true, reason: BLOCK_REASON };
-        }
-      }
-    }
-
-    // Bash — block content-reading commands targeting .model files
-    if (toolName === "bash") {
-      if (bashReadsModelFile(params.command || "")) {
-        return { block: true, reason: BLOCK_REASON };
-      }
-    }
-
-    return undefined;
-  });
-
   // Block ask_user unconditionally — subagents must never prompt the user
   pi.on("tool_call", (event: any) => {
     const toolName = event.toolName || event.name;

@@ -225,8 +225,6 @@ These tools can be declared in the agent `tools:` field:
 | `find` | Find files in directory trees |
 | `ls` | List directory contents |
 | `skill_read` | Read skill documentation files |
-| `model_cli` | Query and modify `.model` files |
-| `model_cli_readonly` | Read-only `.model` file access |
 
 The `finish` tool is automatically available to every agent — do not declare it. Agents must call `finish` as their last action to submit structured results.
 
@@ -242,7 +240,6 @@ Assign models to roles with `/roles`. Agents reference roles with `@` prefix:
 | `@research` | Investigation and analysis |
 | `@compact` | Summarization |
 | `@vision` | Image/visual analysis |
-| `@modelling` | Domain-specific modelling |
 
 ## Flow Context
 
@@ -263,6 +260,7 @@ Domain packages can register additional agents, flows, skills, dashboard cards, 
 | `flow:register-card` | Register a custom dashboard card renderer |
 | `flow:register-workflow` | Register a multi-stage workflow for the dashboard |
 | `flow:register-gate` | Add a prerequisite check before flows can run |
+| `flow:register-guard-extension` | Register an additional guard extension for spawned subagents |
 | `flow:register-footer-segment` | Add a segment to the footer bar |
 | `flow:run` | Programmatically trigger a flow by name |
 | `flow:complete` | Listen for flow completion (receives full results) |

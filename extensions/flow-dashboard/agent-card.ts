@@ -22,8 +22,6 @@ function extractInputPreview(toolName: string, input: any): string {
       return (input.pattern || "").slice(0, 20);
     case "Bash": case "bash":
       return (input.command || "").slice(0, 20);
-    case "model_cli":
-      return (input.query || "").slice(0, 20);
     case "flow_write":
       return input.name || "";
     default:

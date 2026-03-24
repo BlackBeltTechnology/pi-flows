@@ -32,6 +32,7 @@ export interface SpawnOptions {
   getModelRole?: (role: string) => string | undefined;
   cwd: string;
   guardExtPath: string;                  // path to guard.ts extension
+  extraGuardExtPaths?: string[];         // additional guard extensions from packages
   onToolCall?: (toolName: string, input: any) => void;
   onToolResult?: (toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (text: string) => void;
@@ -91,8 +92,13 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   if (cliTools.length > 0) args.push("--tools", cliTools.join(","));
   args.push("--append-system-prompt", promptFile);
 
-  // Add guard extension
+  // Add guard extension(s)
   args.push("--extension", guardExtPath);
+  if (options.extraGuardExtPaths) {
+    for (const extPath of options.extraGuardExtPaths) {
+      args.push("--extension", extPath);
+    }
+  }
 
   // Build user message (task)
   const userMessage = `Task: ${expandTemplateVariables(task, templateContext)}`;

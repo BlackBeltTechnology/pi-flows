@@ -15,6 +15,7 @@ pi-flows uses `pi.events` (the shared event bus from pi's extension API) for all
 │  │  flow:register-card                 │  │  flow:subagent-tool-call     │
 │  │  flow:register-workflow             │  │  flow:subagent-tool-result   │
 │  │  flow:register-gate                 │  │  flow:loop-iteration         │
+│  │  flow:register-guard-extension      │  │                              │
 │  │  flow:register-footer-segment       │  │                              │
 │  │                                     │  └──────────────────────────────┘
 │  └─────────────────────────────────────┘                             │
@@ -194,6 +195,40 @@ interface GateEntry {
 ```
 
 **Glob matching:** Patterns ending with `*` match any flow name starting with the prefix (e.g., `"my-pkg:*"` matches `"my-pkg:build"`, `"my-pkg:test"`). Exact strings match only that flow name.
+
+### flow:register-guard-extension
+
+Register an additional guard extension that is loaded into spawned subagent processes. Use this to add file access guards, custom tool restrictions, or other sandboxing rules for agents dispatched by the flow engine.
+
+| Property | Detail |
+|----------|--------|
+| **Direction** | You → pi-flows |
+| **Data shape** | `{ path: string }` |
+| **Effect** | The extension file at `path` is loaded via `--extension` in every spawned subagent process, alongside pi-flows' built-in guard. |
+
+```typescript
+pi.events?.emit("flow:register-guard-extension", {
+  path: join(__dirname, "my-subagent-guard.ts"),
+});
+```
+
+The extension file must be a valid pi extension with a default export:
+
+```typescript
+// my-subagent-guard.ts
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+export default function(pi: ExtensionAPI) {
+  pi.on("tool_call", (event: any) => {
+    // Block access to .secret files
+    const params = event.params || event.input || {};
+    if ((params.file_path || "").endsWith(".secret")) {
+      return { block: true, reason: "Direct .secret file access is blocked." };
+    }
+    return undefined;
+  });
+}
+```
 
 ### flow:register-footer-segment
 

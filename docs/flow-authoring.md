@@ -75,8 +75,6 @@ These tools can be declared in the agent `tools:` field:
 | `find` | Find files in directory trees |
 | `ls` | List directory contents |
 | `skill_read` | Read skill documentation files |
-| `model_cli` | Query and modify `.model` files (domain-specific) |
-| `model_cli_readonly` | Read-only `.model` file access (domain-specific) |
 
 > **Note:** The `finish` tool is automatically available to every agent — do **not** declare it. Agents must call `finish` as their last action to submit structured results. See [tools-reference.md](tools-reference.md#finish) for the `finish` parameter schema.
 
@@ -92,7 +90,6 @@ Agents reference models using role aliases prefixed with `@`. Roles are assigned
 | `@research` | Investigation and analysis |
 | `@compact` | Summarization |
 | `@vision` | Image/visual analysis |
-| `@modelling` | Domain-specific modelling |
 
 **Setup:**
 
