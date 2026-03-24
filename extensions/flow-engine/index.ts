@@ -6,6 +6,8 @@ import type {
   FlowResult,
 } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
+import { getModelRole } from "../provider-register.js";
+import { getSummaryState, setSummaryState } from "../flow-summary/index.js";
 import { registerSubagentTool } from "./tool.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
 import {
@@ -320,7 +322,7 @@ class FlowManager {
 
 // ---- Extension activation --------------------------------------------------
 
-export default function activate(pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   const pkgRoot = resolvePackageRoot(import.meta.url);
   const projectRoot = process.cwd();
   packageRoot = pkgRoot;
@@ -330,23 +332,7 @@ export default function activate(pi: ExtensionAPI) {
 
   const guardExtPath = join(pkgRoot, "extensions", "flow-engine", "guard.ts");
 
-  let getModelRole: ((role: string) => string | undefined) | undefined;
-
-  // Try to import getModelRole from provider-register
-  try {
-    const providerPath = join(pkgRoot, "extensions", "provider-register.ts");
-    if (existsSync(providerPath)) {
-      import(providerPath)
-        .then((mod) => {
-          if (mod.getModelRole) getModelRole = mod.getModelRole;
-        })
-        .catch(() => {
-          /* ignore */
-        });
-    }
-  } catch {
-    /* ignore */
-  }
+  // getModelRole is imported at top level — shared module instance via single entry point.
 
   // ── Interactive state ──
   let dashboardVisible = false;
@@ -365,8 +351,7 @@ export default function activate(pi: ExtensionAPI) {
   // Flow manager — declared here, initialized after helper functions are defined
   let flowManager: FlowManager;
 
-  // Global summary state registry (shared with flow-summary via Symbol.for)
-  const SUMMARY_STATE_KEY = Symbol.for("pi-flow-summary-state");
+  // Summary state — imported directly from flow-summary via single entry point.
 
   pi.on("session_start", (_event: any, ctx: any) => {
     uiCtx = ctx.ui;
@@ -530,7 +515,7 @@ export default function activate(pi: ExtensionAPI) {
   }
 
   function handleSummaryInput(data: string): { consume: true } | undefined {
-    const summaryState = (globalThis as any)[SUMMARY_STATE_KEY] as any;
+    const summaryState = getSummaryState();
     if (!summaryState) return undefined;
 
     const mode = summaryState.mode;
@@ -546,7 +531,7 @@ export default function activate(pi: ExtensionAPI) {
         // Dismiss the summary widget entirely
         uiCtx?.setWidget?.("flow-summary", undefined);
         summaryVisible = false;
-        (globalThis as any)[SUMMARY_STATE_KEY] = null;
+        setSummaryState(null);
         requestRender();
         return { consume: true };
       }
@@ -672,7 +657,7 @@ export default function activate(pi: ExtensionAPI) {
   registerSubagentTool(
     pi,
     () => agents,
-    (role) => getModelRole?.(role),
+    (role) => getModelRole(role),
     guardExtPath,
     projectRoot,
   );

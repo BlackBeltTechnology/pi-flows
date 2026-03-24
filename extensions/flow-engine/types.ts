@@ -239,7 +239,6 @@ export interface TemplateContext {
     }
   >;
   forks: Record<string, { answer: string; notes?: string }>;
-  chainDir: string;
   loopCounters?: Record<string, number>;
   loopMaxIterations?: Record<string, number>;
 }

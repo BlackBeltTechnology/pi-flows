@@ -126,7 +126,7 @@ function deleteFlow(
 
 // -- Extension entry point --------------------------------------------------
 
-export default function activate(pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   const projectRoot = process.cwd();
   const resultsDir = join(projectRoot, ".pi", "flows", "results");
 

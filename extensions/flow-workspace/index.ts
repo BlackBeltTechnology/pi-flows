@@ -10,6 +10,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync, rmSync, copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { getModelRole } from "../provider-register.js";
 
 // ---- Helpers --------------------------------------------------------------
 
@@ -146,13 +147,72 @@ async function handleEditFlow(
     return;
   }
 
+  // Get discovered agents for source resolution
+  const agentsQuery: any = {};
+  pi.events.emit("flow:get-agents", agentsQuery);
+  const discoveredAgentsMap: Map<string, any> = agentsQuery.agents ?? new Map();
+
+  // Resolve agent source type: local if under .pi/, built-in otherwise
+  const piLocalPrefix = join(projectRoot, ".pi");
+  const resolveAgentType = (agentName: string): "built-in" | "local" => {
+    const config = discoveredAgentsMap.get(agentName);
+    if (config?.source && config.source.startsWith(piLocalPrefix)) return "local";
+    return "built-in";
+  };
+
   // Mount architect widget
   let architectWidget: any = null;
   let renderWidget: (() => void) | undefined;
+  let overlayOpen = false;
+  let architectAbort: AbortController | null = null;
+
+  // Ctrl+O / Ctrl+X handler during architect phase
+  const KEY_CTRL_O = "\x0f";
+  const KEY_CTRL_X = "\x18";
+  const unregisterInput = ctx.ui.onTerminalInput(async (data: string) => {
+    // Ctrl+X: abort the architect agent
+    if (data === KEY_CTRL_X && architectAbort) {
+      architectAbort.abort();
+      return { consume: true } as const;
+    }
+    // Ctrl+O: open flow preview overlay
+    if (data === KEY_CTRL_O && architectWidget?.hasFlowContent?.() && !overlayOpen) {
+      overlayOpen = true;
+      try {
+        const content = architectWidget.getFlowContent();
+        if (!content) return { consume: true } as const;
+        const { parseFlowString } = await import("../flow-engine/flow-parser.js");
+        const flowConfig = parseFlowString(content, "<preview>");
+        const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+        await ctx.ui.custom(
+          (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+            return createFlowPreviewOverlay({
+              flow: flowConfig,
+              theme,
+              tui: tuiInstance,
+              done,
+            });
+          },
+          {
+            overlay: true,
+            overlayOptions: {
+              width: "90%",
+              maxHeight: "85%",
+              anchor: "center",
+            },
+          },
+        );
+      } catch { /* overlay not available */ }
+      finally { overlayOpen = false; }
+      return { consume: true } as const;
+    }
+    return undefined;
+  });
+
   const mountWidget = async () => {
     try {
       const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
-      architectWidget = createArchitectWidget();
+      architectWidget = createArchitectWidget({ resolveAgentType });
       renderWidget = () => {
         ctx.ui.setWidget("flow-architect", architectWidget.factory, { placement: "aboveEditor" });
       };
@@ -169,7 +229,6 @@ async function handleEditFlow(
     inputs: {} as Record<string, string>,
     results: {} as Record<string, any>,
     forks: {} as Record<string, any>,
-    chainDir: projectRoot,
   };
 
   const { spawnAgent } = await import("../flow-engine/execution.js");
@@ -188,6 +247,7 @@ async function handleEditFlow(
       "info",
     );
 
+    architectAbort = new AbortController();
     const result = await spawnAgent({
       agent: architectConfig,
       task: currentTask,
@@ -196,6 +256,7 @@ async function handleEditFlow(
       cwd: projectRoot,
       guardExtPath,
       allowSubagent: true,
+      signal: architectAbort.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
           architectWidget.onToolCall(toolName, input);
@@ -209,6 +270,13 @@ async function handleEditFlow(
         }
       },
     });
+    architectAbort = null;
+
+    // If aborted, treat as cancel
+    if (!result.success && result.result?.summary === "Aborted by user") {
+      choice = "Cancel";
+      break;
+    }
 
     flowPath = "";
     createdFiles.length = 0;
@@ -254,7 +322,8 @@ async function handleEditFlow(
     break;
   }
 
-  // Dispose architect widget
+  // Dispose architect widget and unregister input handler
+  unregisterInput?.();
   if (architectWidget) {
     architectWidget.dispose();
     ctx.ui.setWidget("flow-architect", undefined);
@@ -374,13 +443,67 @@ async function handleNewFlow(
     return;
   }
 
-  // Step 3: Mount architect TUI widget
+  // Step 3: Mount architect TUI widget with agent source resolution + Ctrl+O/Ctrl+X
+  const agentsQuery2: any = {};
+  pi.events.emit("flow:get-agents", agentsQuery2);
+  const discoveredAgentsMap2: Map<string, any> = agentsQuery2.agents ?? new Map();
+
+  const piLocalPrefix2 = join(projectRoot, ".pi");
+  const resolveAgentType2 = (agentName: string): "built-in" | "local" => {
+    const config = discoveredAgentsMap2.get(agentName);
+    if (config?.source && config.source.startsWith(piLocalPrefix2)) return "local";
+    return "built-in";
+  };
+
   let architectWidget: any = null;
   let renderWidget: (() => void) | undefined;
+  let overlayOpen2 = false;
+  let architectAbort2: AbortController | null = null;
+
+  const KEY_CTRL_O_2 = "\x0f";
+  const KEY_CTRL_X_2 = "\x18";
+  const unregisterInput2 = ctx.ui.onTerminalInput(async (data: string) => {
+    if (data === KEY_CTRL_X_2 && architectAbort2) {
+      architectAbort2.abort();
+      return { consume: true } as const;
+    }
+    if (data === KEY_CTRL_O_2 && architectWidget?.hasFlowContent?.() && !overlayOpen2) {
+      overlayOpen2 = true;
+      try {
+        const content = architectWidget.getFlowContent();
+        if (!content) return { consume: true } as const;
+        const { parseFlowString } = await import("../flow-engine/flow-parser.js");
+        const flowConfig = parseFlowString(content, "<preview>");
+        const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+        await ctx.ui.custom(
+          (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+            return createFlowPreviewOverlay({
+              flow: flowConfig,
+              theme,
+              tui: tuiInstance,
+              done,
+            });
+          },
+          {
+            overlay: true,
+            overlayOptions: {
+              width: "90%",
+              maxHeight: "85%",
+              anchor: "center",
+            },
+          },
+        );
+      } catch { /* overlay not available */ }
+      finally { overlayOpen2 = false; }
+      return { consume: true } as const;
+    }
+    return undefined;
+  });
+
   const mountWidget = async () => {
     try {
       const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
-      architectWidget = createArchitectWidget();
+      architectWidget = createArchitectWidget({ resolveAgentType: resolveAgentType2 });
       renderWidget = () => {
         ctx.ui.setWidget("flow-architect", architectWidget.factory, { placement: "aboveEditor" });
       };
@@ -399,7 +522,6 @@ async function handleNewFlow(
     inputs: {} as Record<string, string>,
     results: {} as Record<string, any>,
     forks: {} as Record<string, any>,
-    chainDir: projectRoot,
   };
 
   const { spawnAgent } = await import("../flow-engine/execution.js");
@@ -418,6 +540,7 @@ async function handleNewFlow(
       "info",
     );
 
+    architectAbort2 = new AbortController();
     const result = await spawnAgent({
       agent: architectConfig,
       task,
@@ -426,6 +549,7 @@ async function handleNewFlow(
       cwd: projectRoot,
       guardExtPath,
       allowSubagent: true,
+      signal: architectAbort2.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
           architectWidget.onToolCall(toolName, input);
@@ -439,6 +563,13 @@ async function handleNewFlow(
         }
       },
     });
+    architectAbort2 = null;
+
+    // If aborted, treat as cancel
+    if (!result.success && result.result?.summary === "Aborted by user") {
+      choice = "Cancel";
+      break;
+    }
 
     // Extract flow path and created files from tool calls
     flowPath = "";
@@ -495,7 +626,8 @@ async function handleNewFlow(
     break; // Run, Save & Run, or Cancel
   }
 
-  // Dispose architect widget
+  // Dispose architect widget and unregister input handler
+  unregisterInput2?.();
   if (architectWidget) {
     architectWidget.dispose();
     ctx.ui.setWidget("flow-architect", undefined);
@@ -688,25 +820,10 @@ async function handleNewFlow(
 
 // ---- Extension activation -------------------------------------------------
 
-export default function activate(pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   const projectRoot = process.cwd();
 
-  // Lazy-loaded model role resolver
-  let getModelRole: ((role: string) => string | undefined) | undefined;
-  let modelRoleLoaded = false;
-  async function ensureModelRole(): Promise<void> {
-    if (modelRoleLoaded) return;
-    modelRoleLoaded = true;
-    try {
-      const { resolvePackageRoot } = await import("../flow-engine/discovery.js");
-      const pkgRoot = resolvePackageRoot(import.meta.url);
-      const providerPath = join(pkgRoot, "extensions", "provider-register.ts");
-      if (existsSync(providerPath)) {
-        const mod = await import(providerPath);
-        if (mod.getModelRole) getModelRole = mod.getModelRole;
-      }
-    } catch { /* ignore */ }
-  }
+  // getModelRole is imported at top level — shared module instance via single entry point.
 
   // Track latest ctx for event handlers
   let lastCtx: any = null;
@@ -715,7 +832,6 @@ export default function activate(pi: ExtensionAPI) {
   // flows:new-request — triggered by /flows:new or /flows → "New flow"
   pi.events.on("flows:new-request", async (data: any) => {
     if (!lastCtx) return;
-    await ensureModelRole();
     const description = (data as any)?.description || "";
     await handleNewFlow(pi, projectRoot, description, lastCtx, getModelRole);
   });
@@ -723,7 +839,6 @@ export default function activate(pi: ExtensionAPI) {
   // flows:edit-request — triggered by /flows:edit or /flows <name> → Edit
   pi.events.on("flows:edit-request", async (data: any) => {
     if (!lastCtx) return;
-    await ensureModelRole();
     const { flowName, flowPath } = data as { flowName: string; flowPath: string };
     if (flowPath && !existsSync(flowPath)) {
       lastCtx.ui.notify("Flow file not found.", "error");

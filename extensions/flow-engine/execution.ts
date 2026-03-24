@@ -12,8 +12,6 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
   return template
     .replace(/\{task\}/g, ctx.task)
     .replace(/\{input\.([\w-]+)\}/g, (_, name) => ctx.inputs[name] ?? "")
-    .replace(/\{chain_dir\}/g, ctx.chainDir)
-
     .replace(/\{fork\.(\w[\w-]*)\.answer\}/g, (_, id) => ctx.forks[id]?.answer ?? "")
     .replace(/\{fork\.(\w[\w-]*)\.notes\}/g, (_, id) => ctx.forks[id]?.notes ?? "")
     .replace(/\{result\.([\w-]+)\.status\}/g, (_, id) => ctx.results[id]?.status ?? "")
@@ -82,7 +80,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Build CLI args
   const args = ["--mode", "json", "-p"];
-  args.push("--models", modelId);
+  args.push("--model", modelId);
   if (thinking) args.push("--thinking", thinking);
   // Only pass built-in tools via --tools (extension tools like agent_catalog,
   // flow_write are registered at runtime by extensions and available automatically).

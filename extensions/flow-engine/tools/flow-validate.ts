@@ -232,7 +232,7 @@ export function validateFlowContent(
 
   // ---- 8. Unknown template variables --------------------------------------
 
-  const knownPrefixes = ["result", "input", "fork", "task", "chainDir", "loop", "change_dir", "change_id"];
+  const knownPrefixes = ["result", "input", "fork", "task", "loop"];
   for (let i = 0; i < lines.length; i++) {
     const templateMatches = lines[i].matchAll(/\{([\w.]+)\}/g);
     for (const m of templateMatches) {

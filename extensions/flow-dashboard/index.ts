@@ -16,7 +16,7 @@ export type { AgentDetailOverlayOptions } from "./agent-detail-overlay.js";
 export { createFlowPreviewOverlay } from "./flow-preview-overlay.js";
 export type { FlowPreviewOverlayOptions } from "./flow-preview-overlay.js";
 
-export default function activate(pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   // Initialize built-in metric renderers (default, files, tests)
   initCardTypes();
 

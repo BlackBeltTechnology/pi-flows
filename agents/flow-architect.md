@@ -182,9 +182,22 @@ Use these in `task`, `reads`, `inputs`, and other template-aware properties:
 - `{fork.ID.notes}` - User notes from a fork step
 - `{loop.STEP_ID.iteration}` - Current iteration count of a loop decision step
 - `{loop.STEP_ID.max}` - Max iterations configured for a loop decision step
-- `{change_dir}` - Active change directory path
-- `{change_id}` - Active change identifier
-- `{chain_dir}` - Chain execution directory
+
+## Multiline Task Text
+
+For long task descriptions, use YAML multiline scalars:
+
+- `>` (folded): Joins consecutive lines with spaces, empty lines become newlines.
+- `|` (literal): Preserves line breaks exactly as written.
+
+```
+## my-agent
+task: >
+  Analyze the codebase and identify all modules
+  that need refactoring based on the research.
+
+  Pay special attention to error handling patterns.
+```
 
 ## Input Wiring (CRITICAL)
 

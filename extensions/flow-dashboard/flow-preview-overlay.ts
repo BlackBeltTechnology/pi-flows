@@ -15,6 +15,14 @@ import type {
   AgentLoopDecisionStep,
   FlowRefStep,
 } from "../flow-engine/types.js";
+import { visibleWidth } from "@mariozechner/pi-tui";
+
+/** Pad a line (which may contain ANSI codes) with trailing spaces to exactly `targetWidth` visible characters. */
+function padLine(line: string, targetWidth: number): string {
+  const vw = visibleWidth(line);
+  if (vw >= targetWidth) return line;
+  return line + " ".repeat(targetWidth - vw);
+}
 
 // Key constants
 const KEY_ESC = "\x1b";
@@ -251,7 +259,7 @@ export function createFlowPreviewOverlay(opts: FlowPreviewOverlayOptions) {
 
       lines.push(bord("┌" + "─".repeat(w) + "┐"));
       for (const line of visible) {
-        lines.push(bord("│") + " " + line + bord("│"));
+        lines.push(bord("│") + " " + padLine(line, innerWidth) + " " + bord("│"));
       }
       lines.push(bord("└" + "─".repeat(w) + "┘"));
 

@@ -8,6 +8,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { getFileStats, onFileStatsChange } from "./file-tracker.js";
+import { getSessionInfo, getModelDisplayName } from "./provider-register.js";
 import { execSync } from "node:child_process";
 
 // ---- Footer segment registry ----------------------------------------------
@@ -35,7 +36,7 @@ function usageColor(percent: number): "success" | "warning" | "error" {
 
 // ---- Extension activation -------------------------------------------------
 
-export default function activate(pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   const cwd = process.cwd();
   let cachedBranch = "";
   let tui: any = null;
@@ -73,15 +74,7 @@ export default function activate(pi: ExtensionAPI) {
   onFileStatsChange(() => tui?.requestRender());
 
   pi.on("session_start", async (_event, ctx) => {
-    // Try to import provider info
-    let getSessionInfo: (() => { provider: string; modelId: string }) | undefined;
-    let getModelDisplayName: ((id: string) => string) | undefined;
-
-    try {
-      const providerMod = await import("./provider-register.js");
-      getSessionInfo = providerMod.getSessionInfo;
-      getModelDisplayName = providerMod.getModelDisplayName;
-    } catch { /* provider-register not available */ }
+    // getSessionInfo and getModelDisplayName imported at top level via single entry point.
 
     ctx.ui.setFooter((tuiInstance, theme, footerData) => {
       tui = tuiInstance;

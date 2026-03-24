@@ -206,6 +206,11 @@ export default function guardExtension(pi: ExtensionAPI) {
     });
 
     pi.on("tool_call", (event: any) => {
+      // Block all tool calls after finish — the agent must stop.
+      // Some models (non-Anthropic) may continue calling tools after finish.
+      if (finishCalled) {
+        return { block: true, reason: "Agent has already called finish. No further tool calls allowed." };
+      }
       if ((event.toolName || event.name) === "finish") {
         finishCalled = true;
       }

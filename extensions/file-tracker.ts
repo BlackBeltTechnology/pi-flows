@@ -74,7 +74,7 @@ export function onFileStatsChange(cb: () => void): void {
 
 // ---- Extension activation -------------------------------------------------
 
-export default function activate(pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   // Track main session tool results
   pi.on("tool_result", (event: any) => {
     const toolName = event.toolName || "";

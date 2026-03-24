@@ -4,6 +4,8 @@ Guide for building a pi package that depends on pi-flows. This covers package se
 
 Throughout this guide, [pi-judo](https://github.com/BlackBeltTechnology/pi-judo) is referenced as a real-world example of a package built on top of pi-flows.
 
+> **Architecture note:** pi-flows uses a single extension entry point (`extensions/index.ts`) that loads all internal sub-extensions in one jiti module graph. This means all internal modules share state through normal imports. External packages (like yours) communicate with pi-flows exclusively through `pi.events` — you never need to import pi-flows modules directly at runtime (only `import type` for TypeScript types).
+
 ## Table of Contents
 
 - [Package Setup](#package-setup)

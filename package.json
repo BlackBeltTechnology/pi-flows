@@ -7,14 +7,7 @@
   ],
   "pi": {
     "extensions": [
-      "./extensions/provider-register.ts",
-      "./extensions/file-tracker.ts",
-      "./extensions/flow-engine",
-      "./extensions/flow-dashboard",
-      "./extensions/flow-summary",
-      "./extensions/flow-context",
-      "./extensions/flow-workspace",
-      "./extensions/flow-footer.ts"
+      "./extensions"
     ]
   },
   "peerDependencies": {

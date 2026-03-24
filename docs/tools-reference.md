@@ -124,7 +124,7 @@ These tools are available inside agent subprocesses — the separate pi processe
 
 Submit structured results at the end of agent execution. This tool is **auto-injected** into every agent — do not declare it in the agent's `tools:` field.
 
-Agents **must** call `finish` as their last action. If an agent completes without calling `finish`, pi-flows retries the agent with a reminder (up to 3 retries).
+Agents **must** call `finish` as their last action. All subsequent tool calls after `finish` are automatically blocked — the agent is forced to stop. If an agent completes without calling `finish`, pi-flows retries the agent with a reminder (up to 3 retries).
 
 **Parameters:**
 

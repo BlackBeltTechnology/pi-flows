@@ -11,7 +11,6 @@ export interface FlowContext {
   forks: Record<string, { answer: string; notes?: string }>;
   loopCounters: Record<string, number>;
   loopMaxIterations: Record<string, number>;
-  chainDir: string;
   steps: FlowStep[];
 }
 
@@ -61,7 +60,6 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     forks: {},
     loopCounters: {},
     loopMaxIterations,
-    chainDir: cwd,
     steps: flow.steps,
   };
 
@@ -316,7 +314,6 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       inputs: {},
       results: ctx.results,
       forks: ctx.forks,
-      chainDir: ctx.chainDir,
       loopCounters: ctx.loopCounters,
       loopMaxIterations: ctx.loopMaxIterations,
     };
@@ -330,7 +327,6 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     inputs: resolvedInputs,
     results: ctx.results,
     forks: ctx.forks,
-    chainDir: ctx.chainDir,
     loopCounters: ctx.loopCounters,
     loopMaxIterations: ctx.loopMaxIterations,
   };
@@ -374,7 +370,6 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   const expandedQuestion = expandTemplateVariables(step.question, {
     task: ctx.task, inputs: {},
     results: ctx.results, forks: ctx.forks,
-    chainDir: ctx.chainDir,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 
@@ -407,7 +402,6 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
     const templateCtx: TemplateContext = {
       task: ctx.task, inputs: {},
       results: ctx.results, forks: ctx.forks,
-      chainDir: ctx.chainDir,
       loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
     };
 
@@ -482,14 +476,12 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
   const decisionTask = expandTemplateVariables(step.task, {
     task: ctx.task, inputs: {},
     results: ctx.results, forks: ctx.forks,
-    chainDir: ctx.chainDir,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
     results: ctx.results, forks: ctx.forks,
-    chainDir: ctx.chainDir,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   };
 
@@ -547,14 +539,12 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
   const decisionTask = expandTemplateVariables(step.task, {
     task: ctx.task, inputs: {},
     results: ctx.results, forks: ctx.forks,
-    chainDir: ctx.chainDir,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   }) + `\n\nThis is iteration ${iteration} of ${step.max_iterations}.`;
 
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
     results: ctx.results, forks: ctx.forks,
-    chainDir: ctx.chainDir,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   };
 
@@ -591,7 +581,6 @@ async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: 
   const expandedPath = expandTemplateVariables(step.path, {
     task: ctx.task, inputs: {},
     results: ctx.results, forks: ctx.forks,
-    chainDir: ctx.chainDir,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 

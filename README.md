@@ -4,8 +4,16 @@ A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workfl
 
 ## Install
 
+Global (available in all projects):
+
 ```bash
 pi install git:github.com/BlackBeltTechnology/pi-flows
+```
+
+Local (project-only, saved to `.pi/settings.json`):
+
+```bash
+pi install -l git:github.com/BlackBeltTechnology/pi-flows
 ```
 
 ## Quick Start
@@ -155,7 +163,7 @@ Use these in `task`, `inputs`, and `question` fields:
 | `{fork.<id>.notes}` | User's notes from a fork step |
 | `{loop.<id>.iteration}` | Current loop iteration number |
 | `{loop.<id>.max}` | Max iterations for a loop |
-| `{chain_dir}` | Working directory |
+
 
 ## Writing Agents
 

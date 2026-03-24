@@ -94,7 +94,7 @@ import {
 } from "pi-flows/extensions/flow-engine/index.js";
 ```
 
-> **Note:** Because pi uses jiti for dynamic loading, module identity can differ between extensions loaded separately. pi-flows uses `Symbol.for()` and global state for registries that must be shared. If you encounter module identity issues, use the event-based APIs (e.g., `flow:get-agents`) instead of direct imports.
+> **Note:** pi-flows uses a single extension entry point, so all internal modules share one jiti module graph and module-level state works naturally. External packages should use the event-based APIs (e.g., `flow:get-agents`, `flow:register-card`) rather than importing pi-flows modules directly at runtime. Type-only imports (`import type`) are fine since they're erased at compile time.
 
 ---
 
@@ -276,7 +276,6 @@ interface TemplateContext {
     answer: string;
     notes?: string;
   }>;
-  chainDir: string;
   loopCounters?: Record<string, number>;
   loopMaxIterations?: Record<string, number>;
 }

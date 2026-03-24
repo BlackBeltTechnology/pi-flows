@@ -23,7 +23,7 @@ export function registerSubagentTool(
       }), { description: "Array of {agent, task} for parallel mode" })),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const templateCtx = { task: params.task || "", inputs: {}, results: {}, forks: {}, chainDir: cwd };
+      const templateCtx = { task: params.task || "", inputs: {}, results: {}, forks: {} };
 
       if (params.mode === "single" && params.agent) {
         const agentConfig = getAgents().get(params.agent);

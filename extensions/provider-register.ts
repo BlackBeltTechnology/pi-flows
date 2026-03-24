@@ -131,7 +131,7 @@ function hasApiKey(_providerName: string, entry: ProviderEntry): boolean {
   return true;
 }
 
-// -- Mutable state --------------------------------------------------------
+// -- Mutable state (module-level, shared via single entry point) ----------
 
 let currentRoles: Record<string, string> = { ...DEFAULT_CONFIG.roles };
 let currentSessionProvider = "";
@@ -167,7 +167,7 @@ function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntry, mod
 
 // -- Extension ------------------------------------------------------------
 
-export default function (pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   const config = loadConfig();
   currentRoles = config.roles;
 
@@ -175,6 +175,8 @@ export default function (pi: ExtensionAPI) {
   for (const [name, entry] of Object.entries(config.providers)) {
     registerEntry(pi, name, entry, config.models);
   }
+
+
 
   // -- /roles: assign models to roles -------------------------------------
 

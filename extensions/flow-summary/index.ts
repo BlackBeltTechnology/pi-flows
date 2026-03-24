@@ -6,18 +6,20 @@ import { Text } from "@mariozechner/pi-tui";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { getModelRole as getModelRoleFromProvider } from "../provider-register.js";
 
 export type SummaryMode = "summary" | "navigate";
 
-// -- Global state registry (avoids jiti module instance mismatches) -----------
-const SUMMARY_STATE_KEY = Symbol.for("pi-flow-summary-state");
+// -- Module-level state (shared via single entry point) ----------------------
 
-function getGlobalSummaryState(): SummaryState | null {
-  return (globalThis as any)[SUMMARY_STATE_KEY] || null;
+let summaryState: SummaryState | null = null;
+
+export function getSummaryState(): SummaryState | null {
+  return summaryState;
 }
 
-function setGlobalSummaryState(state: SummaryState | null): void {
-  (globalThis as any)[SUMMARY_STATE_KEY] = state;
+export function setSummaryState(state: SummaryState | null): void {
+  summaryState = state;
 }
 
 interface SummaryState {
@@ -100,10 +102,9 @@ async function resolveNextStep(flowName: string, pkgRoot: string): Promise<strin
 }
 
 // -- Extension entry point ----------------------------------------------------
-export default function activate(pi: ExtensionAPI) {
+export function activate(pi: ExtensionAPI) {
   let ui: any = null;
   let modelRegistry: any = null;
-  let getModelRole: ((role: string) => string | undefined) | undefined;
 
   // Capture ctx references from session_start
   pi.on("session_start", async (_event, ctx) => {
@@ -114,14 +115,6 @@ export default function activate(pi: ExtensionAPI) {
   // Resolve package root from import.meta.url
   const __filename = fileURLToPath(import.meta.url);
   const pkgRoot = join(dirname(__filename), "..", "..");
-
-  // Try to import getModelRole from provider-register
-  try {
-    const providerPath = join(pkgRoot, "extensions", "provider-register.ts");
-    import(providerPath).then(mod => {
-      if (mod.getModelRole) getModelRole = mod.getModelRole;
-    }).catch(() => { /* ignore */ });
-  } catch { /* ignore */ }
 
   // -- flow:complete handler --------------------------------------------------
   pi.events.on("flow:complete", async (data: unknown) => {
@@ -166,7 +159,7 @@ export default function activate(pi: ExtensionAPI) {
     let insightLines: string[] = [];
 
     try {
-      const modelId = getModelRole?.("compact");
+      const modelId = getModelRoleFromProvider("compact");
       if (modelId && modelRegistry) {
         const [provider, ...modelParts] = modelId.split("/");
         const model = modelRegistry.find(provider, modelParts.join("/"));
@@ -248,8 +241,8 @@ export default function activate(pi: ExtensionAPI) {
     const statusIcon = allComplete ? "✓" : "⚠";
     const agentNames = Object.keys(fr.results);
 
-    // Set global summary state (accessible via Symbol.for from flow-engine)
-    setGlobalSummaryState({
+    // Set summary state (accessible via direct import from flow-engine)
+    setSummaryState({
       mode: "summary",
       selectedIndex: 0,
       agentNames,
@@ -262,7 +255,7 @@ export default function activate(pi: ExtensionAPI) {
       const text = new Text("", 0, 1);
       return {
         render(width: number): string[] {
-          const state = getGlobalSummaryState();
+          const state = getSummaryState();
           if (!state) return [];
           const inner = width - 4;
 
@@ -385,7 +378,4 @@ export default function activate(pi: ExtensionAPI) {
 let lastEventLogRef: Map<string, DetailEntry[]> | null = null;
 let lastCardsRef: Map<string, AgentCard> | null = null;
 
-/** Get the current summary interactive state (for flow-engine input routing). */
-export function getSummaryState(): SummaryState | null {
-  return getGlobalSummaryState();
-}
+// getSummaryState is exported at the top of this file.

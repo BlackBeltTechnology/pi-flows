@@ -334,7 +334,6 @@ Use these in `task`, `inputs`, and `question` fields:
 | `{fork.<id>.notes}` | User's notes from a fork step |
 | `{loop.<id>.iteration}` | Current loop iteration number |
 | `{loop.<id>.max}` | Max iterations for a loop |
-| `{chain_dir}` | Working directory |
 
 ### Flow Example
 

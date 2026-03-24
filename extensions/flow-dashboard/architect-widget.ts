@@ -23,7 +23,7 @@ const SPINNER_INTERVAL = 120;
 
 interface AgentEntry {
   name: string;
-  type: "built-in" | "custom";
+  type: "built-in" | "local" | "custom";
   status: "pending" | "creating" | "done" | "error";
   statusText?: string; // e.g., "Writing frontmatter..."
 }
@@ -56,7 +56,7 @@ interface DagStep {
   id: string;
   blockedBy: string[];
   task: string;
-  isCustom: boolean;
+  sourceType: "built-in" | "local" | "custom";
 }
 
 // ---- Widget mode -----------------------------------------------------------
@@ -115,7 +115,7 @@ function parseFlowSteps(content: string): { name: string; description: string; m
       } else {
         currentStepId = header;
       }
-      steps.push({ id: currentStepId, blockedBy: [], task: "", isCustom: false });
+      steps.push({ id: currentStepId, blockedBy: [], task: "", sourceType: "built-in" });
       continue;
     }
 
@@ -225,7 +225,12 @@ function renderDag(steps: DagStep[], theme: any): string[] {
 
 // ---- Main export -----------------------------------------------------------
 
-export function createArchitectWidget(): {
+export interface ArchitectWidgetOptions {
+  /** Resolve agent source type from name. Return "local" for project-local agents, "built-in" otherwise. */
+  resolveAgentType?: (agentName: string) => "built-in" | "local";
+}
+
+export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   factory: (
     _tui: any,
     theme: any,
@@ -233,8 +238,14 @@ export function createArchitectWidget(): {
   setUpdateCallback(cb: () => void): void;
   onToolCall(toolName: string, input: any): void;
   onToolResult(toolName: string, output: any, isError: boolean): void;
+  getFlowContent(): string | null;
+  hasFlowContent(): boolean;
   dispose(): void;
 } {
+  const resolveAgentType = opts?.resolveAgentType;
+  // Stash flow content for overlay — updated on flow_write/flow_preview
+  let lastFlowContent: string | null = null;
+
   const state: ArchitectState = {
     mode: "design",
     flowName: "",
@@ -329,6 +340,8 @@ export function createArchitectWidget(): {
         state.statusRight = "Writing flow\u2026";
         // Store the flow path
         if (input?.path) state.flowPath = input.path;
+        // Stash raw flow content for overlay
+        if (input?.content) lastFlowContent = input.content;
         // Parse steps from the content
         if (input?.content) {
           const parsed = parseFlowSteps(input.content);
@@ -338,10 +351,10 @@ export function createArchitectWidget(): {
           state.dagSteps = parsed.steps;
 
           // Register any agents mentioned in the flow that aren't already tracked
-          // and mark custom status on steps
-          const customNames = new Set(state.agents.filter((a) => a.type === "custom").map((a) => a.name));
+          // and mark source type on steps
+          const agentTypeMap = new Map(state.agents.map((a) => [a.name, a.type]));
           for (const step of parsed.steps) {
-            step.isCustom = customNames.has(step.id);
+            step.sourceType = agentTypeMap.get(step.id) || "built-in";
             if (!state.agents.find((a) => a.name === step.id)) {
               state.agents.push({
                 name: step.id,
@@ -355,6 +368,8 @@ export function createArchitectWidget(): {
       }
 
       case "flow_preview":
+        // Stash raw flow content for overlay
+        if (input?.content) lastFlowContent = input.content;
         // Parse preview content to update DAG if available
         if (input?.content) {
           const parsed = parseFlowSteps(input.content);
@@ -386,15 +401,16 @@ export function createArchitectWidget(): {
     switch (toolName) {
       case "agent_catalog": {
         state.statusLeft = "";
-        // Populate built-in agents from the catalog result
+        // Populate agents from the catalog result, resolving source type
         try {
           const catalog = typeof output === "string" ? JSON.parse(output) : output;
           if (Array.isArray(catalog)) {
             for (const entry of catalog) {
               if (entry.name && !state.agents.find((a) => a.name === entry.name)) {
+                const agentType = resolveAgentType ? resolveAgentType(entry.name) : "built-in";
                 state.agents.push({
                   name: entry.name,
-                  type: "built-in",
+                  type: agentType,
                   status: "done",
                 });
               }
@@ -549,7 +565,9 @@ export function createArchitectWidget(): {
             const typeLabel =
               agent.type === "custom"
                 ? theme.fg("dim", "(custom)")
-                : theme.fg("dim", "(built-in)");
+                : agent.type === "local"
+                  ? theme.fg("dim", "(local)")
+                  : theme.fg("dim", "(built-in)");
 
             const statusLabel =
               agent.status === "creating" && agent.statusText
@@ -571,7 +589,7 @@ export function createArchitectWidget(): {
               1 + // space
               nameDisplay.length +
               2 + // "  "
-              (agent.type === "custom" ? 8 : 10) + // "(custom)" or "(built-in)"
+              (agent.type === "custom" ? 8 : agent.type === "local" ? 7 : 10) + // "(custom)" 8, "(local)" 7, "(built-in)" 10
               (agent.status === "creating" && agent.statusText
                 ? 2 + agent.statusText.length
                 : 0);
@@ -637,6 +655,20 @@ export function createArchitectWidget(): {
             " ".repeat(statusPad) +
             bord("\u2502"),
         );
+
+        // -- Keyboard hints ---------------------------------------------------
+        {
+          const hints: string[] = ["Ctrl+X stop"];
+          if (lastFlowContent) hints.push("Ctrl+O inspect flow");
+          const hintText = " " + hints.join(" \u00B7 ");
+          const hintVis = hintText.length;
+          lines.push(
+            bord("\u2502") +
+              theme.fg("dim", hintText) +
+              " ".repeat(Math.max(0, w - hintVis)) +
+              bord("\u2502"),
+          );
+        }
 
         // Bottom border
         lines.push(bord("\u2514" + "\u2500".repeat(w) + "\u2518"));
@@ -711,7 +743,7 @@ export function createArchitectWidget(): {
           for (let i = 0; i < visibleSteps.length; i++) {
             const step = visibleSteps[i];
             const num = `${i + 1}.`;
-            const typeTag = step.isCustom ? "(custom)" : "(built-in)";
+            const typeTag = step.sourceType === "custom" ? "(custom)" : step.sourceType === "local" ? "(local)" : "(built-in)";
             const stepHeader = ` ${num} ${theme.fg("accent", step.id)}  ${theme.fg("dim", typeTag)}`;
             const stepHeaderVis = 1 + num.length + 1 + step.id.length + 2 + typeTag.length;
             lines.push(
@@ -789,6 +821,18 @@ export function createArchitectWidget(): {
           }
         }
 
+        // -- Keyboard hints ---------------------------------------------------
+        {
+          const hintText = " Ctrl+X stop \u00B7 Ctrl+O inspect full flow";
+          const hintVis = hintText.length;
+          lines.push(
+            bord("\u2502") +
+              theme.fg("dim", hintText) +
+              " ".repeat(Math.max(0, w - hintVis)) +
+              bord("\u2502"),
+          );
+        }
+
         // Bottom border
         lines.push(bord("\u2514" + "\u2500".repeat(w) + "\u2518"));
       }
@@ -820,5 +864,13 @@ export function createArchitectWidget(): {
     onUpdate = null;
   }
 
-  return { factory, setUpdateCallback, onToolCall, onToolResult, dispose };
+  function getFlowContent(): string | null {
+    return lastFlowContent;
+  }
+
+  function hasFlowContent(): boolean {
+    return lastFlowContent !== null;
+  }
+
+  return { factory, setUpdateCallback, onToolCall, onToolResult, getFlowContent, hasFlowContent, dispose };
 }
