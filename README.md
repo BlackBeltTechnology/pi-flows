@@ -259,6 +259,16 @@ Domain packages can register additional agents, flows, skills, dashboard cards, 
 | `flow:run` | Programmatically trigger a flow by name |
 | `flow:complete` | Listen for flow completion (receives full results) |
 
+See the [detailed documentation](docs/) for the full API reference:
+
+| Document | Description |
+|----------|-------------|
+| [Extending pi-flows](docs/extending-pi-flows.md) | Complete guide for building packages on top of pi-flows |
+| [Events API](docs/events-api.md) | All `flow:*` events with data shapes and examples |
+| [Tools Reference](docs/tools-reference.md) | All registered tools by execution context |
+| [Flow Authoring](docs/flow-authoring.md) | Agent and flow file format reference |
+| [Public API](docs/public-api.md) | Exported types and functions |
+
 ## Requirements
 
 - [pi](https://github.com/badlogic/pi-mono) v0.58.4+
