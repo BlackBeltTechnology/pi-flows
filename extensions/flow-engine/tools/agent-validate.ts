@@ -19,24 +19,24 @@ export interface Diagnostic {
 
 // ---- Known constants ------------------------------------------------------
 
+// Tools that agents can declare in frontmatter `tools:` field.
+// Only these are valid for the architect to wire into agent definitions.
+// `finish` is auto-injected by the guard and must NOT be declared.
+// `ask_user`, `subagent`, and architect tools (agent_catalog, agent_validate,
+// agent_write, flow_validate, flow_write, flow_preview) are main-session-only
+// or guard-blocked — they must NOT be declared in agent frontmatter.
 const KNOWN_TOOLS = new Set([
   "read",
   "write",
   "edit",
   "grep",
   "glob",
+  "find",
+  "ls",
   "bash",
   "model_cli",
   "model_cli_readonly",
-  "subagent",
-  "ask_user",
   "skill_read",
-  "agent_catalog",
-  "agent_validate",
-  "agent_write",
-  "flow_validate",
-  "flow_write",
-  "flow_preview",
 ]);
 
 const KNOWN_MODEL_ROLES = new Set([

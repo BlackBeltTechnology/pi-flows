@@ -11,6 +11,10 @@ export { renderBreadcrumb } from "./breadcrumb.js";
 export { renderDetailView, createDetailScrollState, moveUp, moveDown, toggleExpand, computeExpandedContentLines } from "./detail-view.js";
 export type { DetailScrollState, DetailViewData } from "./detail-view.js";
 export type { DashboardMode } from "./agent-dashboard.js";
+export { createAgentDetailOverlay } from "./agent-detail-overlay.js";
+export type { AgentDetailOverlayOptions } from "./agent-detail-overlay.js";
+export { createFlowPreviewOverlay } from "./flow-preview-overlay.js";
+export type { FlowPreviewOverlayOptions } from "./flow-preview-overlay.js";
 
 export default function activate(pi: ExtensionAPI) {
   // Initialize built-in metric renderers (default, files, tests)

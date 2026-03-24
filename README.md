@@ -1,6 +1,6 @@
 # pi-flows
 
-A [pi-package](https://github.com/badlogic/pi-mono) that adds a **flow engine**, **real-time dashboard**, and **orchestration toolkit** to pi. Design multi-agent workflows as markdown, execute them with parallel DAG scheduling, and monitor everything in a live TUI dashboard.
+A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workflow orchestration to pi. Design flows as markdown, run them with parallel scheduling, and monitor everything in a live dashboard.
 
 ## Install
 
@@ -8,105 +8,61 @@ A [pi-package](https://github.com/badlogic/pi-mono) that adds a **flow engine**,
 pi install git:github.com/BlackBeltTechnology/pi-flows
 ```
 
-## What It Does
+## Quick Start
 
-pi-flows turns pi into a multi-agent orchestration platform. Instead of talking to one model at a time, you define **flows** — directed acyclic graphs of specialized agents that run in parallel, pass results between each other, and branch on user input or agent decisions.
+1. **Set up providers and roles** — assign models to roles so agents know which model to use:
+   ```
+   /provider          Add an LLM provider
+   /roles             Assign models to roles (@planning, @coding, @fast, etc.)
+   ```
 
-### Flow Engine
+2. **Create a flow** — use the interactive designer or write one by hand:
+   ```
+   /flows:new         Design a new flow with the Flow Architect
+   ```
 
-The core runtime that parses `.flow.md` files and executes them:
+3. **Run a flow** — every saved flow registers as a `/command`:
+   ```
+   /my-flow           Run the flow (use the name from the flow file)
+   ```
 
-- **DAG scheduling** — agents run in parallel up to `max_concurrent`, respecting `blockedBy` dependencies
-- **Template variables** — wire results between steps with `{result.step-id.summary}`, `{task}`, `{input.name}`, `{fork.id.answer}`, loop counters, and more
-- **6 step types:**
-  - `agent` — dispatch a named agent with task, inputs, and model override
-  - `fork` — present choices to the user, branch accordingly (supports multi-select, freetext with AI routing)
-  - `conditional` — branch based on presence of data in previous results
-  - `agent-decision` — dispatch an agent to make a routing decision
-  - `agent-loop-decision` — iterative verify/fix cycles with safety caps
-  - `flow-ref` — delegate to sub-flows (supports glob patterns)
-- **Guard extension** — injected into every spawned agent for sandboxing (access control, `.model` file protection, `finish` tool enforcement)
-- **Model roles** — `@planning`, `@coding`, `@compact`, `@research` resolve to configured model IDs via the provider system
-- **Structured results** — agents call a `finish` tool with status, summary, files, and artifacts; parsed into typed `AgentResult` objects
+4. **Work while it runs** — the main session stays fully interactive. Type prompts, run bash commands, or use other extensions while the flow runs in the background.
 
-### Dashboard
+## Commands
 
-A real-time TUI widget rendered above the editor:
+| Command | Description |
+|---------|-------------|
+| `/flows` | Action menu — create, list, edit, or delete flows |
+| `/flows:new` | Design and run a new flow interactively |
+| `/flows:edit` | Modify an existing saved flow |
+| `/flows:delete` | Remove a flow and its results |
+| `/provider` | Add, list, or remove LLM providers |
+| `/roles` | Assign models to named roles |
+| `/<flow-name>` | Run a saved flow (auto-registered from `.pi/flows/`) |
 
-- **Agent cards** in a responsive grid showing status (pending → running → complete/error), duration, token usage, and domain-specific metrics
-- **Detail view** — `Ctrl+O` to toggle, arrow keys to navigate, expand individual agents to see full output, thinking traces, and tool call history
-- **Breadcrumb navigation** — multi-stage workflows show progress through stages
-- **Pluggable card renderers** — domain packages register custom card types via `flow:register-card` events
-- **Workflow registry** — define named multi-stage workflows that map flow names to dashboard stages
+## Dashboard
 
-### Flow Context
+When a flow runs, a live dashboard appears above the editor:
 
-Manages flow results as reusable context:
+- **Agent cards** show status, duration, tokens, and domain-specific metrics in a responsive grid
+- **Ctrl+O** toggles navigation mode — use arrow keys to select a card, Enter to open the detail view
+- **Ctrl+X** aborts the running flow
+- **Detail view** shows full agent output, thinking traces, and tool call history
+- **Summary widget** appears after completion with final results per agent
 
-- **`#flows:<name>`** — inline autocomplete in the editor; expands to the flow's saved result summary when sent
-- **`/flows`** — action menu to create, list, inject, edit, or delete flows
-- **`/flows:new`** — design a new flow interactively with the Flow Architect
-- **`/flows:edit`** — modify an existing saved flow
-- **`/flows:delete`** — remove a flow and its results
+The main session remains usable while the dashboard is active. You can send prompts, run bash commands, or use any other pi feature.
 
-### Flow Workspace
+## Writing Flows
 
-Handles the flow creation and editing lifecycle:
+Flows are `.flow.md` files with YAML frontmatter and `##`-delimited steps. Save them in `.pi/flows/flows/` to auto-register as commands.
 
-- Analyzes conversation context to auto-generate flow descriptions
-- Spawns the **Flow Architect** agent to design flows using `agent_catalog`, `flow_validate`, and `flow_write` tools
-- **Replan loop** — review the designed flow, request changes, re-run the architect
-- **Save & Run** — persist flows to `.pi/flows/` so they register as `/commands` on next session
-
-### Provider System
-
-Custom LLM provider registration with model catalog and role-based routing:
-
-- **`/provider`** — add, list, or remove providers (OpenAI-compatible, Anthropic, custom)
-- **`/roles`** — assign models to named roles (`@planning`, `@coding`, `@compact`, etc.)
-- Config stored at `~/.pi/agent/providers.json`
-
-### Footer & File Tracker
-
-- Composable footer showing provider/model, git branch, file stats (insertions/deletions), and context window usage
-- Session-scoped file tracking for both direct edits and subagent modifications
-- Extension points for domain packages to register custom footer segments
-
-## Agents
-
-| Agent | Purpose |
-|-------|---------|
-| `flow-architect` | Designs custom flows from task descriptions using the agent catalog |
-| `flow-decision` | Routes freetext user answers to the closest matching branch |
-| `project-context-reader` | Discovers and reads project planning files, docs, and config |
-
-## Extension Points
-
-pi-flows is designed to be extended by domain packages. Events you can emit or listen to:
-
-| Event | Direction | Purpose |
-|-------|-----------|---------|
-| `flow:register-agents-dir` | emit → | Register an additional agents directory |
-| `flow:register-flows-dir` | emit → | Register an additional flows directory |
-| `flow:register-skills-dir` | emit → | Register an additional skills directory |
-| `flow:register-card` | emit → | Register a custom dashboard card renderer |
-| `flow:register-workflow` | emit → | Register a named multi-stage workflow |
-| `flow:register-gate` | emit → | Register a prerequisite gate for flows |
-| `flow:register-footer-segment` | emit → | Add a custom footer segment |
-| `flow:complete` | ← listen | Flow execution finished (receives `FlowResult`) |
-| `flow:run` | emit → | Programmatically trigger a flow by name |
-| `flow:subagent-tool-call` | ← listen | Tool call from a running subagent |
-| `flow:subagent-tool-result` | ← listen | Tool result from a running subagent |
-
-## Flow File Format
-
-Flows are `.flow.md` files with YAML frontmatter and `##`-delimited steps:
+### Basic Flow
 
 ```markdown
 ---
-name: my-flow
-description: Does the thing
-max_concurrent: 3
+name: research-and-build
+description: Research the codebase then implement
+max_concurrent: 2
 ---
 
 ## researcher
@@ -115,34 +71,193 @@ task: Investigate the codebase for {task}
 ## developer
 blockedBy: researcher
 inputs:
-  research_output: {result.researcher.summary}
-
-## verifier
-blockedBy: developer
+  context: "{result.researcher.summary}"
+task: Implement based on research context: {input.context}
 ```
 
-## Agent File Format
+### Step Types
 
-Agents are `.md` files with YAML frontmatter and a system prompt body:
+**Agent step** — dispatch a named agent:
+```markdown
+## my-step
+agent: my-agent          # optional if step name matches agent name
+task: Do the thing for {task}
+blockedBy: other-step    # wait for dependency
+inputs:
+  data: "{result.other-step.artifacts}"
+```
+
+**Fork** — ask the user a question and branch:
+```markdown
+## choose-approach
+stepType: fork
+question: "Which approach?"
+options:
+  - Quick fix
+  - Full refactor
+branches:
+  Quick fix: quick-fix-step
+  Full refactor: refactor-step
+```
+
+**Conditional** — branch based on previous results:
+```markdown
+## check-tests
+stepType: conditional
+check: test-runner.status
+present: deploy-step
+absent: fix-step
+```
+
+**Agent decision** — let an agent choose the branch:
+```markdown
+## route-decision
+stepType: agent-decision
+agent: my-router
+task: "Analyze results and decide: {result.analyzer.summary}"
+branches:
+  needs-work: fix-step
+  ready: deploy-step
+```
+
+**Loop decision** — iterative verify/fix cycles:
+```markdown
+## verify-loop
+stepType: agent-loop-decision
+agent: my-verifier
+task: "Check if the implementation is correct: {result.developer.summary}"
+loop_target: developer
+exit_target: finalize
+max_iterations: 3
+```
+
+**Flow ref** — delegate to sub-flows:
+```markdown
+## run-sub
+stepType: flow-ref
+path: .pi/flows/flows/sub-flow.flow.md
+```
+
+### Template Variables
+
+Use these in `task`, `inputs`, and `question` fields:
+
+| Variable | Resolves To |
+|----------|-------------|
+| `{task}` | The task passed when the flow was invoked |
+| `{result.<step-id>.summary}` | Summary from a completed step |
+| `{result.<step-id>.status}` | Status: `complete`, `error`, `blocked` |
+| `{result.<step-id>.artifacts}` | Structured data from a step |
+| `{result.<step-id>.files}` | Files touched by a step |
+| `{result.<step-id>}` | Full output from a step |
+| `{input.<name>}` | Resolved step input value |
+| `{fork.<id>.answer}` | User's answer from a fork step |
+| `{fork.<id>.notes}` | User's notes from a fork step |
+| `{loop.<id>.iteration}` | Current loop iteration number |
+| `{loop.<id>.max}` | Max iterations for a loop |
+| `{chain_dir}` | Working directory |
+
+## Writing Agents
+
+Agents are `.md` files with YAML frontmatter and a system prompt body. Place them in `.pi/flows/agents/` or a registered agents directory.
 
 ```markdown
 ---
 name: my-agent
 description: What this agent does
 model: @coding
+thinking: high
 tools: read, write, edit, bash, grep
 skills: my-docs
 inputs:
   - research_output
 card:
-  type: developer
   label: "My Agent"
+  metric: "files"
+architect:
+  use_when: "When the task requires code changes"
+  produces: "Modified source files"
+  depends_on: "research results"
+  domain: "development"
 ---
 
 You are a specialized agent. Your task: {task}
 
 Use the research context: {input.research_output}
 ```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Unique agent identifier |
+| `description` | yes | What this agent does |
+| `model` | yes | Model role (`@coding`, `@planning`, `@fast`, etc.) or direct model ID |
+| `thinking` | no | Thinking level: `high`, `medium`, `low` |
+| `tools` | yes | Comma-separated tool list |
+| `skills` | no | Skills to inject into the system prompt |
+| `inputs` | no | Named inputs this agent expects (populated via step `inputs:`) |
+| `context` | no | File paths to inject as context |
+| `access` | no | Sandboxing rules for read/write/bash |
+| `card` | no | Dashboard card config: `label`, `metric`, `type`, `role` |
+| `architect` | no | Hints for the Flow Architect: `use_when`, `produces`, `depends_on`, `domain` |
+
+### Available Tools
+
+These tools can be declared in the agent `tools:` field:
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents |
+| `write` | Write/create files |
+| `edit` | Surgical text replacement |
+| `bash` | Execute shell commands |
+| `grep` | Search file contents |
+| `glob` | Find files by pattern |
+| `find` | Find files in directory trees |
+| `ls` | List directory contents |
+| `skill_read` | Read skill documentation files |
+| `model_cli` | Query and modify `.model` files |
+| `model_cli_readonly` | Read-only `.model` file access |
+
+The `finish` tool is automatically available to every agent — do not declare it. Agents must call `finish` as their last action to submit structured results.
+
+### Model Roles
+
+Assign models to roles with `/roles`. Agents reference roles with `@` prefix:
+
+| Role | Typical Use |
+|------|-------------|
+| `@planning` | High-level reasoning, architecture, decision-making |
+| `@coding` | Code generation and modification |
+| `@fast` | Quick tasks, routing decisions |
+| `@research` | Investigation and analysis |
+| `@compact` | Summarization |
+| `@vision` | Image/visual analysis |
+| `@modelling` | Domain-specific modelling |
+
+## Flow Context
+
+Access results from completed flows in the main session:
+
+- **`#flows:<name>`** — type in the editor to inline a flow's result summary
+- **`flow_results` tool** — the main session LLM can query past flow results
+
+## Extending pi-flows
+
+Domain packages can register additional agents, flows, skills, dashboard cards, and footer segments:
+
+| Event | Purpose |
+|-------|---------|
+| `flow:register-agents-dir` | Add a directory of agent `.md` files |
+| `flow:register-flows-dir` | Add a directory of flow `.flow.md` files |
+| `flow:register-skills-dir` | Add a skills directory |
+| `flow:register-card` | Register a custom dashboard card renderer |
+| `flow:register-workflow` | Register a multi-stage workflow for the dashboard |
+| `flow:register-gate` | Add a prerequisite check before flows can run |
+| `flow:register-footer-segment` | Add a segment to the footer bar |
+| `flow:run` | Programmatically trigger a flow by name |
+| `flow:complete` | Listen for flow completion (receives full results) |
 
 ## Requirements
 

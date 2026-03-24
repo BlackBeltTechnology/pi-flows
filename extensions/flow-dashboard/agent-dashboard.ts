@@ -4,9 +4,8 @@ import { AgentCard } from "./agent-card.js";
 import { GridComponent, CARD_HEIGHT } from "./grid-component.js";
 import { renderBreadcrumb } from "./breadcrumb.js";
 import { getCardRenderer } from "./card-registry.js";
-import { renderDetailView, type DetailScrollState, createDetailScrollState, moveUp, moveDown, toggleExpand } from "./detail-view.js";
 
-export type DashboardMode = "passive" | "navigate" | "detail";
+export type DashboardMode = "passive" | "navigate";
 
 // Legacy type kept for backward compatibility with external consumers
 export interface ToolHistoryEntry {
@@ -33,10 +32,6 @@ export class AgentDashboard {
   // Interactive state machine
   mode: DashboardMode = "passive";
   selectedCardIndex = 0;
-  detailAgentName: string | null = null;
-  detailScroll: DetailScrollState = createDetailScrollState();
-  showThinking = true;
-  terminalRows = 40; // updated from wireDashboard on each render
 
   constructor(
     private workflow: WorkflowDefinition | null,
@@ -70,6 +65,7 @@ export class AgentDashboard {
   }
 
   onAgentStarted(agentName: string, agentConfig?: AgentConfig): void {
+    if (!this.eventLog.has(agentName)) this.eventLog.set(agentName, []);
     let card = this.cards.get(agentName);
     if (!card) {
       const renderer = getCardRenderer(agentConfig);
@@ -156,6 +152,11 @@ export class AgentDashboard {
     return Array.from(this.cards.keys());
   }
 
+  /** Return all cards map (for snapshotting before dispose). */
+  getAllCards(): Map<string, AgentCard> {
+    return this.cards;
+  }
+
   getCard(agentName: string): AgentCard | undefined {
     return this.cards.get(agentName);
   }
@@ -187,10 +188,6 @@ export class AgentDashboard {
     const t = theme || this.theme;
     this.grid.setTheme(t);
 
-    if (this.mode === "detail" && this.detailAgentName) {
-      return this.renderDetailMode(width, t);
-    }
-
     // Navigate mode: pass selection to grid
     if (this.mode === "navigate") {
       this.grid.setSelectedIndex(this.selectedCardIndex);
@@ -200,13 +197,13 @@ export class AgentDashboard {
 
     const lines: string[] = [];
 
-    // Header: flow name + running/total agents
+    // Header: flow name + finished/total agents
     if (this.workflow) {
       const stage = this.workflow.stages[this.currentStageIndex];
       const total = this.cards.size;
-      const running = Array.from(this.cards.values()).filter(c => c.status === "running").length;
+      const finished = Array.from(this.cards.values()).filter(c => c.status === "complete" || c.status === "error").length;
       const title = t?.fg?.("accent", `  π ${stage?.name || this.workflow.id}`) ?? `  π ${stage?.name || this.workflow.id}`;
-      const counts = t?.fg?.("dim", `  ${running}/${total} agents`) ?? `  ${running}/${total} agents`;
+      const counts = t?.fg?.("dim", `  ${finished}/${total} agents`) ?? `  ${finished}/${total} agents`;
       lines.push(title + counts);
     }
 
@@ -218,28 +215,14 @@ export class AgentDashboard {
 
     lines.push(...this.grid.render(width));
 
-    // Navigate mode footer hint
+    // Footer hints
     if (this.mode === "navigate") {
-      lines.push(t?.fg?.("dim", "  ←→↑↓ navigate · Enter open · ESC close") ?? "  ←→↑↓ navigate · Enter open · ESC close");
+      lines.push(t?.fg?.("dim", "  ←→↑↓ navigate · Enter open · Ctrl+X stop · ESC close") ?? "  ←→↑↓ navigate · Enter open · Ctrl+X stop · ESC close");
+    } else {
+      lines.push(t?.fg?.("dim", "  Ctrl+O inspect · Ctrl+X stop flow") ?? "  Ctrl+O inspect · Ctrl+X stop flow");
     }
 
     return lines;
-  }
-
-  private renderDetailMode(width: number, theme: any): string[] {
-    const name = this.detailAgentName!;
-    const card = this.cards.get(name);
-    const entries = this.eventLog.get(name) || [];
-    const targetHeight = Math.max(20, this.terminalRows - 8);
-
-    return renderDetailView(
-      { agentName: name, status: card?.status || "unknown", entries },
-      this.detailScroll,
-      width,
-      theme,
-      targetHeight,
-      this.showThinking,
-    );
   }
 
   /** Compute the grid's rendered height for a given width (for matching detail view). */

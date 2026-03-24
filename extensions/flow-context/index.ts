@@ -1,16 +1,17 @@
 // ---------------------------------------------------------------------------
 // Flow Context Extension
 //
-// Provides flow result management and context injection:
-//   - #flows:<name> inline autocomplete + input transform
+// Provides flow result management and tool-based access:
+//   - flow_results tool — LLM-callable tool for reading flow results
 //   - /flows <name> — action menu (inject / edit / delete)
 //   - /flows:delete <name> — delete a flow result + flow file
 // ---------------------------------------------------------------------------
 
-import { CustomEditor, DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AutocompleteProvider, AutocompleteItem } from "@mariozechner/pi-tui";
+import { DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { Container, type SelectItem, SelectList, Spacer, Text } from "@mariozechner/pi-tui";
-import { readFileSync, existsSync, readdirSync, rmSync } from "node:fs";
+import { Type } from "@sinclair/typebox";
+import { readFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 
 function getFlowResultNames(resultsDir: string): string[] {
@@ -27,13 +28,28 @@ function getFlowResultNames(resultsDir: string): string[] {
 function getFlowFiles(projectRoot: string): { name: string; path: string }[] {
   const flowFiles: { name: string; path: string }[] = [];
 
-  // Saved flows
+  // Saved flows — scan .pi/flows/flows/ with one level of subfolders
   const savedFlowsDir = join(projectRoot, ".pi", "flows", "flows");
   if (existsSync(savedFlowsDir)) {
     try {
-      for (const f of readdirSync(savedFlowsDir)) {
-        if (f.endsWith(".flow.md")) {
-          flowFiles.push({ name: f.replace(".flow.md", ""), path: join(savedFlowsDir, f) });
+      for (const entry of readdirSync(savedFlowsDir)) {
+        const entryPath = join(savedFlowsDir, entry);
+        if (entry.endsWith(".flow.md")) {
+          // Top-level flow file
+          flowFiles.push({ name: entry.replace(".flow.md", ""), path: entryPath });
+        } else {
+          // Check for subfolder (one level deep only)
+          try {
+            const stat = statSync(entryPath);
+            if (stat.isDirectory()) {
+              for (const sub of readdirSync(entryPath)) {
+                if (sub.endsWith(".flow.md")) {
+                  const name = `${entry}:${sub.replace(".flow.md", "")}`;
+                  flowFiles.push({ name, path: join(entryPath, sub) });
+                }
+              }
+            }
+          } catch { /* ignore */ }
         }
       }
     } catch { /* ignore */ }
@@ -53,81 +69,6 @@ function flowResultCompletions(resultsDir: string, prefix: string): Autocomplete
     label: name,
     description: "Flow result",
   }));
-}
-
-// -- Custom editor with #flows: autocomplete --------------------------------
-
-function wrapProvider(provider: AutocompleteProvider, resultsDir: string): AutocompleteProvider {
-  return {
-    getSuggestions(lines: string[], cursorLine: number, cursorCol: number) {
-      const currentLine = lines[cursorLine] || "";
-      const textBeforeCursor = currentLine.slice(0, cursorCol);
-
-      // Check for #flows: prefix
-      const match = textBeforeCursor.match(/#flows:([\w-]*)$/);
-      if (match) {
-        const prefix = match[1];
-        const names = getFlowResultNames(resultsDir);
-        const filtered = prefix
-          ? names.filter(n => n.startsWith(prefix) || n.includes(prefix))
-          : names;
-
-        if (filtered.length > 0) {
-          return {
-            items: filtered.map(name => ({
-              value: `#flows:${name}`,
-              label: name,
-              description: "Flow result",
-            })),
-            prefix: match[0],
-          };
-        }
-        return null;
-      }
-
-      // Delegate to original provider
-      return provider.getSuggestions(lines, cursorLine, cursorCol);
-    },
-
-    applyCompletion(
-      lines: string[],
-      cursorLine: number,
-      cursorCol: number,
-      item: AutocompleteItem,
-      prefix: string,
-    ) {
-      // Handle #flows: completions ourselves
-      if (prefix.startsWith("#flows:")) {
-        const currentLine = lines[cursorLine] || "";
-        const beforePrefix = currentLine.slice(0, cursorCol - prefix.length);
-        const afterCursor = currentLine.slice(cursorCol);
-        const newLine = beforePrefix + item.value + " " + afterCursor;
-        const newLines = [...lines];
-        newLines[cursorLine] = newLine;
-        return {
-          lines: newLines,
-          cursorLine,
-          cursorCol: beforePrefix.length + item.value.length + 1,
-        };
-      }
-
-      // Delegate to original provider
-      return provider.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
-    },
-  };
-}
-
-class FlowsEditor extends CustomEditor {
-  private resultsDir: string;
-
-  constructor(tui: any, theme: any, keybindings: any, resultsDir: string) {
-    super(tui, theme, keybindings);
-    this.resultsDir = resultsDir;
-  }
-
-  setAutocompleteProvider(provider: AutocompleteProvider): void {
-    super.setAutocompleteProvider(wrapProvider(provider, this.resultsDir));
-  }
 }
 
 // -- Delete logic -----------------------------------------------------------
@@ -189,49 +130,132 @@ export default function activate(pi: ExtensionAPI) {
   const projectRoot = process.cwd();
   const resultsDir = join(projectRoot, ".pi", "flows", "results");
 
+  // -- flow_results tool — LLM-callable access to flow results ----------------
 
-  // -- Mount custom editor with #flows: autocomplete --------------------------
+  const MAX_FULL_OUTPUT = 10_000;
 
-  pi.on("session_start", (_event, ctx) => {
-    ctx.ui.setEditorComponent((tui: any, theme: any, kb: any) =>
-      new FlowsEditor(tui, theme, kb, resultsDir),
-    );
-  });
+  pi.registerTool({
+    name: "flow_results",
+    label: "Flow Results",
+    description:
+      "Read flow execution results. Use action 'list' to see available results, " +
+      "'summary' to get per-agent summaries for a flow, or 'agent' to get full " +
+      "detail for a specific agent within a flow.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("list"),
+        Type.Literal("summary"),
+        Type.Literal("agent"),
+      ], { description: "Action: 'list' all results, 'summary' per-agent summaries, 'agent' full detail for one agent" }),
+      flow: Type.Optional(Type.String({ description: "Flow name (required for summary and agent actions)" })),
+      agent: Type.Optional(Type.String({ description: "Agent/step name (required for agent action)" })),
+    }),
+    execute: async (_toolCallId, params) => {
+      const { action, flow, agent } = params as { action: string; flow?: string; agent?: string };
 
-  // -- #flows:<name> input transform ----------------------------------------
-
-  pi.on("input", async (event) => {
-    const pattern = /#flows:([\w-]+)/g;
-    let text = event.text;
-    let matched = false;
-
-    const matches = [...text.matchAll(pattern)];
-    if (matches.length === 0) {
-      return { action: "continue" as const };
-    }
-
-    for (const match of matches) {
-      const name = match[1];
-      const summaryPath = join(resultsDir, `${name}.md`);
-
-      if (existsSync(summaryPath)) {
-        try {
-          const content = readFileSync(summaryPath, "utf-8");
-          text = text.replace(
-            match[0],
-            `\n--- Flow Result: ${name} ---\n${content}\n--- End Flow Result ---\n`,
-          );
-          matched = true;
-        } catch {
-          // File read failed — leave token as-is
+      // -- list action --
+      if (action === "list") {
+        if (!existsSync(resultsDir)) {
+          return { content: [{ type: "text" as const, text: "No flow results available." }], details: {} };
         }
-      }
-    }
+        let jsonFiles: string[];
+        try {
+          jsonFiles = readdirSync(resultsDir).filter(f => f.endsWith(".json"));
+        } catch {
+          return { content: [{ type: "text" as const, text: "No flow results available." }], details: {} };
+        }
+        if (jsonFiles.length === 0) {
+          return { content: [{ type: "text" as const, text: "No flow results available." }], details: {} };
+        }
 
-    if (matched) {
-      return { action: "transform" as const, text };
-    }
-    return { action: "continue" as const };
+        const lines: string[] = ["Available flow results:", ""];
+        for (const file of jsonFiles) {
+          const name = basename(file, ".json");
+          try {
+            const stat = statSync(join(resultsDir, file));
+            const ts = stat.mtime.toISOString().replace("T", " ").slice(0, 19);
+            lines.push(`• ${name}  (${ts})`);
+          } catch {
+            lines.push(`• ${name}`);
+          }
+        }
+        return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+      }
+
+      // -- summary and agent actions require flow param --
+      if (!flow) {
+        return { content: [{ type: "text" as const, text: `Error: 'flow' parameter is required for action '${action}'.` }], details: {} };
+      }
+
+      const jsonPath = join(resultsDir, `${flow}.json`);
+      if (!existsSync(jsonPath)) {
+        return { content: [{ type: "text" as const, text: `Error: No flow result found for "${flow}".` }], details: {} };
+      }
+
+      let flowResult: any;
+      try {
+        flowResult = JSON.parse(readFileSync(jsonPath, "utf-8"));
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Error: Failed to parse flow result: ${err.message}` }], details: {} };
+      }
+
+      const results: Record<string, any> = flowResult.results || {};
+
+      // -- summary action --
+      if (action === "summary") {
+        const lines: string[] = [`Flow: ${flow}`, ""];
+        const entries = Object.entries(results);
+        if (entries.length === 0) {
+          lines.push("No agent results found.");
+        } else {
+          for (const [stepId, r] of entries) {
+            const status = r.status || "unknown";
+            lines.push(`## ${stepId} (${status})`);
+            if (r.summary) lines.push(`Summary: ${r.summary}`);
+            if (r.files) lines.push(`Files: ${r.files}`);
+            lines.push("");
+          }
+        }
+        return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+      }
+
+      // -- agent action --
+      if (action === "agent") {
+        if (!agent) {
+          return { content: [{ type: "text" as const, text: `Error: 'agent' parameter is required for action 'agent'.` }], details: {} };
+        }
+
+        const agentResult = results[agent];
+        if (!agentResult) {
+          const available = Object.keys(results);
+          return {
+            content: [{ type: "text" as const, text: `Error: Agent "${agent}" not found in flow "${flow}". Available agents: ${available.join(", ")}` }],
+            details: {},
+          };
+        }
+
+        const lines: string[] = [`Agent: ${agent}`, `Status: ${agentResult.status || "unknown"}`, ""];
+        if (agentResult.summary) {
+          lines.push(`## Summary`, agentResult.summary, "");
+        }
+        if (agentResult.fullOutput) {
+          let output = agentResult.fullOutput;
+          if (output.length > MAX_FULL_OUTPUT) {
+            output = output.slice(0, MAX_FULL_OUTPUT) + `\n\n[Output truncated at ${MAX_FULL_OUTPUT} characters]`;
+          }
+          lines.push(`## Full Output`, output, "");
+        }
+        if (agentResult.artifacts) {
+          lines.push(`## Artifacts`, agentResult.artifacts, "");
+        }
+        if (agentResult.files) {
+          lines.push(`## Files`, agentResult.files, "");
+        }
+        return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+      }
+
+      return { content: [{ type: "text" as const, text: `Error: Unknown action '${action}'.` }], details: {} };
+    },
   });
 
   // -- /flows <name> — action menu ------------------------------------------
@@ -268,7 +292,7 @@ export default function activate(pi: ExtensionAPI) {
         if (topAction === "List flows") {
           const allNames = [...new Set([...names, ...flowFiles.map(f => f.name)])];
           ctx.ui.notify(
-            `Available flows:\n${allNames.map(f => `  • ${f}`).join("\n")}\n\nUse /flows <name> for actions, or #flows:<name> inline.`,
+            `Available flows:\n${allNames.map(f => `  • ${f}`).join("\n")}\n\nUse /flows <name> for actions.`,
             "info",
           );
           return;
@@ -297,16 +321,7 @@ export default function activate(pi: ExtensionAPI) {
       if (!action) return;
 
       if (action === "inject") {
-        try {
-          const content = readFileSync(join(resultsDir, `${name}.md`), "utf-8");
-          pi.sendMessage({
-            customType: "flow-context",
-            content: `--- Flow Result: ${name} ---\n${content}\n--- End Flow Result ---`,
-            display: true,
-          });
-        } catch (err: any) {
-          ctx.ui.notify(`Failed to read flow result: ${err.message}`, "error");
-        }
+        pi.sendUserMessage(`Read the flow results for "${name}"`);
       } else if (action === "edit") {
         // Delegate to flow-engine via event
         pi.events.emit("flows:edit-request", { flowName: name, flowPath: matchingFlow!.path });

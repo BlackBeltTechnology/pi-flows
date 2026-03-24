@@ -66,6 +66,18 @@ export function discoverAll(
     flows.set(flow.name, flow);
   }
 
+  // --- Project-local (highest priority — overrides package on name collision) ---
+
+  const localAgentsDir = join(projectRoot, ".pi", "flows", "agents");
+  for (const agent of discoverAgentsInDir(localAgentsDir)) {
+    agents.set(agent.name, agent);
+  }
+
+  const localFlowsDir = join(projectRoot, ".pi", "flows", "flows");
+  for (const flow of discoverFlowsInDir(localFlowsDir)) {
+    flows.set(flow.name, flow);
+  }
+
   return { agents, flows };
 }
 
@@ -180,6 +192,14 @@ function walkFlowFiles(
       const relativePath = relative(flowsRoot, fullPath);
       const relDir = dirname(relativePath);
       const baseName = basename(entry, ".flow.md");
+
+      // Enforce single-subfolder depth: skip files nested 2+ levels deep
+      if (relDir !== "." && relDir.includes("/")) {
+        console.warn(
+          `[discovery] Skipping flow file with excessive nesting (max 1 subfolder): ${fullPath}`,
+        );
+        continue;
+      }
 
       const flowName =
         relDir === "." ? baseName : `${relDir.replace(/[\\/]/g, ":")}:${baseName}`;

@@ -219,8 +219,8 @@ export function renderDetailView(
 
       // If this entry is expanded, render full input/output
       if (i === scroll.expandedIndex) {
-        const inputStr = typeof e.input === "string" ? e.input : JSON.stringify(e.input, null, 2);
-        const outputStr = typeof e.output === "string" ? (e.output || "(no output)") : JSON.stringify(e.output, null, 2);
+        const inputStr = typeof e.input === "string" ? e.input : (e.input != null ? JSON.stringify(e.input, null, 2) : "(no input)");
+        const outputStr = typeof e.output === "string" ? (e.output || "(no output)") : (e.output != null ? JSON.stringify(e.output, null, 2) : "(pending...)");
 
         contentLines.push(fg("dim", "    Input:"));
         for (const l of inputStr.split("\n")) {
@@ -299,8 +299,8 @@ export function computeExpandedContentLines(
     } else if (e.kind === "tool") {
       total += 1; // one-liner
       if (i === scroll.expandedIndex) {
-        const inputStr = typeof e.input === "string" ? e.input : JSON.stringify(e.input, null, 2);
-        const outputStr = typeof e.output === "string" ? (e.output || "(no output)") : JSON.stringify(e.output, null, 2);
+        const inputStr = typeof e.input === "string" ? e.input : (e.input != null ? JSON.stringify(e.input, null, 2) : "(no input)");
+        const outputStr = typeof e.output === "string" ? (e.output || "(no output)") : (e.output != null ? JSON.stringify(e.output, null, 2) : "(pending...)");
         total += 1 + inputStr.split("\n").length + 1 + outputStr.split("\n").length;
       }
     }

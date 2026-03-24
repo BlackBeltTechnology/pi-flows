@@ -116,6 +116,31 @@ export default function guardExtension(pi: ExtensionAPI) {
     });
   }
 
+  // ── Tool whitelist enforcement (opt-in via AGENT_ALLOWED_TOOLS) ──
+  const allowedToolsJson = process.env.AGENT_ALLOWED_TOOLS;
+  if (allowedToolsJson) {
+    let allowedTools: Set<string>;
+    try {
+      const parsed = JSON.parse(allowedToolsJson);
+      allowedTools = new Set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      allowedTools = new Set(["finish"]); // Fail-safe: only finish allowed
+    }
+    // Ensure finish is always allowed
+    allowedTools.add("finish");
+
+    pi.on("tool_call", (event: any) => {
+      const toolName = event.toolName || event.name;
+      if (!allowedTools.has(toolName)) {
+        return {
+          block: true,
+          reason: `Tool "${toolName}" not declared in agent frontmatter. Declared tools: ${[...allowedTools].filter(t => t !== "finish").join(", ")}`,
+        };
+      }
+      return undefined;
+    });
+  }
+
   // ── Finish tool enforcement (opt-in via AGENT_REQUIRE_FINISH) ──
   if (process.env.AGENT_REQUIRE_FINISH === "1") {
     const MAX_RETRIES = 2;

@@ -22,10 +22,6 @@ const segmentInvalidators = new Map<string, () => void>();
 
 // ---- Context usage helpers -------------------------------------------------
 
-function formatTokens(n: number): string {
-  return Math.round(n / 1000) + "k";
-}
-
 function buildBar(percent: number): string {
   const filled = Math.round((percent / 100) * 10);
   return "▓".repeat(filled) + "░".repeat(10 - filled);
@@ -127,29 +123,13 @@ export default function activate(pi: ExtensionAPI) {
             parts.push("0 files");
           }
 
-          // Accumulated session token usage (matches pi's built-in FooterComponent)
-          let totalInput = 0;
-          let totalOutput = 0;
-          for (const entry of ctx.sessionManager.getEntries()) {
-            if (entry.type === "message" && (entry as any).message?.role === "assistant") {
-              const usage = (entry as any).message.usage;
-              if (usage) {
-                totalInput += usage.input || 0;
-                totalOutput += usage.output || 0;
-              }
-            }
-          }
-
           // Context window bar (percentage of context used)
           const ctxUsage = ctx.getContextUsage();
           if (ctxUsage) {
+            const pct = (ctxUsage.percent ?? 0).toFixed(1);
             const bar = buildBar(ctxUsage.percent ?? 0);
-            const max = formatTokens(ctxUsage.contextWindow);
             const color = usageColor(ctxUsage.percent ?? 0);
-            const tokenStats = `↑${formatTokens(totalInput)} ↓${formatTokens(totalOutput)}`;
-            parts.push(theme.fg(color, `${bar} ${tokenStats} / ${max}`));
-          } else if (totalInput > 0 || totalOutput > 0) {
-            parts.push(`↑${formatTokens(totalInput)} ↓${formatTokens(totalOutput)}`);
+            parts.push(theme.fg(color, `${bar} ${pct}%`));
           }
 
           // Domain segments

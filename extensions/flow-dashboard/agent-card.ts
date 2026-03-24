@@ -1,5 +1,6 @@
 import type { CardStatus, AgentCardRenderer } from "./types.js";
 import type { AgentResult } from "../flow-engine/types.js";
+import { visibleWidth } from "@mariozechner/pi-tui";
 
 /** Format token count in compact "k" notation. */
 function formatTokens(n: number): string {
@@ -51,6 +52,8 @@ export class AgentCard {
   public blockedByNames: string[] = [];
   public tokens: { input: number; output: number } = { input: 0, output: 0 };
   public duration = 0;
+  public loopIteration = 0;
+  public loopMax = 0;
   private recentTools: { toolName: string; inputPreview: string }[] = [];
 
   constructor(
@@ -98,12 +101,17 @@ export class AgentCard {
     };
 
     // Header: icon + label (prefer card.label, else strip prefix from name)
+    // When in a loop, reserve space for right-aligned iteration badge: " ↻ X/Y"
+    const loopBadge = this.loopIteration > 0 ? `↻ ${this.loopIteration}/${this.loopMax}` : "";
+    const badgeVisWidth = loopBadge ? visibleWidth(loopBadge) : 0;
+    const badgeReserve = badgeVisWidth ? badgeVisWidth + 2 : 0; // +2 for surrounding spaces
     const displayName = this.label || this.agentName;
-    const name = displayName.length > w - 2
-      ? displayName.slice(0, w - 3) + "…" : displayName;
+    const maxNameLen = w - 3 - badgeReserve; // 3 = space + icon + space before name
+    const name = displayName.length > maxNameLen
+      ? displayName.slice(0, Math.max(1, maxNameLen - 1)) + "…" : displayName;
     const iconStr = theme.fg(statusTheme, icon);
     const nameStr = theme.fg(nameColor, theme.bold(name));
-    const headerVis = 1 + 1 + 1 + name.length; // space + icon + space + name
+    const headerVis = 1 + 1 + 1 + name.length + (loopBadge ? 1 + badgeVisWidth : 0); // space+icon+space+name [+space+badge]
 
     // Body lines
     let raw0 = "";
@@ -146,14 +154,32 @@ export class AgentCard {
       ? border(" " + theme.fg("dim", roleText), 1 + roleText.length)
       : border("", 0);
 
-    return [
+    // Build header content with optional right-aligned iteration badge
+    const headerLeft = " " + iconStr + " " + nameStr;
+    // Badge with trailing space: "↻ 1/2 " — visible width = badgeVisWidth + 1
+    const badgeStr = loopBadge ? theme.fg("accent", loopBadge) + " " : "";
+    const headerContent = loopBadge
+      ? (() => {
+          // Left side: " <icon> <name>" = 3 + name.length visible chars
+          const leftVis = 3 + name.length;
+          // Right side: "<badge> " = badgeVisWidth + 1 visible chars
+          const rightVis = badgeVisWidth + 1;
+          const gap = Math.max(1, w - leftVis - rightVis);
+          return headerLeft + " ".repeat(gap) + badgeStr;
+        })()
+      : headerLeft;
+    // Total visible width when badge present: leftVis + gap + rightVis = w
+    const headerVisTotal = loopBadge ? w : headerVis;
+
+    const result = [
       bord(top),
-      border(" " + iconStr + " " + nameStr, headerVis),
+      border(headerContent, headerVisTotal),
       roleLine,
       border(bodyLine0, 1 + raw0.length),
-      ...toolRendered,
-      bord(bot),
     ];
+    result.push(...toolRendered, bord(bot));
+
+    return result;
   }
 
   invalidate(): void {}

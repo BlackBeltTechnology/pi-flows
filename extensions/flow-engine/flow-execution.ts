@@ -31,12 +31,14 @@ export interface FlowRunOptions {
   onToolResult?: (agentName: string, toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (agentName: string, text: string) => void;
   onThinkingText?: (agentName: string, text: string) => void;
+  onLoopIteration?: (stepId: string, iteration: number, maxIterations: number) => void;
+  signal?: AbortSignal;
 }
 
 // ---- Segment types ---------------------------------------------------------
 
 type Segment =
-  | { type: "dag"; steps: AgentStep[] }
+  | { type: "dag"; steps: AgentStep[]; activeSteps?: Set<string> }
   | { type: "separator"; step: FlowStep };
 
 // ---- Public API ------------------------------------------------------------
@@ -69,11 +71,14 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
   let segmentIndex = 0;
 
   while (segmentIndex < segments.length) {
+    // Check abort before processing each segment
+    if (options.signal?.aborted) break;
+
     const segment = segments[segmentIndex];
 
     if (segment.type === "dag") {
 
-      const result = await runDagSegment(segment.steps, maxConcurrent, ctx, options);
+      const result = await runDagSegment(segment.steps, maxConcurrent, ctx, options, segment.activeSteps);
       if (result) lastResult = result;
       segmentIndex++;
     } else {
@@ -90,12 +95,36 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
       if (stepResult.nextStepId) {
         const targetIdx = findSegmentIndex(segments, stepResult.nextStepId);
         if (targetIdx >= 0) {
+          // Compute active steps for branch exclusivity
+          const targetSeg = segments[targetIdx];
+          if (targetSeg.type === "dag") {
+            targetSeg.activeSteps = computeActiveSteps(targetSeg.steps, stepResult.nextStepId);
+          }
           segmentIndex = targetIdx;
           continue;
         }
       }
 
       segmentIndex++;
+    }
+  }
+
+  // If aborted, mark any agents that didn't complete as aborted
+  if (options.signal?.aborted) {
+    const allAgentNames = new Set<string>();
+    for (const step of flow.steps) {
+      if (step.stepType === "agent") allAgentNames.add(step.agent);
+    }
+    for (const name of allAgentNames) {
+      if (!ctx.results[name]) {
+        ctx.results[name] = {
+          fullOutput: "",
+          status: "aborted",
+          summary: "Aborted by user",
+          artifacts: "",
+          files: "",
+        };
+      }
     }
   }
 
@@ -156,6 +185,7 @@ async function runDagSegment(
   maxConcurrent: number,
   ctx: FlowContext,
   options: FlowRunOptions,
+  activeSteps?: Set<string>,
 ): Promise<AgentResult | null> {
   const completed = new Set<string>();
   let lastResult: AgentResult | null = null;
@@ -163,9 +193,28 @@ async function runDagSegment(
   let lastSnapshot = "";
   let deadlockCount = 0;
 
-  while (completed.size < steps.length) {
-    waveNumber++;
+  // If activeSteps is set (branch exclusivity), skip inactive steps immediately
+  if (activeSteps) {
+    for (const step of steps) {
+      if (!activeSteps.has(step.id)) {
+        completed.add(step.id);
+        // Store synthetic "skipped" result so blockedBy refs auto-satisfy
+        ctx.results[step.id] = {
+          fullOutput: "",
+          status: "skipped",
+          summary: "",
+          artifacts: "",
+          files: "",
+        };
+      }
+    }
+  }
 
+  while (completed.size < steps.length) {
+    // Check abort before dispatching each wave
+    if (options.signal?.aborted) break;
+
+    waveNumber++;
 
     // Find unblocked steps within this segment
     const unblocked = steps.filter(s => {
@@ -314,6 +363,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     onToolResult: (name, output, err) => options.onToolResult?.(step.agent, name, output, err),
     onAssistantText: (text) => options.onAssistantText?.(step.agent, text),
     onThinkingText: (text) => options.onThinkingText?.(step.agent, text),
+    signal: options.signal,
   });
 
   options.onAgentComplete?.(step.agent, step.id, result);
@@ -369,6 +419,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
       cwd: options.cwd,
       guardExtPath: options.guardExtPath,
       decisionBranches: branchNames,
+      signal: options.signal,
     });
 
     const branch = result.finishParams?.branch;
@@ -401,8 +452,23 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
 }
 
 async function executeConditionalStep(step: ConditionalStep, ctx: FlowContext, _options: FlowRunOptions): Promise<StepResult> {
-  const lastOutput = getLastResultOutput(ctx);
-  const exists = hasArtifactElement(lastOutput, step.check);
+  // Parse check field: "step-id.field" or just "step-id"
+  const dotIdx = step.check.lastIndexOf(".");
+  const stepId = dotIdx > 0 ? step.check.slice(0, dotIdx) : step.check;
+  const field = dotIdx > 0 ? step.check.slice(dotIdx + 1) : "artifacts";
+
+  const result = ctx.results[stepId];
+  if (!result) {
+    return { nextStepId: step.absent };
+  }
+
+  // Check if the resolved field is non-empty
+  const target = field === "artifacts" ? result.artifacts
+    : field === "summary" ? result.summary
+    : field === "files" ? result.files
+    : field === "status" ? result.status
+    : result.fullOutput;
+  const exists = target.trim().length > 0;
   return { nextStepId: exists ? step.present : step.absent };
 }
 
@@ -446,6 +512,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     cwd: options.cwd,
     guardExtPath: options.guardExtPath,
     decisionBranches: branchNames,
+    signal: options.signal,
   });
 
   // Route via finish tool's branch parameter
@@ -463,6 +530,9 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
   // Increment iteration counter
   const iteration = (ctx.loopCounters[step.id] ?? 0) + 1;
   ctx.loopCounters[step.id] = iteration;
+
+  // Emit loop iteration event
+  options.onLoopIteration?.(step.id, iteration, step.max_iterations);
 
   // Safety cap: force exit when max_iterations exceeded
   if (iteration > step.max_iterations) {
@@ -507,6 +577,7 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     cwd: options.cwd,
     guardExtPath: options.guardExtPath,
     decisionBranches: ["loop", "exit"],
+    signal: options.signal,
   });
 
   const branch = result.finishParams?.branch;
@@ -541,6 +612,11 @@ async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: 
         task: ctx.task,
       });
       lastAgentResult = flowResult.lastResult;
+      // Merge sub-flow agent results into parent context (flat merge by step ID)
+      for (const [subStepId, subResult] of Object.entries(flowResult.results)) {
+        ctx.results[subStepId] = subResult;
+      }
+      // Also store under flow-ref step ID for backward compatibility
       if (lastAgentResult) {
         storeResult(ctx, step.id, lastAgentResult);
       }
@@ -566,4 +642,29 @@ function storeResult(ctx: FlowContext, stepId: string, result: AgentResult): voi
 function getLastResultOutput(ctx: FlowContext): string {
   const entries = Object.values(ctx.results);
   return entries.length > 0 ? entries[entries.length - 1].fullOutput : "";
+}
+
+/**
+ * Compute the set of active steps in a DAG segment starting from a root step.
+ * Walks the blockedBy graph forward: the root step is active, and any step
+ * whose blockedBy includes an active step is also active.
+ */
+function computeActiveSteps(steps: AgentStep[], rootStepId: string): Set<string> {
+  const active = new Set<string>();
+  active.add(rootStepId);
+
+  // Iterate until no new steps are added (forward reachability)
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const step of steps) {
+      if (active.has(step.id)) continue;
+      if (step.blockedBy && step.blockedBy.some(dep => active.has(dep))) {
+        active.add(step.id);
+        changed = true;
+      }
+    }
+  }
+
+  return active;
 }

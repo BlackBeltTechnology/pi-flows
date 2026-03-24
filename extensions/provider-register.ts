@@ -37,21 +37,24 @@ interface ProviderEntry {
   api?: string;
 }
 
-interface Config {
-  providers: Record<string, ProviderEntry>;
-  roles: Record<string, string>;
-}
-
-// -- Model catalog --------------------------------------------------------
-
-const MODELS: Array<{
+interface ModelEntry {
   id: string;
   name: string;
   reasoning: boolean;
   input: ("text" | "image")[];
   contextWindow: number;
   maxTokens: number;
-}> = [
+}
+
+interface Config {
+  providers: Record<string, ProviderEntry>;
+  roles: Record<string, string>;
+  models: ModelEntry[];
+}
+
+// -- Default custom model catalog -----------------------------------------
+
+const DEFAULT_MODELS: ModelEntry[] = [
   { id: "cc/claude-opus-4-6", name: "Opus 4.6", reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 128000 },
   { id: "cc/claude-sonnet-4-6", name: "Sonnet 4.6", reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 },
   { id: "cc/claude-haiku-4-5-20251001", name: "Haiku 4.5", reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 },
@@ -77,6 +80,7 @@ const DEFAULT_CONFIG: Config = {
     research: "anthropic/claude-opus-4-6",
     vision: "anthropic/claude-sonnet-4-6",
   },
+  models: DEFAULT_MODELS,
 };
 
 // -- Config I/O -----------------------------------------------------------
@@ -95,6 +99,7 @@ function loadConfig(): Config {
       return {
         providers,
         roles: { ...DEFAULT_CONFIG.roles, ...raw.roles },
+        models: Array.isArray(raw.models) ? raw.models : DEFAULT_MODELS,
       };
     } catch {
       // Fall through to defaults
@@ -137,7 +142,8 @@ export function getSessionInfo(): { provider: string; modelId: string } {
 }
 
 export function getModelDisplayName(modelId: string): string {
-  const model = MODELS.find((m) => m.id === modelId);
+  const config = loadConfig();
+  const model = config.models.find((m) => m.id === modelId);
   return model?.name ?? modelId;
 }
 
@@ -147,12 +153,12 @@ export function getModelRole(role: string): string | undefined {
 
 // -- Helpers --------------------------------------------------------------
 
-function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntry) {
+function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntry, models: ModelEntry[]) {
   pi.registerProvider(name, {
     baseUrl: entry.baseUrl,
     apiKey: resolveApiKeyEnvName(name, entry.apiKey),
     api: (entry.api ?? "openai-completions") as any,
-    models: MODELS.map((m) => ({
+    models: models.map((m) => ({
       ...m,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     })),
@@ -167,7 +173,7 @@ export default function (pi: ExtensionAPI) {
 
   // Register providers
   for (const [name, entry] of Object.entries(config.providers)) {
-    registerEntry(pi, name, entry);
+    registerEntry(pi, name, entry, config.models);
   }
 
   // -- /roles: assign models to roles -------------------------------------
@@ -175,11 +181,30 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("roles", {
     description: "Assign models to roles",
     handler: async (_args, ctx) => {
-        const modelItems: SelectItem[] = MODELS.map((m) => ({
-          value: m.id,
-          label: m.id,
-          description: m.name,
-        }));
+        // Build merged model list: registry models + user-defined custom models
+        const seen = new Set<string>();
+        const modelItems: SelectItem[] = [];
+
+        // Add models from pi's ModelRegistry (built-in + configured providers)
+        for (const model of ctx.modelRegistry.getAll()) {
+          const value = `${model.provider}/${model.id}`;
+          if (!seen.has(value)) {
+            seen.add(value);
+            modelItems.push({ value, label: value, description: model.name });
+          }
+        }
+
+        // Add user-defined custom model strings (deduplicated)
+        // Skip entries whose id is already a suffix of a registered model
+        for (const m of config.models) {
+          if (!seen.has(m.id)) {
+            const alreadyRegistered = [...seen].some((key) => key.endsWith(`/${m.id}`));
+            if (!alreadyRegistered) {
+              seen.add(m.id);
+              modelItems.push({ value: m.id, label: m.id, description: m.name });
+            }
+          }
+        }
 
         await ctx.ui.custom((tui: any, t: any, _kb: any, done: () => void) => {
           const settingsTheme: SettingsListTheme = {
@@ -299,7 +324,7 @@ export default function (pi: ExtensionAPI) {
         const allModelsItem: SelectItem = { value: "__all__", label: "All models", description: "Register all catalog models" };
         const modelSelectItems: SelectItem[] = [
           allModelsItem,
-          ...MODELS.map((m) => ({ value: m.id, label: m.id, description: m.name })),
+          ...config.models.map((m) => ({ value: m.id, label: m.id, description: m.name })),
         ];
 
         const selectedModelId = await new Promise<string | null>((resolve) => {
@@ -339,9 +364,9 @@ export default function (pi: ExtensionAPI) {
         saveConfig(config);
 
         if (!selectedModelId || selectedModelId === "__all__") {
-          registerEntry(pi, name, entry);
+          registerEntry(pi, name, entry, config.models);
         } else {
-          const selectedModel = MODELS.find((m) => m.id === selectedModelId);
+          const selectedModel = config.models.find((m) => m.id === selectedModelId);
           if (selectedModel) {
             pi.registerProvider(name, {
               baseUrl: entry.baseUrl,
@@ -392,7 +417,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         saveConfig(config);
-        registerEntry(pi, name, existing);
+        registerEntry(pi, name, existing, config.models);
         ctx.ui.notify(`Updated "${name}"`, "info");
       } else if (choice === "__remove__") {
         // Remove via SelectList with descriptions

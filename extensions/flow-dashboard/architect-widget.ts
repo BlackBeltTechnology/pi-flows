@@ -102,7 +102,7 @@ function parseFlowSteps(content: string): { name: string; description: string; m
   // Extract step headers, blockedBy, and task
   let currentStepId: string | null = null;
 
-  const validPrefixes = ["fork:", "conditional:", "agent-decision:", "flow-ref:"];
+  const validPrefixes = ["fork:", "conditional:", "agent-decision:", "agent-loop-decision:", "flow-ref:"];
 
   for (const line of lines) {
     const headerMatch = line.match(/^##\s+(.+)$/);

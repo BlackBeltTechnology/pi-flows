@@ -256,6 +256,16 @@ When no existing agent covers a need, create a custom agent definition:
   - `@planning` for decisions, design, and orchestration
   - `@compact` for lightweight tasks like summarization
 
+# Output Paths
+
+By default, write new files to the project-local `.pi/flows/` directory:
+- **New agents**: `.pi/flows/agents/<name>.md`
+- **New flows**: `.pi/flows/flows/custom/<name>.flow.md`
+
+These paths ensure flows are project-local and register as `/custom:<name>` commands.
+
+If the user explicitly requests writing to a different location (e.g., editing a package flow), follow their instructions instead.
+
 # Important Rules
 
 - Do NOT include archive/commit steps in the flow -- the engine handles lifecycle automatically

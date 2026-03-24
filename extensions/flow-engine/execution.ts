@@ -40,6 +40,7 @@ export interface SpawnOptions {
   onThinkingText?: (text: string) => void;
   decisionBranches?: string[];           // valid branch names for decision steps
   allowSubagent?: boolean;               // allow subagent tool (for flow architect)
+  signal?: AbortSignal;                  // abort signal to cancel the agent
 }
 
 export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
@@ -120,12 +121,46 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     env.AGENT_ALLOW_SUBAGENT = "1";
   }
 
+  // Pass declared tools to guard for whitelist enforcement
+  const allowedTools = [...agent.tools, "finish"];
+  env.AGENT_ALLOWED_TOOLS = JSON.stringify(allowedTools);
+
+  // Check if already aborted before spawning
+  if (options.signal?.aborted) {
+    const duration = Date.now() - startTime;
+    return {
+      success: false,
+      output: "Aborted by user",
+      stderr: "",
+      exitCode: null,
+      result: { status: "error" as const, summary: "Aborted by user", files: [], artifacts: "" },
+      toolCalls,
+      duration,
+      tokens: { input: 0, output: 0 },
+    };
+  }
+
   return new Promise<AgentResult>((resolve) => {
     const proc = spawn("pi", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env,
     });
+
+    let aborted = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Wire abort signal to kill the process
+    const onAbort = () => {
+      if (aborted) return;
+      aborted = true;
+      try { proc.kill("SIGTERM"); } catch { /* already dead */ }
+      // SIGKILL fallback after 3 seconds
+      killTimer = setTimeout(() => {
+        try { proc.kill("SIGKILL"); } catch { /* already dead */ }
+      }, 3000);
+    };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
 
     let stdout = "";
     let stderr = "";
@@ -194,11 +229,30 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
     proc.on("close", (code) => {
+      // Cleanup abort resources
+      options.signal?.removeEventListener("abort", onAbort);
+      if (killTimer) clearTimeout(killTimer);
+
       // Cleanup temp files
       try { unlinkSync(promptFile); } catch { /* ignore */ }
       if (accessRulesFile) try { unlinkSync(accessRulesFile); } catch { /* ignore */ }
 
       const duration = Date.now() - startTime;
+
+      // Handle aborted agent
+      if (aborted) {
+        resolve({
+          success: false,
+          output: stdout || "Aborted by user",
+          stderr,
+          exitCode: code,
+          result: { status: "error" as const, summary: "Aborted by user", files: [], artifacts: "" },
+          toolCalls,
+          duration,
+          tokens: { ...accumulatedTokens },
+        });
+        return;
+      }
 
       // If the API returned errors (e.g. rate limit) and produced no useful output,
       // surface the error immediately instead of returning an empty "success".

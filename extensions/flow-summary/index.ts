@@ -1,14 +1,32 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { FlowResult } from "../flow-engine/types.js";
 import type { DetailEntry } from "../flow-dashboard/agent-dashboard.js";
+import type { AgentCard } from "../flow-dashboard/agent-card.js";
 import { Text } from "@mariozechner/pi-tui";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
-import { renderDetailView, createDetailScrollState, computeExpandedContentLines, type DetailScrollState } from "../flow-dashboard/detail-view.js";
-import { moveUp, moveDown, toggleExpand } from "../flow-dashboard/detail-view.js";
 
-export type SummaryMode = "summary" | "navigate" | "detail";
+export type SummaryMode = "summary" | "navigate";
+
+// -- Global state registry (avoids jiti module instance mismatches) -----------
+const SUMMARY_STATE_KEY = Symbol.for("pi-flow-summary-state");
+
+function getGlobalSummaryState(): SummaryState | null {
+  return (globalThis as any)[SUMMARY_STATE_KEY] || null;
+}
+
+function setGlobalSummaryState(state: SummaryState | null): void {
+  (globalThis as any)[SUMMARY_STATE_KEY] = state;
+}
+
+interface SummaryState {
+  mode: SummaryMode;
+  selectedIndex: number;
+  agentNames: string[];
+  flowResult: FlowResult;
+  summaryBoxHeight: number;
+}
 
 // -- Braille spinner frames ---------------------------------------------------
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -190,31 +208,31 @@ export default function activate(pi: ExtensionAPI) {
       }
 
       // Build markdown summary
-      const summaryLines: string[] = [];
-      summaryLines.push(`## Flow: ${fr.flowName}`);
-      summaryLines.push(`Duration: ${stats.duration} | Agents: ${stats.agentCount} | Files: ${stats.fileCount}`);
-      summaryLines.push("");
-      summaryLines.push("### Results");
+      const summaryMdLines: string[] = [];
+      summaryMdLines.push(`## Flow: ${fr.flowName}`);
+      summaryMdLines.push(`Duration: ${stats.duration} | Agents: ${stats.agentCount} | Files: ${stats.fileCount}`);
+      summaryMdLines.push("");
+      summaryMdLines.push("### Results");
       if (insightLines.length > 0) {
         for (const line of insightLines) {
-          summaryLines.push(line);
+          summaryMdLines.push(line);
         }
       } else {
         for (const agent of stats.perAgent) {
           const icon = agent.status === "complete" ? "✓" : "✗";
           const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
-          summaryLines.push(`${icon} ${agent.name}${detail}`);
+          summaryMdLines.push(`${icon} ${agent.name}${detail}`);
         }
       }
-      summaryLines.push("");
-      summaryLines.push("### Files Modified");
+      summaryMdLines.push("");
+      summaryMdLines.push("### Files Modified");
       for (const [name, r] of Object.entries(fr.results)) {
         if (r.files) {
-          summaryLines.push(`- **${name}**: ${r.files}`);
+          summaryMdLines.push(`- **${name}**: ${r.files}`);
         }
       }
 
-      writeFileSync(summaryPath, summaryLines.join("\n"), "utf-8");
+      writeFileSync(summaryPath, summaryMdLines.join("\n"), "utf-8");
       writeFileSync(jsonPath, JSON.stringify(fr, null, 2), "utf-8");
     } catch {
       // Non-critical: don't break the summary widget if disk write fails
@@ -230,54 +248,37 @@ export default function activate(pi: ExtensionAPI) {
     const statusIcon = allComplete ? "✓" : "⚠";
     const agentNames = Object.keys(fr.results);
 
-    // Mutable state for navigate/detail modes (driven by flow-engine input routing)
-    summaryState = {
-      mode: "summary" as SummaryMode,
+    // Set global summary state (accessible via Symbol.for from flow-engine)
+    setGlobalSummaryState({
+      mode: "summary",
       selectedIndex: 0,
-      detailAgentName: null as string | null,
-      detailScroll: createDetailScrollState(),
-      showThinking: true,
       agentNames,
       flowResult: fr,
-      summaryBoxHeight: 0, // computed on first render
-    };
+      summaryBoxHeight: 0,
+    });
 
     ui.setWidget("flow-summary", (_tui: any, theme: any) => {
       let tuiRef = _tui;
       const text = new Text("", 0, 1);
       return {
         render(width: number): string[] {
-          const state = summaryState!;
+          const state = getGlobalSummaryState();
+          if (!state) return [];
           const inner = width - 4;
-          const termRows = tuiRef?.terminal?.rows ?? 40;
 
-          // ── Detail mode ──
-          if (state.mode === "detail" && state.detailAgentName) {
-            const name = state.detailAgentName;
-            const result = fr.results[name];
-            const entries = lastEventLogRef?.get(name) || [];
-            const targetHeight = Math.max(20, termRows - 8);
-
-            return renderDetailView(
-              {
-                agentName: name,
-                status: result?.status || "unknown",
-                summary: result?.summary,
-                entries,
-              },
-              state.detailScroll,
-              width,
-              theme,
-              targetHeight,
-              state.showThinking,
-            );
-          }
-
-          // ── Navigate mode: agent list ──
+          // ── Navigate mode: agent list with card metrics ──
           if (state.mode === "navigate") {
             const lines: string[] = [];
-            lines.push(theme.fg("accent", `  ${fr.flowName} · Select agent`));
-            lines.push(theme.fg("dim", "  " + "─".repeat(Math.max(0, inner))));
+            const bw = width - 2; // inner width between │ borders
+            const bi = bw - 2;    // content width inside │ + space padding
+
+            // Top border
+            lines.push(theme.fg("dim", "┌" + "─".repeat(bw) + "┐"));
+
+            // Header
+            const navHeader = `${fr.flowName} · Select agent`;
+            lines.push(theme.fg("dim", "│ ") + theme.fg("accent", navHeader.padEnd(bi)) + theme.fg("dim", " │"));
+            lines.push(theme.fg("dim", "├" + "─".repeat(bw) + "┤"));
 
             for (let i = 0; i < agentNames.length; i++) {
               const name = agentNames[i];
@@ -286,16 +287,31 @@ export default function activate(pi: ExtensionAPI) {
               const statusStr = result?.status || "unknown";
               const sIcon = statusStr === "complete" ? theme.fg("success", "✓")
                 : statusStr === "error" ? theme.fg("error", "✗") : theme.fg("dim", "○");
-              const eventCount = lastEventLogRef?.get(name)?.length ?? 0;
-              const toolInfo = eventCount > 0 ? theme.fg("dim", ` · ${eventCount} events`) : "";
-              lines.push(`${sel} ${sIcon} ${name}${toolInfo}`);
+
+              // Try to get card metric from preserved cards
+              let metricStr = "";
+              const card = lastCardsRef?.get(name);
+              if (card) {
+                const metric = card.renderer.renderMetric(Math.max(10, bi - name.length - 8));
+                if (metric) metricStr = theme.fg("dim", "  " + metric.trim());
+              } else {
+                // Fallback: show event count
+                const eventCount = lastEventLogRef?.get(name)?.length ?? 0;
+                if (eventCount > 0) metricStr = theme.fg("dim", ` · ${eventCount} events`);
+              }
+
+              const agentLine = `${sel} ${sIcon} ${name}${metricStr}`;
+              lines.push(theme.fg("dim", "│ ") + agentLine.padEnd(bi) + theme.fg("dim", " │"));
             }
 
-            lines.push("");
-            lines.push(theme.fg("dim", "  ↑↓ navigate · Enter open · ESC back"));
+            // Footer hint
+            lines.push(theme.fg("dim", "├" + "─".repeat(bw) + "┤"));
+            lines.push(theme.fg("dim", "│ ") + theme.fg("dim", "↑↓ navigate · Enter inspect · Backspace back").padEnd(bi) + theme.fg("dim", " │"));
+            lines.push(theme.fg("dim", "└" + "─".repeat(bw) + "┘"));
 
             // Pad to match summary box height
             while (lines.length < state.summaryBoxHeight) lines.push("");
+            state.summaryBoxHeight = Math.max(state.summaryBoxHeight, lines.length);
             return lines;
           }
 
@@ -337,7 +353,7 @@ export default function activate(pi: ExtensionAPI) {
 
           // Ctrl+O hint
           lines.push(theme.fg("dim", "├" + "─".repeat(width - 2) + "┤"));
-          lines.push(theme.fg("dim", "│ ") + theme.fg("dim", "Ctrl+O inspect agents").padEnd(inner) + theme.fg("dim", " │"));
+          lines.push(theme.fg("dim", "│ ") + theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss").padEnd(inner) + theme.fg("dim", " │"));
 
           // Bottom border
           lines.push(theme.fg("dim", "└" + "─".repeat(width - 2) + "┘"));
@@ -353,27 +369,23 @@ export default function activate(pi: ExtensionAPI) {
     }, { placement: "aboveEditor" });
   });
 
-  // Expose summary state for flow-engine input routing
+  // Receive summary context from flow-engine (tool history + preserved cards)
+  pi.events.on("flow:set-summary-context", (data: any) => {
+    lastEventLogRef = data?.toolHistory || null;
+    lastCardsRef = data?.cards || null;
+  });
+
+  // Legacy event name support
   pi.events.on("flow:set-summary-tool-history", (data: any) => {
     lastEventLogRef = data?.toolHistory || null;
   });
 }
 
-// Module-scoped state accessible to the render closure
-let summaryState: {
-  mode: SummaryMode;
-  selectedIndex: number;
-  detailAgentName: string | null;
-  detailScroll: DetailScrollState;
-  showThinking: boolean;
-  agentNames: string[];
-  flowResult: FlowResult;
-  summaryBoxHeight: number;
-} | null = null;
-
+// Module-scoped refs for tool history and preserved cards
 let lastEventLogRef: Map<string, DetailEntry[]> | null = null;
+let lastCardsRef: Map<string, AgentCard> | null = null;
 
 /** Get the current summary interactive state (for flow-engine input routing). */
-export function getSummaryState() {
-  return summaryState;
+export function getSummaryState(): SummaryState | null {
+  return getGlobalSummaryState();
 }

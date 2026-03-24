@@ -84,10 +84,22 @@ async function handleEditFlow(
     const savedFlowsDir = join(projectRoot, ".pi", "flows", "flows");
     if (existsSync(savedFlowsDir)) {
       try {
-        const { readdirSync } = await import("node:fs");
-        for (const f of readdirSync(savedFlowsDir)) {
-          if (f.endsWith(".flow.md")) {
-            flowFiles.push({ name: f.replace(".flow.md", ""), path: join(savedFlowsDir, f) });
+        const { readdirSync, statSync } = await import("node:fs");
+        for (const entry of readdirSync(savedFlowsDir)) {
+          const entryPath = join(savedFlowsDir, entry);
+          if (entry.endsWith(".flow.md")) {
+            flowFiles.push({ name: entry.replace(".flow.md", ""), path: entryPath });
+          } else {
+            try {
+              if (statSync(entryPath).isDirectory()) {
+                for (const sub of readdirSync(entryPath)) {
+                  if (sub.endsWith(".flow.md")) {
+                    const name = `${entry}:${sub.replace(".flow.md", "")}`;
+                    flowFiles.push({ name, path: join(entryPath, sub) });
+                  }
+                }
+              }
+            } catch { /* ignore */ }
           }
         }
       } catch { /* ignore */ }
@@ -507,13 +519,13 @@ async function handleNewFlow(
   if (choice === "Save & Run") {
     const defaultName = slugify(desc);
     const flowName = await ctx.ui.input(
-      "Name this flow (available as /<name>):",
+      "Name this flow (available as /custom:<name>):",
       defaultName,
     );
 
     if (flowName) {
       const safeName = slugify(flowName);
-      const piFlowsDir = join(projectRoot, ".pi", "flows", "flows");
+      const piFlowsDir = join(projectRoot, ".pi", "flows", "flows", "custom");
       const piAgentsDir = join(projectRoot, ".pi", "flows", "agents");
 
       // Ensure directories exist
@@ -538,7 +550,7 @@ async function handleNewFlow(
       pi.events.emit("flow:rediscover", {});
 
       ctx.ui.notify(
-        `Flow saved as "${safeName}" — available as /${safeName}`,
+        `Flow saved as "${safeName}" — available as /custom:${safeName}`,
         "info",
       );
     } else {

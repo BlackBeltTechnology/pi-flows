@@ -249,6 +249,20 @@ export function validateFlowContent(
     }
   }
 
+  // ---- 8b. Angle-bracket template syntax detection -------------------------
+
+  for (let i = 0; i < lines.length; i++) {
+    const angleBracketMatches = lines[i].matchAll(/<([\w][\w-]*)\.(summary|artifacts|status|files|fullOutput)>/g);
+    for (const m of angleBracketMatches) {
+      diagnostics.push({
+        line: i + 1,
+        severity: "error",
+        message: `Angle-bracket syntax "<${m[0]}>" is not supported for template references`,
+        suggestion: `Use {result.${m[1]}.${m[2]}} instead`,
+      });
+    }
+  }
+
   // ---- 9. Fork branch target validation -----------------------------------
 
   for (const block of stepBlocks) {
