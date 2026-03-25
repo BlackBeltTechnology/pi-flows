@@ -63,6 +63,20 @@ Rules:
 - slug: max 50 chars, lowercase, kebab-case, no special chars
 - desc: max 120 chars, imperative mood ("Add X", "Fix Y", "Implement Z")`;
 
+/** Get architect tool definitions and spawn context from flow-engine via events */
+function getArchitectSpawnContext(pi: ExtensionAPI): { tools: any[]; authStorage: any; modelRegistry: any; extraGuardFactories: any[] } {
+  const toolsQuery: any = {};
+  pi.events.emit("flow:get-architect-tools", toolsQuery);
+  const spawnCtx: any = {};
+  pi.events.emit("flow:get-spawn-context", spawnCtx);
+  return {
+    tools: toolsQuery.tools ?? [],
+    authStorage: spawnCtx.authStorage,
+    modelRegistry: spawnCtx.modelRegistry,
+    extraGuardFactories: spawnCtx.extraGuardFactories ?? [],
+  };
+}
+
 // ---- Flow edit handler ----------------------------------------------------
 
 async function handleEditFlow(
@@ -222,7 +236,6 @@ async function handleEditFlow(
   };
   await mountWidget();
 
-  const guardExtPath = join(pkgRoot, "extensions", "flow-engine", "guard.ts");
   const task = `Modify this existing flow:\n\n${existingContent}\n\nModification request: ${modificationRequest}`;
   const templateCtx = {
     task,
@@ -236,6 +249,7 @@ async function handleEditFlow(
   let flowPath = "";
   let replanNotes = "";
   const createdFiles: string[] = [];
+  const allCreatedFiles = new Set<string>();
 
   while (true) {
     const currentTask = replanNotes
@@ -248,14 +262,17 @@ async function handleEditFlow(
     );
 
     architectAbort = new AbortController();
+    const spawnCtx = getArchitectSpawnContext(pi);
     const result = await spawnAgent({
       agent: architectConfig,
       task: currentTask,
       templateContext: { ...templateCtx, task: currentTask },
       getModelRole: getModelRole ? (role: string) => getModelRole!(role) : undefined,
       cwd: projectRoot,
-      guardExtPath,
-      allowSubagent: true,
+      authStorage: spawnCtx.authStorage,
+      modelRegistry: spawnCtx.modelRegistry,
+      extraGuardFactories: spawnCtx.extraGuardFactories,
+      extraCustomTools: spawnCtx.tools,
       signal: architectAbort.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
@@ -284,24 +301,37 @@ async function handleEditFlow(
     for (const tc of result.toolCalls) {
       if (tc.toolName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) { flowPath = path; createdFiles.push(path); }
+        if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
       if (tc.toolName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) createdFiles.push(path);
+        if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
       }
     }
 
     if (!flowPath) {
-      const tcSummary = result.toolCalls.map(tc =>
-        `  ${tc.toolName}${tc.isError ? " [ERROR]" : ""}`
-      ).join("\n") || "  (none)";
-      ctx.ui.notify(
-        `Architect did not produce a flow file.\nTool calls:\n${tcSummary}`,
-        "error",
-      );
+      // Graceful exit: show architect's summary and let user retry or cancel
+      while (overlayOpen) await new Promise(r => setTimeout(r, 100));
+      const summary = result.result?.summary || result.output?.slice(0, 500) || "No details available";
+      const retryChoice = await ctx.ui.select(
+        `Architect couldn't produce a flow:\n${summary}\n\nWhat would you like to do?`,
+        ["Retry", "Cancel"],
+      ) || "Cancel";
+      if (retryChoice === "Retry") {
+        replanNotes = await ctx.ui.input("Additional guidance for the architect:", "") || "";
+        if (!replanNotes) { choice = "Cancel"; break; }
+        if (architectWidget) {
+          architectWidget.dispose();
+          ctx.ui.setWidget("flow-architect", undefined);
+        }
+        await mountWidget();
+        continue;
+      }
       break;
     }
+
+    // Wait for any open preview overlay to close before prompting
+    while (overlayOpen) await new Promise(r => setTimeout(r, 100));
 
     choice = await ctx.ui.select(
       "What would you like to do?",
@@ -330,7 +360,7 @@ async function handleEditFlow(
   }
 
   if (choice === "Cancel" || !flowPath) {
-    for (const f of createdFiles) {
+    for (const f of allCreatedFiles) {
       try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
     }
     ctx.ui.notify("Cancelled.", "warning");
@@ -341,8 +371,8 @@ async function handleEditFlow(
   if (choice === "Save") {
     try {
       copyFileSync(flowPath, selectedFlow.path);
-      // Clean up temp files
-      for (const f of createdFiles) {
+      // Clean up all temp files (current iteration + orphans from previous iterations)
+      for (const f of allCreatedFiles) {
         if (f !== selectedFlow.path) {
           try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
         }
@@ -516,7 +546,6 @@ async function handleNewFlow(
   await mountWidget();
 
   // Step 4: Spawn architect subagent (with replan loop)
-  const guardExtPath = join(pkgRoot, "extensions", "flow-engine", "guard.ts");
   const templateCtx = {
     task: desc,
     inputs: {} as Record<string, string>,
@@ -529,6 +558,7 @@ async function handleNewFlow(
   let flowPath = "";
   let replanNotes = "";
   const createdFiles: string[] = [];
+  const allCreatedFiles = new Set<string>();
 
   while (true) {
     const task = replanNotes
@@ -541,14 +571,17 @@ async function handleNewFlow(
     );
 
     architectAbort2 = new AbortController();
+    const spawnCtx2 = getArchitectSpawnContext(pi);
     const result = await spawnAgent({
       agent: architectConfig,
       task,
       templateContext: { ...templateCtx, task },
       getModelRole: getModelRole ? (role: string) => getModelRole!(role) : undefined,
       cwd: projectRoot,
-      guardExtPath,
-      allowSubagent: true,
+      authStorage: spawnCtx2.authStorage,
+      modelRegistry: spawnCtx2.modelRegistry,
+      extraGuardFactories: spawnCtx2.extraGuardFactories,
+      extraCustomTools: spawnCtx2.tools,
       signal: architectAbort2.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
@@ -578,29 +611,37 @@ async function handleNewFlow(
     for (const tc of result.toolCalls) {
       if (tc.toolName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) { flowPath = path; createdFiles.push(path); }
+        if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
       if (tc.toolName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) createdFiles.push(path);
+        if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
       }
     }
 
     if (!flowPath) {
-      // Surface diagnostics so the user can see what happened
-      const tcSummary = result.toolCalls.map(tc =>
-        `  ${tc.toolName}${tc.isError ? " [ERROR]" : ""}`
-      ).join("\n") || "  (none)";
-      const diag = [
-        `Architect did not produce a flow file.`,
-        `Exit code: ${result.exitCode}`,
-        `Tool calls:\n${tcSummary}`,
-        result.stderr ? `Stderr: ${result.stderr.slice(0, 500)}` : "",
-        result.output ? `Output: ${result.output.slice(0, 500)}` : "",
-      ].filter(Boolean).join("\n");
-      ctx.ui.notify(diag, "error");
+      // Graceful exit: show architect's summary and let user retry or cancel
+      while (overlayOpen2) await new Promise(r => setTimeout(r, 100));
+      const summary = result.result?.summary || result.output?.slice(0, 500) || "No details available";
+      const retryChoice = await ctx.ui.select(
+        `Architect couldn't produce a flow:\n${summary}\n\nWhat would you like to do?`,
+        ["Retry", "Cancel"],
+      ) || "Cancel";
+      if (retryChoice === "Retry") {
+        replanNotes = await ctx.ui.input("Additional guidance for the architect:", "") || "";
+        if (!replanNotes) { choice = "Cancel"; break; }
+        if (architectWidget) {
+          architectWidget.dispose();
+          ctx.ui.setWidget("flow-architect", undefined);
+        }
+        await mountWidget();
+        continue;
+      }
       break;
     }
+
+    // Wait for any open preview overlay to close before prompting
+    while (overlayOpen2) await new Promise(r => setTimeout(r, 100));
 
     // Present choice to user — flow details are visible in the widget above
     choice = await ctx.ui.select(
@@ -634,8 +675,8 @@ async function handleNewFlow(
   }
 
   if (choice === "Cancel") {
-    // Cleanup created files on cancel
-    for (const f of createdFiles) {
+    // Cleanup all created files on cancel (including orphans from previous replan iterations)
+    for (const f of allCreatedFiles) {
       try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
     }
     ctx.ui.notify("Cancelled.", "warning");
@@ -668,7 +709,7 @@ async function handleNewFlow(
       const destFlowPath = join(piFlowsDir, `${safeName}.flow.md`);
       copyFileSync(flowPath, destFlowPath);
 
-      // Copy custom agent files
+      // Copy custom agent files from final iteration
       for (const f of createdFiles) {
         if (f !== flowPath && existsSync(f)) {
           const agentFileName = f.split("/").pop() || "";
@@ -676,6 +717,11 @@ async function handleNewFlow(
             copyFileSync(f, join(piAgentsDir, agentFileName));
           }
         }
+      }
+
+      // Clean up all temp files (including orphans from previous replan iterations)
+      for (const f of allCreatedFiles) {
+        try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
       }
 
       // Re-discover so the saved flow registers as a command immediately
@@ -749,7 +795,6 @@ async function handleNewFlow(
       flow: flowConfig,
       task: desc,
       cwd: projectRoot,
-      guardExtPath,
       getModelRole: getModelRole ? (role: string) => getModelRole!(role) : undefined,
       getAgent: (name: string) => discoveredAgents.get(name),
       askUser: async (question, type, options, extra) => {
@@ -805,9 +850,9 @@ async function handleNewFlow(
       dashboard.dispose();
     }
 
-    // Cleanup for "Run" mode — delete temp artifacts
+    // Cleanup for "Run" mode — delete all temp artifacts (including orphans from previous replan iterations)
     if (choice === "Run") {
-      for (const f of createdFiles) {
+      for (const f of allCreatedFiles) {
         try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
       }
     }

@@ -139,35 +139,55 @@ export function validateFlowContent(
   if (getDiscoveredAgents) {
     const knownAgents = getDiscoveredAgents();
     for (const { header, line } of stepHeaders) {
-      // Check agent steps
-      if (!validPrefixes.some((p) => header.startsWith(p))) {
-        if (!knownAgents.has(header)) {
-          diagnostics.push({
-            line,
-            severity: "error",
-            message: `Agent "${header}" is not in the discovered agent catalog`,
-            suggestion: "Create the agent definition with agent_write or check the name spelling",
-          });
-        }
-      }
-      // Check agent-decision and agent-loop-decision agent refs
-      if (header.startsWith("agent-decision:") || header.startsWith("agent-loop-decision:")) {
-        const blockStart = lines.findIndex((l, idx) => idx >= line - 1 && l.match(/^##\s/));
-        if (blockStart >= 0) {
-          for (let j = blockStart + 1; j < lines.length; j++) {
-            if (lines[j].match(/^##\s/)) break;
-            const agentMatch = lines[j].match(/^agent:\s*(.+)$/);
-            if (agentMatch) {
-              const agentName = agentMatch[1].trim();
-              if (!knownAgents.has(agentName)) {
-                diagnostics.push({
-                  line: j + 1,
-                  severity: "warning",
-                  message: `Agent "${agentName}" referenced in agent-decision is not in the catalog`,
-                });
+      const isSpecialStep = validPrefixes.some((p) => header.startsWith(p));
+      if (isSpecialStep) {
+        // Check agent-decision and agent-loop-decision agent refs
+        if (header.startsWith("agent-decision:") || header.startsWith("agent-loop-decision:")) {
+          const blockStart = lines.findIndex((l, idx) => idx >= line - 1 && l.match(/^##\s/));
+          if (blockStart >= 0) {
+            for (let j = blockStart + 1; j < lines.length; j++) {
+              if (lines[j].match(/^##\s/)) break;
+              const agentMatch = lines[j].match(/^agent:\s*(.+)$/);
+              if (agentMatch) {
+                const agentName = agentMatch[1].trim();
+                if (!knownAgents.has(agentName)) {
+                  diagnostics.push({
+                    line: j + 1,
+                    severity: "warning",
+                    message: `Agent "${agentName}" referenced in ${header.split(":")[0]} is not in the catalog`,
+                  });
+                }
               }
             }
           }
+        }
+      } else {
+        // Regular agent step — find agent: field in body
+        let agentName: string | null = null;
+        let agentLine = line;
+        for (let j = line; j < lines.length; j++) {
+          if (j > line && lines[j].match(/^##\s/)) break;
+          const agentMatch = lines[j].match(/^agent:\s*(.+)$/);
+          if (agentMatch) {
+            agentName = agentMatch[1].trim();
+            agentLine = j + 1;
+            break;
+          }
+        }
+        if (!agentName) {
+          diagnostics.push({
+            line,
+            severity: "error",
+            message: `Agent step "${header}" missing required "agent" field`,
+            suggestion: `Add agent: <agent-name> to specify which agent to dispatch`,
+          });
+        } else if (!knownAgents.has(agentName)) {
+          diagnostics.push({
+            line: agentLine,
+            severity: "error",
+            message: `Agent "${agentName}" is not in the discovered agent catalog`,
+            suggestion: "Create the agent definition with agent_write or check the name spelling",
+          });
         }
       }
     }
@@ -274,6 +294,46 @@ export function validateFlowContent(
             severity: "error",
             message: `Fork branch "${option}" targets unknown step ID "${target}"`,
             suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+          });
+        }
+      }
+    }
+  }
+
+  // ---- 9b. Deprecation warnings for allowCustom / decisionAgent ----
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed === "allowCustom: true") {
+      diagnostics.push({
+        line: i + 1,
+        severity: "warning",
+        message: "allowCustom is deprecated — use allowNotes instead. Custom answers are no longer delegated to a decision agent.",
+        suggestion: "Replace allowCustom: true with allowNotes: true",
+      });
+    }
+    if (trimmed.startsWith("decisionAgent:")) {
+      diagnostics.push({
+        line: i + 1,
+        severity: "warning",
+        message: "decisionAgent is deprecated — use the agent: field on fork steps for autonomous decisions instead.",
+        suggestion: "Replace decisionAgent with agent: <agent-name> and task: <context>",
+      });
+    }
+  }
+
+  // ---- 9c. Fork agent validation (autonomous mode) -------------------------
+
+  if (getDiscoveredAgents) {
+    const knownAgentsForFork = getDiscoveredAgents();
+    for (const block of stepBlocks) {
+      if (block.headerPrefix === "fork" && block.forkAgent) {
+        if (!knownAgentsForFork.has(block.forkAgent)) {
+          diagnostics.push({
+            line: block.forkAgentLine ?? block.line,
+            severity: "warning",
+            message: `Fork "${block.id}" references agent "${block.forkAgent}" which is not in the discovered catalog`,
+            suggestion: "Ensure the agent exists or will be created before the flow runs",
           });
         }
       }
@@ -430,6 +490,8 @@ interface ParsedStepBlock {
   exitTargetLine?: number;
   maxIterations?: string;
   maxIterationsLine?: number;
+  forkAgent?: string;
+  forkAgentLine?: number;
 }
 
 function parseStepBodies(lines: string[]): ParsedStepBlock[] {
@@ -487,6 +549,13 @@ function parseStepBodies(lines: string[]): ParsedStepBlock[] {
           break;
         }
       }
+    }
+
+    // Parse agent: on fork steps (for autonomous mode)
+    const agentFieldMatch = lines[i].match(/^agent:\s*(.+)$/);
+    if (agentFieldMatch && currentBlock.headerPrefix === "fork") {
+      currentBlock.forkAgent = agentFieldMatch[1].trim();
+      currentBlock.forkAgentLine = i + 1;
     }
 
     // Parse loop_target, exit_target, max_iterations for agent-loop-decision

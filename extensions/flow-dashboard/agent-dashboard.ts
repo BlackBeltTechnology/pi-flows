@@ -219,7 +219,7 @@ export class AgentDashboard {
     if (this.mode === "navigate") {
       lines.push(t?.fg?.("dim", "  ←→↑↓ navigate · Enter open · Ctrl+X stop · ESC close") ?? "  ←→↑↓ navigate · Enter open · Ctrl+X stop · ESC close");
     } else {
-      lines.push(t?.fg?.("dim", "  Ctrl+O inspect · Ctrl+X stop flow") ?? "  Ctrl+O inspect · Ctrl+X stop flow");
+      lines.push(t?.fg?.("dim", "  Ctrl+O inspect · Ctrl+A auto-decide · Ctrl+X stop flow") ?? "  Ctrl+O inspect · Ctrl+A auto-decide · Ctrl+X stop flow");
     }
 
     return lines;

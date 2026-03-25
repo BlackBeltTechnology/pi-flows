@@ -67,7 +67,8 @@ function renderFlowPreview(flow: FlowConfig, knownAgents: Map<string, AgentConfi
 
       case "fork": {
         const forkStep = step as ForkStep;
-        lines.push(`  ${num}. [fork] ${forkStep.id}`);
+        const autoLabel = forkStep.agent ? ` (auto: ${forkStep.agent})` : "";
+        lines.push(`  ${num}. [fork] ${forkStep.id}${autoLabel}`);
         lines.push(`     question: ${truncate(forkStep.question, 80)}`);
         lines.push(`     options: ${forkStep.options.join(", ")}`);
         if (forkStep.branches && Object.keys(forkStep.branches).length > 0) {

@@ -5,6 +5,28 @@ import { parseFlowFile } from "./flow-parser.js";
 import { globSync } from "node:fs";
 import { join } from "node:path";
 
+// ---- Flow cancellation error -----------------------------------------------
+
+/**
+ * Thrown when the user cancels a fork prompt (Escape) or the flow's abort
+ * signal fires during a UI prompt (Ctrl+X). Caught by runFlow to produce
+ * a clean cancellation result distinct from runtime errors.
+ */
+export class FlowCancelledError extends Error {
+  constructor(message = "Flow cancelled by user") {
+    super(message);
+    this.name = "FlowCancelledError";
+  }
+}
+
+export interface ForkContext {
+  forkId: string;
+  question: string;
+  answer: string;
+  notes?: string;
+  decidedBy?: string;  // agent name if auto-decided
+}
+
 export interface FlowContext {
   task: string;
   results: Record<string, { fullOutput: string; status: string; summary: string; artifacts: string; files: string }>;
@@ -12,14 +34,17 @@ export interface FlowContext {
   loopCounters: Record<string, number>;
   loopMaxIterations: Record<string, number>;
   steps: FlowStep[];
+  /** Fork context to autowire into the next branch step */
+  pendingForkContext?: Map<string, ForkContext>;  // step ID -> fork context
 }
 
 export interface FlowRunOptions {
   flow: FlowConfig;
   task: string;
   cwd: string;
-  guardExtPath: string;
-  extraGuardExtPaths?: string[];
+  authStorage?: any;
+  modelRegistry?: any;
+  extraGuardFactories?: any[];
   getModelRole?: (role: string) => string | undefined;
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
@@ -31,7 +56,10 @@ export interface FlowRunOptions {
   onToolResult?: (agentName: string, toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (agentName: string, text: string) => void;
   onThinkingText?: (agentName: string, text: string) => void;
+  onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void) => void;
   onLoopIteration?: (stepId: string, iteration: number, maxIterations: number) => void;
+  isAutonomous?: () => boolean;
+  onAutoDecision?: (forkId: string, agentName: string, chosenBranch: string, targetStepId: string) => void;
   signal?: AbortSignal;
 }
 
@@ -62,6 +90,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     loopCounters: {},
     loopMaxIterations,
     steps: flow.steps,
+    pendingForkContext: new Map(),
   };
 
   const segments = splitIntoSegments(flow.steps);
@@ -69,43 +98,75 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
   let lastResult: AgentResult | null = null;
   let segmentIndex = 0;
 
-  while (segmentIndex < segments.length) {
-    // Check abort before processing each segment
-    if (options.signal?.aborted) break;
+  let cancelled = false;
 
-    const segment = segments[segmentIndex];
+  try {
+    while (segmentIndex < segments.length) {
+      // Check abort before processing each segment
 
-    if (segment.type === "dag") {
+      const segment = segments[segmentIndex];
 
-      const result = await runDagSegment(segment.steps, maxConcurrent, ctx, options, segment.activeSteps);
-      if (result) lastResult = result;
-      segmentIndex++;
-    } else {
-      // Separator step (fork, conditional, agent-decision, flow-ref)
+      if (segment.type === "dag") {
 
-      const stepResult = await executeStep(segment.step, ctx, options);
+        const result = await runDagSegment(segment.steps, maxConcurrent, ctx, options, segment.activeSteps);
+        if (result) lastResult = result;
+        segmentIndex++;
+      } else {
+        // Separator step (fork, conditional, agent-decision, flow-ref)
 
-      if (stepResult.agentResult) {
-        lastResult = stepResult.agentResult;
-        storeResult(ctx, segment.step.id, stepResult.agentResult);
-      }
+        const stepResult = await executeStep(segment.step, ctx, options);
 
-      // Handle routing: jump to target step's segment
-      if (stepResult.nextStepId) {
-        const targetIdx = findSegmentIndex(segments, stepResult.nextStepId);
-        if (targetIdx >= 0) {
-          // Compute active steps for branch exclusivity
-          const targetSeg = segments[targetIdx];
-          if (targetSeg.type === "dag") {
-            targetSeg.activeSteps = computeActiveSteps(targetSeg.steps, stepResult.nextStepId);
-          }
-          segmentIndex = targetIdx;
-          continue;
+        if (stepResult.agentResult) {
+          lastResult = stepResult.agentResult;
+          storeResult(ctx, segment.step.id, stepResult.agentResult);
         }
-      }
 
-      segmentIndex++;
+        // Handle routing: jump to target step's segment
+        if (stepResult.nextStepId) {
+          const targetIdx = findSegmentIndex(segments, stepResult.nextStepId);
+          if (targetIdx >= 0) {
+            // Compute active steps for branch exclusivity
+            const targetSeg = segments[targetIdx];
+            if (targetSeg.type === "dag") {
+              targetSeg.activeSteps = computeActiveSteps(targetSeg.steps, stepResult.nextStepId);
+            }
+            segmentIndex = targetIdx;
+            continue;
+          }
+        }
+
+        segmentIndex++;
+      }
     }
+  } catch (err) {
+    if (err instanceof FlowCancelledError) {
+      cancelled = true;
+    } else {
+      throw err; // Re-throw unexpected errors
+    }
+  }
+
+  // If cancelled, produce a clean cancellation result
+  if (cancelled) {
+    const cancelResult: AgentResult = {
+      success: false,
+      output: "Flow cancelled by user",
+      stderr: "",
+      exitCode: null,
+      result: { status: "error" as const, summary: "Cancelled by user", files: [], artifacts: "" },
+      toolCalls: [],
+      duration: Date.now() - startTime,
+      tokens: { input: 0, output: 0 },
+    };
+
+    return {
+      lastResult: cancelResult,
+      results: { ...ctx.results },
+      forks: { ...ctx.forks },
+      flowName: flow.name,
+      stepCount: Object.keys(ctx.results).length,
+      totalDuration: Date.now() - startTime,
+    };
   }
 
   // If aborted, mark any agents that didn't complete as aborted
@@ -347,6 +408,18 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   // Get context file contents
   const contextFiles = options.getContextFiles?.(agentConfig) ?? [];
 
+  // Autowire fork context if this step was branched-to from a fork
+  const forkCtx = ctx.pendingForkContext?.get(step.id);
+  if (forkCtx) {
+    const header = forkCtx.decidedBy ? "Auto Decision" : "User Decision";
+    let section = `## ${header}: ${forkCtx.forkId}\nQuestion: ${forkCtx.question}\nSelected: ${forkCtx.answer}`;
+    if (forkCtx.notes) section += `\nNotes: ${forkCtx.notes}`;
+    if (forkCtx.decidedBy) section += `\nDecided by: ${forkCtx.decidedBy}`;
+    contextFiles.push(section);
+    // Remove so it's only injected into the immediate branch step
+    ctx.pendingForkContext!.delete(step.id);
+  }
+
   const result = await spawnAgent({
     agent: agentConfig,
     task: userTask,
@@ -355,12 +428,16 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     contextFileContents: contextFiles,
     getModelRole: options.getModelRole,
     cwd: options.cwd,
-    guardExtPath: options.guardExtPath,
-    extraGuardExtPaths: options.extraGuardExtPaths,
+    authStorage: options.authStorage,
+    modelRegistry: options.modelRegistry,
+    extraGuardFactories: options.extraGuardFactories,
     onToolCall: (name, input) => options.onToolCall?.(step.agent, name, input),
     onToolResult: (name, output, err) => options.onToolResult?.(step.agent, name, output, err),
     onAssistantText: (text) => options.onAssistantText?.(step.agent, text),
     onThinkingText: (text) => options.onThinkingText?.(step.agent, text),
+    onExtensionUIRequest: options.onExtensionUIRequest
+      ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond)
+      : undefined,
     signal: options.signal,
   });
 
@@ -375,64 +452,120 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 
-  const extra: Record<string, boolean> = {};
+  // ── Autonomous mode: auto-decide via agent if fork has agent: field ──
+  if (step.agent && options.isAutonomous?.()) {
+    const agentConfig = options.getAgent(step.agent);
+    if (agentConfig) {
+      const branchNames = Object.keys(step.branches);
+      const decisionTask = step.task
+        ? expandTemplateVariables(step.task, {
+            task: ctx.task, inputs: {},
+            results: ctx.results, forks: ctx.forks,
+            loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+          })
+        : `The user was asked: "${step.question}"\nOptions: ${step.options.join(", ")}\nChoose the best option.`;
+
+      const templateCtx: TemplateContext = {
+        task: ctx.task, inputs: {},
+        results: ctx.results, forks: ctx.forks,
+        loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+      };
+
+      const result = await spawnAgent({
+        agent: agentConfig,
+        task: decisionTask,
+        templateContext: templateCtx,
+        getModelRole: options.getModelRole,
+        cwd: options.cwd,
+        authStorage: options.authStorage,
+        modelRegistry: options.modelRegistry,
+        extraGuardFactories: options.extraGuardFactories,
+        decisionBranches: branchNames,
+        signal: options.signal,
+      });
+
+      const branch = result.finishParams?.branch;
+      if (branch && step.branches[branch]) {
+        ctx.forks[step.id] = { answer: branch };
+        storeForkContext(ctx, step, step.branches[branch], branch, undefined, step.agent);
+        options.onAutoDecision?.(step.id, step.agent, branch, step.branches[branch]);
+        return { nextStepId: step.branches[branch], agentResult: result };
+      }
+      // Fallback: first branch if agent fails
+      const firstKey = Object.keys(step.branches)[0];
+      ctx.forks[step.id] = { answer: firstKey };
+      storeForkContext(ctx, step, step.branches[firstKey], firstKey, undefined, step.agent);
+      return { nextStepId: step.branches[firstKey], agentResult: result };
+    }
+  }
+
+  const extra: Record<string, boolean | Record<string, string>> = {};
   if (step.multiSelect) extra.multiSelect = true;
   if (step.allowNotes) extra.allowNotes = true;
   if (step.allowCustom) extra.allowCustom = true;
+  // Pass branch mapping and agent info for UI enhancement
+  if (step.branches) extra.branches = step.branches;
+  if (step.agent) extra.hasAutoAgent = true;
 
   const response = await options.askUser(expandedQuestion, "select", step.options, extra);
-  ctx.forks[step.id] = response;
 
-  if (step.allowCustom && !step.options.includes(response.answer)) {
-    // Delegate custom answer to a decision agent for branch routing
-    const branchNames = Object.keys(step.branches);
-    const agentName = step.decisionAgent ?? "flow-decision";
-    const decisionAgentConfig = options.getAgent(agentName);
+  // Handle auto-decide: user chose to let the agent decide this fork
+  if (response.answer === "__auto_decide__" && step.agent) {
+    const agentConfig = options.getAgent(step.agent);
+    if (agentConfig) {
+      const branchNames = Object.keys(step.branches);
+      const decisionTask = step.task
+        ? expandTemplateVariables(step.task, {
+            task: ctx.task, inputs: {},
+            results: ctx.results, forks: ctx.forks,
+            loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+          })
+        : `The user was asked: "${step.question}"\nOptions: ${step.options.join(", ")}\nChoose the best option.`;
 
-    if (!decisionAgentConfig) {
-      // No decision agent available — fall through to next segment
-      return { nextStepId: undefined };
+      const templateCtx: TemplateContext = {
+        task: ctx.task, inputs: {},
+        results: ctx.results, forks: ctx.forks,
+        loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+      };
+
+      const result = await spawnAgent({
+        agent: agentConfig,
+        task: decisionTask,
+        templateContext: templateCtx,
+        getModelRole: options.getModelRole,
+        cwd: options.cwd,
+        authStorage: options.authStorage,
+        modelRegistry: options.modelRegistry,
+        extraGuardFactories: options.extraGuardFactories,
+        decisionBranches: branchNames,
+        signal: options.signal,
+      });
+
+      const branch = result.finishParams?.branch;
+      if (branch && step.branches[branch]) {
+        ctx.forks[step.id] = { answer: branch };
+        storeForkContext(ctx, step, step.branches[branch], branch, undefined, step.agent);
+        options.onAutoDecision?.(step.id, step.agent, branch, step.branches[branch]);
+        return { nextStepId: step.branches[branch], agentResult: result };
+      }
+      const firstKey = Object.keys(step.branches)[0];
+      ctx.forks[step.id] = { answer: firstKey };
+      storeForkContext(ctx, step, step.branches[firstKey], firstKey, undefined, step.agent);
+      return { nextStepId: step.branches[firstKey], agentResult: result };
     }
-
-    const delegationTask =
-      `The user was asked: "${step.question}"\n` +
-      `Predefined options were: ${step.options.join(", ")}\n` +
-      `User answered: "${response.answer}"\n` +
-      (response.notes ? `User notes: "${response.notes}"\n` : "") +
-      `\nMap this to the closest matching branch based on user intent.`;
-
-    const templateCtx: TemplateContext = {
-      task: ctx.task, inputs: {},
-      results: ctx.results, forks: ctx.forks,
-      loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-    };
-
-    const result = await spawnAgent({
-      agent: decisionAgentConfig,
-      task: delegationTask,
-      templateContext: templateCtx,
-      getModelRole: options.getModelRole,
-      cwd: options.cwd,
-      guardExtPath: options.guardExtPath,
-    extraGuardExtPaths: options.extraGuardExtPaths,
-      decisionBranches: branchNames,
-      signal: options.signal,
-    });
-
-    const branch = result.finishParams?.branch;
-    if (branch && step.branches[branch]) {
-      return { nextStepId: step.branches[branch], agentResult: result };
-    }
-
-    return { nextStepId: undefined };
   }
+
+  ctx.forks[step.id] = response;
 
   // Multi-select: execute all selected branches sequentially
   if (step.multiSelect && Array.isArray(response.answer)) {
     let lastResult: StepResult = {};
-    for (const ans of response.answer as unknown as string[]) {
+    const selectedOptions = response.answer as unknown as string[];
+    for (const ans of selectedOptions) {
       const branchStepId = step.branches[ans];
       if (!branchStepId) continue;
+      // Autowire fork context for each branch (with all selected options)
+      storeForkContext(ctx, step, branchStepId, selectedOptions.join(", "), response.notes);
       const branchStep = ctx.steps.find(s => s.id === branchStepId);
       if (branchStep) {
         lastResult = await executeStep(branchStep, ctx, options);
@@ -445,7 +578,32 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   }
 
   const nextStepId = step.branches[response.answer];
+
+  // Store fork context for autowiring into the branch step
+  if (nextStepId) {
+    storeForkContext(ctx, step, nextStepId, response.answer, response.notes);
+  }
+
   return { nextStepId };
+}
+
+/** Store fork context so the branch step receives it as autowired context */
+function storeForkContext(
+  ctx: FlowContext,
+  step: ForkStep,
+  targetStepId: string,
+  answer: string,
+  notes?: string,
+  decidedBy?: string,
+): void {
+  if (!ctx.pendingForkContext) ctx.pendingForkContext = new Map();
+  ctx.pendingForkContext.set(targetStepId, {
+    forkId: step.id,
+    question: step.question,
+    answer,
+    notes,
+    decidedBy,
+  });
 }
 
 async function executeConditionalStep(step: ConditionalStep, ctx: FlowContext, _options: FlowRunOptions): Promise<StepResult> {
@@ -505,8 +663,9 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     contextFileContents: contextFiles,
     getModelRole: options.getModelRole,
     cwd: options.cwd,
-    guardExtPath: options.guardExtPath,
-    extraGuardExtPaths: options.extraGuardExtPaths,
+    authStorage: options.authStorage,
+    modelRegistry: options.modelRegistry,
+    extraGuardFactories: options.extraGuardFactories,
     decisionBranches: branchNames,
     signal: options.signal,
   });
@@ -569,8 +728,9 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     contextFileContents: contextFiles,
     getModelRole: options.getModelRole,
     cwd: options.cwd,
-    guardExtPath: options.guardExtPath,
-    extraGuardExtPaths: options.extraGuardExtPaths,
+    authStorage: options.authStorage,
+    modelRegistry: options.modelRegistry,
+    extraGuardFactories: options.extraGuardFactories,
     decisionBranches: ["loop", "exit"],
     signal: options.signal,
   });

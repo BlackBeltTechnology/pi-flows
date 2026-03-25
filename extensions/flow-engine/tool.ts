@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig } from "./types.js";
 import { spawnAgent } from "./execution.js";
 
@@ -7,9 +8,10 @@ export function registerSubagentTool(
   pi: ExtensionAPI,
   getAgents: () => Map<string, AgentConfig>,
   getModelRole: (role: string) => string | undefined,
-  guardExtPath: string,
   cwd: string,
-  extraGuardExtPaths?: string[],
+  getAuthStorage: () => AuthStorage | undefined,
+  getModelRegistry: () => ModelRegistry | undefined,
+  getExtraGuardFactories: () => ExtensionFactory[],
 ): void {
   pi.registerTool({
     name: "subagent",
@@ -25,6 +27,9 @@ export function registerSubagentTool(
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const templateCtx = { task: params.task || "", inputs: {}, results: {}, forks: {} };
+      const authStorage = getAuthStorage();
+      const modelRegistry = getModelRegistry();
+      const extraGuardFactories = getExtraGuardFactories();
 
       if (params.mode === "single" && params.agent) {
         const agentConfig = getAgents().get(params.agent);
@@ -32,7 +37,7 @@ export function registerSubagentTool(
 
         const result = await spawnAgent({
           agent: agentConfig, task: params.task || "", templateContext: templateCtx,
-          getModelRole, cwd, guardExtPath, extraGuardExtPaths,
+          getModelRole, cwd, authStorage, modelRegistry, extraGuardFactories,
         });
         return { content: [{ type: "text" as const, text: result.output }], details: {} };
       }
@@ -43,7 +48,7 @@ export function registerSubagentTool(
           if (!agentConfig) return `Agent not found: ${entry.agent}`;
           const result = await spawnAgent({
             agent: agentConfig, task: entry.task, templateContext: { ...templateCtx, task: entry.task },
-            getModelRole, cwd, guardExtPath, extraGuardExtPaths,
+            getModelRole, cwd, authStorage, modelRegistry, extraGuardFactories,
           });
           return `=== Parallel Task ${i + 1} (${entry.agent}) ===\n${result.output}`;
         }));

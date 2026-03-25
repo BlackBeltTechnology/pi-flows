@@ -174,10 +174,12 @@ Flows are `.flow.md` files with YAML frontmatter and `##`-delimited steps. Save 
 | `name` | yes | `string` | Flow identifier (becomes the slash command) |
 | `description` | yes | `string` | What this flow does |
 | `max_concurrent` | no | `number` | Maximum agents running in parallel (default: unlimited) |
+| `task_required` | no | `boolean` | When `true`, prompt user for task if no command args provided |
+| `task_prompt` | no | `string` | Custom prompt text (default: "Describe what you want \<name\> to do:") |
 
 ### Step Types
 
-Each `## heading` defines a step. The step's `id` defaults to the heading text. Steps are executed based on their dependencies (`blockedBy`).
+Each `## heading` defines a step. The heading text is the **step ID** — used for wiring (`blockedBy`, `{result.ID}`), branching, and result storage. The `agent:` field specifies which agent to dispatch.
 
 #### agent
 
@@ -185,7 +187,7 @@ Dispatch a named agent to perform a task.
 
 | Field | Required | Description |
 |-------|:---:|-------------|
-| `agent` | no | Agent name (defaults to step id) |
+| `agent` | yes | Which agent to dispatch |
 | `task` | no | Task override (template string) |
 | `model` | no | Model override for this step |
 | `blockedBy` | no | Step IDs that must complete first (comma-separated or array) |
@@ -214,9 +216,9 @@ Ask the user a question and branch based on their answer.
 | `question` | yes | Question to display |
 | `options` | yes | Answer choices |
 | `branches` | yes | Map of option → step ID |
-| `allowNotes` | no | Prompt for optional notes |
-| `allowCustom` | no | Add "Other (describe)" option |
-| `multiSelect` | no | Allow multiple selections |
+| `allowNotes` | no | Prompt for optional freetext notes after selection. Access via `{fork.ID.notes}` — wire into downstream branch step tasks. |
+| `allowCustom` | no | Append "Other (describe)" option. Freetext answers are routed by a decision agent. |
+| `multiSelect` | no | Allow multiple selections. All selected branches execute sequentially. |
 
 ```yaml
 ## choose-approach
@@ -342,9 +344,11 @@ max_concurrent: 2
 ---
 
 ## researcher
+agent: researcher
 task: Investigate the codebase for {task}
 
 ## developer
+agent: developer
 blockedBy: researcher
 inputs:
   context: "{result.researcher.summary}"
@@ -359,6 +363,7 @@ exit_target: finalize
 max_iterations: 3
 
 ## finalize
+agent: finalize
 blockedBy: verify-loop
 task: Write documentation for the changes made
 ```

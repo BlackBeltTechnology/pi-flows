@@ -1,11 +1,24 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
+import type { ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  SessionManager,
+  createReadTool,
+  createBashTool,
+  createEditTool,
+  createWriteTool,
+  createGrepTool,
+  createFindTool,
+  createLsTool,
+  createExtensionRuntime,
+  createEventBus,
+} from "@mariozechner/pi-coding-agent";
+import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { getModel } from "@mariozechner/pi-ai";
 import { resolveModel } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
-import { spawn } from "node:child_process";
-import { writeFileSync, unlinkSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import type { GuardOptions } from "./guard.js";
+import { createGuardExtension } from "./guard.js";
 
 // Template variable expansion
 export function expandTemplateVariables(template: string, ctx: TemplateContext): string {
@@ -23,29 +36,121 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     .replace(/\{loop\.([\w-]+)\.max\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0));
 }
 
+// Tool factory map: agent tool name -> SDK tool factory
+const TOOL_FACTORIES: Record<string, (cwd: string) => any> = {
+  read: createReadTool,
+  bash: createBashTool,
+  edit: createEditTool,
+  write: createWriteTool,
+  grep: createGrepTool,
+  find: createFindTool,
+  ls: createLsTool,
+};
+
 export interface SpawnOptions {
   agent: AgentConfig;
   task: string;
   templateContext: TemplateContext;
-  skillContents?: Map<string, string>;   // skill name -> SKILL.md content
-  contextFileContents?: string[];        // context file contents to inject
+  skillContents?: Map<string, string>;
+  contextFileContents?: string[];
   getModelRole?: (role: string) => string | undefined;
   cwd: string;
-  guardExtPath: string;                  // path to guard.ts extension
-  extraGuardExtPaths?: string[];         // additional guard extensions from packages
+  authStorage?: AuthStorage;
+  modelRegistry?: ModelRegistry;
+  extraGuardFactories?: ExtensionFactory[];
+  extraCustomTools?: any[];  // ToolDefinition[] — extension tools to include in the session
   onToolCall?: (toolName: string, input: any) => void;
   onToolResult?: (toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (text: string) => void;
   onThinkingText?: (text: string) => void;
-  decisionBranches?: string[];           // valid branch names for decision steps
-  allowSubagent?: boolean;               // allow subagent tool (for flow architect)
-  signal?: AbortSignal;                  // abort signal to cancel the agent
+  onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void;
+  decisionBranches?: string[];
+  signal?: AbortSignal;
+}
+
+/**
+ * Build an Extension object from a factory function.
+ *
+ * Replaces loadExtensionFromFactory which is not exported from the top-level
+ * pi-coding-agent package (blocked by exports map). Creates a minimal
+ * ExtensionAPI that records handlers and tools into an Extension-shaped
+ * object, which the ExtensionRunner will later bind with real actions.
+ */
+function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any): any {
+  const handlers = new Map<string, any[]>();
+  const tools = new Map<string, any>();
+
+  // Minimal ExtensionAPI — only needs to record registrations.
+  // Action methods (sendMessage, sendUserMessage, etc.) delegate to runtime
+  // which gets wired by ExtensionRunner._bindExtensionCore at build time.
+  const api: any = {
+    on: (event: string, handler: any) => {
+      if (!handlers.has(event)) handlers.set(event, []);
+      handlers.get(event)!.push(handler);
+    },
+    registerTool: (tool: any) => {
+      tools.set(tool.name, { definition: tool, extensionPath: "<guard>" });
+    },
+    registerCommand: () => {},
+    registerShortcut: () => {},
+    registerFlag: () => {},
+    getFlag: () => undefined,
+    registerMessageRenderer: () => {},
+    registerProvider: (...args: any[]) => runtime.registerProvider?.(...args),
+    unregisterProvider: (...args: any[]) => runtime.unregisterProvider?.(...args),
+    // Action methods — delegate to runtime (stubs replaced at bind time)
+    sendMessage: (...args: any[]) => runtime.sendMessage(...args),
+    sendUserMessage: (...args: any[]) => runtime.sendUserMessage(...args),
+    appendEntry: (...args: any[]) => runtime.appendEntry(...args),
+    setSessionName: (...args: any[]) => runtime.setSessionName(...args),
+    getSessionName: () => runtime.getSessionName(),
+    setLabel: (...args: any[]) => runtime.setLabel(...args),
+    exec: async () => ({ stdout: "", stderr: "", exitCode: 0 }),
+    getActiveTools: () => runtime.getActiveTools(),
+    getAllTools: () => runtime.getAllTools(),
+    setActiveTools: (...args: any[]) => runtime.setActiveTools(...args),
+    getCommands: () => runtime.getCommands(),
+    setModel: async () => false,
+    getThinkingLevel: () => runtime.getThinkingLevel(),
+    setThinkingLevel: (...args: any[]) => runtime.setThinkingLevel(...args),
+    events: createEventBus(),
+  };
+
+  // Run the factory — it calls api.on() and api.registerTool()
+  factory(api);
+
+  // Return Extension-shaped object
+  return {
+    path: "<guard>",
+    resolvedPath: "<guard>",
+    handlers,
+    tools,
+    messageRenderers: new Map(),
+    commands: new Map(),
+    flags: new Map(),
+    shortcuts: new Map(),
+  };
 }
 
 export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
-  const { agent, task, templateContext, getModelRole, cwd, guardExtPath } = options;
+  const { agent, task, templateContext, getModelRole, cwd } = options;
   const startTime = Date.now();
   const toolCalls: ToolCallRecord[] = [];
+
+  // Check if already aborted before creating session
+  if (options.signal?.aborted) {
+    const duration = Date.now() - startTime;
+    return {
+      success: false,
+      output: "Aborted by user",
+      stderr: "",
+      exitCode: null,
+      result: { status: "error" as const, summary: "Aborted by user", files: [], artifacts: "" },
+      toolCalls,
+      duration,
+      tokens: { input: 0, output: 0 },
+    };
+  }
 
   // Resolve model
   const { modelId, thinking } = resolveModel(agent.model, agent.thinking, getModelRole);
@@ -66,273 +171,376 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     systemPrompt = `## Context Files\n\n${contextSection}\n\n` + systemPrompt;
   }
 
-  // Write system prompt to temp file
-  const tmpDir = join(tmpdir(), "pi-flows");
-  mkdirSync(tmpDir, { recursive: true });
-  const promptFile = join(tmpDir, `prompt-${randomUUID()}.md`);
-  writeFileSync(promptFile, systemPrompt, "utf-8");
+  // Resolve tools from agent frontmatter
+  const tools = agent.tools
+    .filter(t => TOOL_FACTORIES[t])
+    .map(t => TOOL_FACTORIES[t](cwd));
 
-  // Write access rules to temp file if present
-  let accessRulesFile: string | undefined;
-  if (agent.access) {
-    accessRulesFile = join(tmpDir, `access-${randomUUID()}.json`);
-    writeFileSync(accessRulesFile, JSON.stringify(agent.access), "utf-8");
-  }
-
-  // Build CLI args
-  const args = ["--mode", "json", "-p"];
-  args.push("--model", modelId);
-  if (thinking) args.push("--thinking", thinking);
-  // Only pass built-in tools via --tools (extension tools like agent_catalog,
-  // flow_write are registered at runtime by extensions and available automatically).
-  // Passing unknown names to --tools produces harmless warnings but we filter
-  // them out for cleanliness.
-  const builtInTools = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
-  const cliTools = agent.tools.filter(t => builtInTools.has(t));
-  if (cliTools.length > 0) args.push("--tools", cliTools.join(","));
-  args.push("--append-system-prompt", promptFile);
-
-  // Add guard extension(s)
-  args.push("--extension", guardExtPath);
-  if (options.extraGuardExtPaths) {
-    for (const extPath of options.extraGuardExtPaths) {
-      args.push("--extension", extPath);
+  // Resolve Model object from modelId
+  // modelId may be "provider/model-id" or just "model-id"
+  let model: any;
+  try {
+    if (options.modelRegistry) {
+      const parts = modelId.split("/");
+      if (parts.length >= 2) {
+        // Explicit provider/model format
+        model = options.modelRegistry.find(parts[0], parts.slice(1).join("/"));
+      }
+      if (!model) {
+        // Search all models in registry by model ID
+        const allModels = options.modelRegistry.getAll?.() ?? [];
+        model = allModels.find((m: any) => m.id === modelId);
+      }
     }
+    if (!model) {
+      // Fallback: try getModel from pi-ai for well-known providers
+      const parts = modelId.split("/");
+      if (parts.length >= 2) {
+        model = getModel(parts[0] as any, parts.slice(1).join("/") as any);
+      }
+    }
+  } catch {
+    // Model resolution failed — will be caught below
   }
 
-  // Build user message (task)
-  const userMessage = `Task: ${expandTemplateVariables(task, templateContext)}`;
-
-  // Use @file syntax for large tasks
-  let taskArg: string;
-  if (userMessage.length > 8000) {
-    const taskFile = join(tmpDir, `task-${randomUUID()}.md`);
-    writeFileSync(taskFile, userMessage, "utf-8");
-    taskArg = `@${taskFile}`;
-  } else {
-    taskArg = userMessage;
-  }
-  args.push(taskArg);
-
-  // Spawn process
-  const env: Record<string, string> = { ...process.env as Record<string, string> };
-  if (accessRulesFile) env.AGENT_ACCESS_RULES = accessRulesFile;
-  env.AGENT_REQUIRE_FINISH = "1";
-  if (options.decisionBranches) {
-    env.AGENT_DECISION_BRANCHES = JSON.stringify(options.decisionBranches);
-  }
-  if (options.allowSubagent) {
-    env.AGENT_ALLOW_SUBAGENT = "1";
-  }
-
-  // Pass declared tools to guard for whitelist enforcement
-  const allowedTools = [...agent.tools, "finish"];
-  env.AGENT_ALLOWED_TOOLS = JSON.stringify(allowedTools);
-
-  // Check if already aborted before spawning
-  if (options.signal?.aborted) {
+  if (!model) {
     const duration = Date.now() - startTime;
     return {
       success: false,
-      output: "Aborted by user",
-      stderr: "",
+      output: `Failed to resolve model: ${modelId}`,
+      stderr: `Model "${modelId}" not found in registry`,
       exitCode: null,
-      result: { status: "error" as const, summary: "Aborted by user", files: [], artifacts: "" },
+      result: { status: "error" as const, summary: `Failed to resolve model: ${modelId}`, files: [], artifacts: "" },
       toolCalls,
       duration,
       tokens: { input: 0, output: 0 },
     };
   }
 
-  return new Promise<AgentResult>((resolve) => {
-    const proc = spawn("pi", args, {
+  // Resolve authStorage — from explicit option or from modelRegistry
+  const authStorage = options.authStorage
+    ?? (options.modelRegistry as any)?.authStorage
+    ?? undefined;
+
+  // Build guard options
+  const guardOptions: GuardOptions = {
+    allowedTools: [...agent.tools, "finish"],
+    requireFinish: true,
+    accessRules: agent.access,
+    decisionBranches: options.decisionBranches,
+    allowAskUser: !!options.onExtensionUIRequest,
+  };
+
+  // Build extension factories array
+  const extensionFactories: ExtensionFactory[] = [
+    createGuardExtension(guardOptions),
+    ...(options.extraGuardFactories ?? []),
+  ];
+
+  // Build Extension objects from factories.
+  // We construct them manually because loadExtensionFromFactory is not
+  // exported from the top-level pi-coding-agent package (ERR_PACKAGE_PATH_NOT_EXPORTED).
+  const runtime = createExtensionRuntime();
+  const extensions: any[] = [];
+  for (const factory of extensionFactories) {
+    try {
+      const ext = buildExtensionFromFactory(factory, runtime);
+      extensions.push(ext);
+    } catch {
+      // Skip failed extensions
+    }
+  }
+
+
+  // Use getAppendSystemPrompt (NOT getSystemPrompt) so the SDK builds
+  // the full default system prompt WITH tool descriptions and guidelines,
+  // then appends our agent-specific prompt. If we used getSystemPrompt,
+  // the SDK treats it as a complete custom prompt and skips tool descriptions.
+  const capturedSystemPrompt = systemPrompt;
+  const resourceLoader: ResourceLoader = {
+    getExtensions: () => ({
+      extensions,
+      errors: [],
+      runtime,
+    }),
+    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getPrompts: () => ({ prompts: [], diagnostics: [] }),
+    getThemes: () => ({ themes: [], diagnostics: [] }),
+    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getSystemPrompt: () => undefined,
+    getAppendSystemPrompt: () => capturedSystemPrompt ? [capturedSystemPrompt] : [],
+    getPathMetadata: () => new Map(),
+    extendResources: () => {},
+    reload: async () => {},
+  };
+
+  // Create subagent UI context — bridges select/confirm/input to the parent
+  // session's AskUserQueue via the onExtensionUIRequest callback.
+  const uiContext = createSubagentUIContext(agent.name, options.onExtensionUIRequest);
+
+  // Create agent session
+  let session: any;
+  try {
+    const { session: sess } = await createAgentSession({
+      model,
+      thinkingLevel: thinking as any,
+      tools,
+      customTools: options.extraCustomTools,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(),
+      authStorage,
+      modelRegistry: options.modelRegistry,
       cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env,
     });
-
-    let aborted = false;
-    let killTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // Wire abort signal to kill the process
-    const onAbort = () => {
-      if (aborted) return;
-      aborted = true;
-      try { proc.kill("SIGTERM"); } catch { /* already dead */ }
-      // SIGKILL fallback after 3 seconds
-      killTimer = setTimeout(() => {
-        try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-      }, 3000);
+    session = sess;
+  } catch (err: any) {
+    const duration = Date.now() - startTime;
+    return {
+      success: false,
+      output: `Failed to create agent session: ${err.message}`,
+      stderr: err.message,
+      exitCode: null,
+      result: { status: "error" as const, summary: `Session creation failed: ${err.message}`, files: [], artifacts: "" },
+      toolCalls,
+      duration,
+      tokens: { input: 0, output: 0 },
     };
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+  }
 
-    let stdout = "";
-    let stderr = "";
-    let lineBuf = ""; // Buffer for incomplete JSONL lines split across chunks
-    let finishParams: any = undefined; // Last finish tool call args (if any)
-    let lastApiError: string | undefined; // Last API-level error (rate limit, auth, etc.)
-    let accumulatedTokens = { input: 0, output: 0 }; // Accumulated from message_end events
+  // Bind extensions with UI context
+  await session.bindExtensions({ uiContext });
 
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stdout += text;
-      // Parse JSONL events (with line buffering for chunk boundaries)
-      const combined = lineBuf + text;
-      const lines = combined.split("\n");
-      lineBuf = lines.pop() ?? ""; // Last element may be incomplete — buffer it
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "tool_execution_start") {
-            // Capture finish tool params for structured result extraction
-            if (event.toolName === "finish") {
-              finishParams = event.args;
-            }
-            // pi emits `args` (not `input`) for tool arguments
-            const tc: ToolCallRecord = { toolName: event.toolName, input: event.args, output: "", duration: 0, isError: false };
-            toolCalls.push(tc);
-            options.onToolCall?.(event.toolName, event.args);
-          } else if (event.type === "tool_execution_end") {
-            // pi emits `result` (not `output`) — extract text from MCP content array
-            const rawResult = event.result;
-            let output: any = rawResult;
-            if (rawResult?.content?.[0]?.text) {
-              try { output = JSON.parse(rawResult.content[0].text); } catch { output = rawResult.content[0].text; }
-            }
-            const last = toolCalls[toolCalls.length - 1];
-            if (last) { last.output = output ?? ""; last.isError = !!event.isError; }
-            options.onToolResult?.(event.toolName || last?.toolName || "", output, !!event.isError);
-          } else if (event.type === "message_end" && event.message?.role === "assistant") {
-            // Detect API errors (rate limit, auth failures, etc.)
-            if (event.message.stopReason === "error" && event.message.errorMessage) {
-              lastApiError = event.message.errorMessage;
-            }
-            // Accumulate token usage from each assistant turn
-            const msgUsage = event.message.usage;
-            if (msgUsage) {
-              accumulatedTokens.input += msgUsage.input || 0;
-              accumulatedTokens.output += msgUsage.output || 0;
-            }
-            // Extract text and thinking blocks for detail view
-            const content = event.message.content;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (block.type === "text" && block.text) {
-                  options.onAssistantText?.(block.text);
-                } else if (block.type === "thinking" && block.thinking && !block.redacted) {
-                  options.onThinkingText?.(block.thinking);
-                }
+  // Wire event capture
+  let finishParams: any = undefined;
+  let lastAssistantText = "";
+  let lastApiError: string | undefined;
+  let accumulatedTokens = { input: 0, output: 0 };
+
+  session.subscribe((event: any) => {
+    switch (event.type) {
+      case "tool_execution_start": {
+        if (event.toolName === "finish") {
+          finishParams = event.args;
+        }
+        const tc: ToolCallRecord = {
+          toolName: event.toolName,
+          input: event.args,
+          output: "",
+          duration: 0,
+          isError: false,
+        };
+        toolCalls.push(tc);
+        options.onToolCall?.(event.toolName, event.args);
+        break;
+      }
+      case "tool_execution_end": {
+        const rawResult = event.result;
+        let output: any = rawResult;
+        if (rawResult?.content?.[0]?.text) {
+          try { output = JSON.parse(rawResult.content[0].text); } catch { output = rawResult.content[0].text; }
+        }
+        const last = toolCalls[toolCalls.length - 1];
+        if (last) {
+          last.output = output ?? "";
+          last.isError = !!event.isError;
+        }
+        options.onToolResult?.(event.toolName || last?.toolName || "", output, !!event.isError);
+        break;
+      }
+      case "message_end": {
+        if (event.message?.role === "assistant") {
+          // Detect API errors
+          if (event.message.stopReason === "error" && event.message.errorMessage) {
+            lastApiError = event.message.errorMessage;
+          }
+          // Accumulate token usage
+          const msgUsage = event.message.usage;
+          if (msgUsage) {
+            accumulatedTokens.input += msgUsage.input || 0;
+            accumulatedTokens.output += msgUsage.output || 0;
+          }
+          // Extract text and thinking blocks
+          const content = event.message.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === "text" && block.text) {
+                lastAssistantText = block.text;
+                options.onAssistantText?.(block.text);
+              } else if (block.type === "thinking" && block.thinking && !block.redacted) {
+                options.onThinkingText?.(block.thinking);
               }
             }
           }
-        } catch { /* not JSON line */ }
+        }
+        break;
       }
-    });
-
-    proc.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-
-    proc.on("close", (code) => {
-      // Cleanup abort resources
-      options.signal?.removeEventListener("abort", onAbort);
-      if (killTimer) clearTimeout(killTimer);
-
-      // Cleanup temp files
-      try { unlinkSync(promptFile); } catch { /* ignore */ }
-      if (accessRulesFile) try { unlinkSync(accessRulesFile); } catch { /* ignore */ }
-
-      const duration = Date.now() - startTime;
-
-      // Handle aborted agent
-      if (aborted) {
-        resolve({
-          success: false,
-          output: stdout || "Aborted by user",
-          stderr,
-          exitCode: code,
-          result: { status: "error" as const, summary: "Aborted by user", files: [], artifacts: "" },
-          toolCalls,
-          duration,
-          tokens: { ...accumulatedTokens },
-        });
-        return;
-      }
-
-      // If the API returned errors (e.g. rate limit) and produced no useful output,
-      // surface the error immediately instead of returning an empty "success".
-      if (lastApiError && !finishParams && toolCalls.length === 0) {
-        // Extract a human-readable message from the API error
-        let errorMsg = lastApiError;
-        try {
-          const match = lastApiError.match(/^\d+\s+(.*)/);
-          if (match) {
-            const body = JSON.parse(match[1]);
-            errorMsg = `API error: ${body.error?.message || lastApiError}`;
-          }
-        } catch { /* use raw error string */ }
-
-        resolve({
-          success: false,
-          output: errorMsg,
-          stderr: lastApiError,
-          exitCode: code,
-          result: { status: "error", summary: errorMsg, files: [], artifacts: "" },
-          toolCalls: [],
-          duration,
-          tokens: { ...accumulatedTokens },
-        });
-        return;
-      }
-
-      // Extract final output from accumulated stdout
-      const finalOutput = extractFinalOutput(stdout);
-
-      // Prefer structured result from finish tool call; fall back to XML parsing
-      const parsed = finishParams
-        ? {
-            status: finishParams.status as ParsedResult["status"],
-            summary: finishParams.summary ?? "",
-            files: Array.isArray(finishParams.files)
-              ? finishParams.files.map((f: any) => ({ path: f.path, action: f.action }))
-              : [],
-            artifacts: finishParams.artifacts ?? "",
-          }
-        : parseResult(finalOutput);
-
-      resolve({
-        success: code === 0 && parsed.status !== "error",
-        output: finalOutput,
-        stderr,
-        exitCode: code,
-        result: parsed,
-        toolCalls,
-        duration,
-        tokens: { ...accumulatedTokens },
-        finishParams: finishParams ?? undefined,
-      });
-    });
+    }
   });
+
+  // Wire abort signal
+  const onAbort = () => { session.abort(); };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+
+  // Build user message
+  const userMessage = `Task: ${expandTemplateVariables(task, templateContext)}`;
+
+  // Execute prompt with finish-retry loop.
+  // The guard's agent_end → followUp retry doesn't work in-process because
+  // Agent.emit() doesn't await async listeners. So we retry here explicitly.
+  const MAX_FINISH_RETRIES = 2;
+  let finishRetries = 0;
+
+  try {
+    await session.prompt(userMessage, { expandPromptTemplates: false });
+
+    // Retry if agent didn't call finish
+    while (!finishParams && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
+      finishRetries++;
+      await session.prompt(
+        "You did not call the `finish` tool. You MUST call `finish` to submit your result.\n\n" +
+        "Call it now with:\n" +
+        "- status: \"complete\", \"error\", or \"blocked\"\n" +
+        "- summary: brief description of what you did\n" +
+        "- files: array of { path, action } for files you touched\n" +
+        "- artifacts: (optional) any structured data",
+        { expandPromptTemplates: false }
+      );
+    }
+  } catch (err: any) {
+    // prompt() may throw on catastrophic errors
+    if (!lastApiError) lastApiError = err.message;
+  }
+
+  // Cleanup abort listener
+  options.signal?.removeEventListener("abort", onAbort);
+
+  const duration = Date.now() - startTime;
+  const aborted = options.signal?.aborted;
+
+  // Handle aborted agent
+  if (aborted) {
+    return {
+      success: false,
+      output: lastAssistantText || "Aborted by user",
+      stderr: "",
+      exitCode: null,
+      result: { status: "error" as const, summary: "Aborted by user", files: [], artifacts: "" },
+      toolCalls,
+      duration,
+      tokens: { ...accumulatedTokens },
+    };
+  }
+
+  // Handle API errors with no useful output
+  if (lastApiError && !finishParams && toolCalls.length === 0) {
+    let errorMsg = lastApiError;
+    try {
+      const match = lastApiError.match(/^\d+\s+(.*)/);
+      if (match) {
+        const body = JSON.parse(match[1]);
+        errorMsg = `API error: ${body.error?.message || lastApiError}`;
+      }
+    } catch { /* use raw error string */ }
+
+    return {
+      success: false,
+      output: errorMsg,
+      stderr: lastApiError,
+      exitCode: null,
+      result: { status: "error", summary: errorMsg, files: [], artifacts: "" },
+      toolCalls: [],
+      duration,
+      tokens: { ...accumulatedTokens },
+    };
+  }
+
+  // Build AgentResult from accumulated data
+  const parsed = finishParams
+    ? {
+        status: finishParams.status as ParsedResult["status"],
+        summary: finishParams.summary ?? "",
+        files: Array.isArray(finishParams.files)
+          ? finishParams.files.map((f: any) => ({ path: f.path, action: f.action }))
+          : [],
+        artifacts: finishParams.artifacts ?? "",
+      }
+    : parseResult(lastAssistantText);
+
+  return {
+    success: parsed.status !== "error",
+    output: lastAssistantText,
+    stderr: "",
+    exitCode: null,
+    result: parsed,
+    toolCalls,
+    duration,
+    tokens: { ...accumulatedTokens },
+    finishParams: finishParams ?? undefined,
+  };
 }
 
-function extractFinalOutput(stdout: string): string {
-  // Parse JSONL, find last assistant message_end with text content
-  const lines = stdout.split("\n");
-  let lastText = "";
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const event = JSON.parse(line);
-      if (event.type === "message_end" && event.message?.role === "assistant") {
-        const content = event.message.content;
-        if (Array.isArray(content)) {
-          const text = content
-            .filter((c: any) => c.type === "text")
-            .map((c: any) => c.text)
-            .join("");
-          if (text) lastText = text;
-        }
-      }
-    } catch { /* skip */ }
-  }
-  return lastText || stdout.slice(-5000);
+/**
+ * Create an ExtensionUIContext for subagent sessions that bridges
+ * select/confirm/input calls to the parent session's AskUserQueue
+ * via the onExtensionUIRequest callback.
+ *
+ * This enables subagent extensions (e.g., ask_user tool) to show
+ * UI prompts in the parent session's TUI. Non-interactive methods
+ * are no-ops since subagents don't own any TUI surface.
+ */
+function createSubagentUIContext(
+  agentName: string,
+  onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void,
+): ExtensionUIContext {
+  const bridgeRequest = (method: string, args: any): Promise<any> => {
+    if (!onExtensionUIRequest) {
+      if (method === "confirm") return Promise.resolve(false);
+      return Promise.resolve(undefined);
+    }
+
+    return new Promise((resolve) => {
+      const id = `${agentName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      onExtensionUIRequest(
+        { id, method, ...args },
+        (response: any) => {
+          if (response.cancelled) {
+            resolve(method === "confirm" ? false : undefined);
+          } else if (method === "confirm") {
+            resolve(!!response.confirmed);
+          } else {
+            resolve(response.value);
+          }
+        },
+      );
+    });
+  };
+
+  return {
+    select: (title, selectOptions, _opts) =>
+      bridgeRequest("select", { title, options: selectOptions }) as Promise<string | undefined>,
+    confirm: (title, message, _opts) =>
+      bridgeRequest("confirm", { title, message }) as Promise<boolean>,
+    input: (title, placeholder, _opts) =>
+      bridgeRequest("input", { title, placeholder }) as Promise<string | undefined>,
+    notify: () => {},
+    onTerminalInput: () => () => {},
+    setStatus: () => {},
+    setWorkingMessage: () => {},
+    setWidget: () => {},
+    setFooter: () => {},
+    setHeader: () => {},
+    setTitle: () => {},
+    custom: () => Promise.resolve(undefined as any),
+    pasteToEditor: () => {},
+    setEditorText: () => {},
+    getEditorText: () => "",
+    editor: () => Promise.resolve(undefined),
+    setEditorComponent: () => {},
+    get theme(): any { return {}; },
+    getAllThemes: () => [],
+    getTheme: () => undefined,
+    setTheme: () => ({ success: false }),
+    getToolsExpanded: () => false,
+    setToolsExpanded: () => {},
+  };
 }

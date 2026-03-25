@@ -50,6 +50,7 @@ interface Config {
   providers: Record<string, ProviderEntry>;
   roles: Record<string, string>;
   models: ModelEntry[];
+  autonomousMode?: boolean;
 }
 
 // -- Default custom model catalog -----------------------------------------
@@ -151,6 +152,27 @@ export function getModelRole(role: string): string | undefined {
   return currentRoles[role];
 }
 
+// -- Autonomous mode state ------------------------------------------------
+
+let autonomousModeEnabled = false;
+
+export function isAutonomousMode(): boolean {
+  return autonomousModeEnabled;
+}
+
+export function setAutonomousMode(enabled: boolean): void {
+  autonomousModeEnabled = enabled;
+  // Persist to config
+  const config = loadConfig();
+  config.autonomousMode = enabled;
+  saveConfig(config);
+}
+
+function loadAutonomousMode(): void {
+  const config = loadConfig();
+  autonomousModeEnabled = config.autonomousMode ?? false;
+}
+
 // -- Helpers --------------------------------------------------------------
 
 function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntry, models: ModelEntry[]) {
@@ -170,6 +192,7 @@ function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntry, mod
 export function activate(pi: ExtensionAPI) {
   const config = loadConfig();
   currentRoles = config.roles;
+  loadAutonomousMode();
 
   // Register providers
   for (const [name, entry] of Object.entries(config.providers)) {

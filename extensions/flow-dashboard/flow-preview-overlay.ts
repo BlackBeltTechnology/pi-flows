@@ -49,8 +49,10 @@ export interface FlowPreviewOverlayOptions {
 }
 
 function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 3) + "...";
+  // Collapse newlines and extra whitespace (YAML multi-line strings)
+  const clean = s.replace(/\s*\n\s*/g, " ").trim();
+  if (clean.length <= max) return clean;
+  return clean.slice(0, max - 3) + "...";
 }
 
 /**
