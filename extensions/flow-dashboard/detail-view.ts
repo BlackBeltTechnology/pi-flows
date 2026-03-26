@@ -159,22 +159,15 @@ export function renderDetailView(
 
   const toolCount = entries.filter(e => e.kind === "tool").length;
   const msgCount = entries.filter(e => e.kind === "text").length;
+  const errCount = entries.filter(e => e.kind === "error").length;
   const countParts: string[] = [];
   if (toolCount > 0) countParts.push(`${toolCount} tools`);
   if (msgCount > 0) countParts.push(`${msgCount} messages`);
+  if (errCount > 0) countParts.push(`${errCount} ${errCount === 1 ? "error" : "errors"}`);
   const countStr = countParts.length > 0 ? countParts.join(" · ") : "no activity";
 
   headerLines.push(`  ${fg(statusColor, statusIcon)} ${fg("accent", data.agentName)} — ${fg("dim", data.status)} · ${countStr}`);
   headerLines.push(fg("dim", "  " + "─".repeat(Math.max(0, inner))));
-
-  // Summary (max 3 lines)
-  if (data.summary) {
-    const summaryLines = data.summary.split("\n").filter(Boolean).slice(0, 3);
-    for (const sl of summaryLines) {
-      headerLines.push("  " + truncate(sl, inner));
-    }
-    headerLines.push("");
-  }
 
   // ── Build footer ──
   const thinkingHint = showThinking ? "ctrl+t hide thinking" : "ctrl+t show thinking";
@@ -188,6 +181,17 @@ export function renderDetailView(
 
   // ── Build content lines (virtual document) ──
   const contentLines: string[] = [];
+
+  // Summary block (full text, word-wrapped, scrollable)
+  if (data.summary) {
+    contentLines.push("  " + fg("dim", "Summary:"));
+    const summaryWrapped = wordWrap(data.summary, Math.max(10, inner - 4));
+    for (const sl of summaryWrapped) {
+      contentLines.push("    " + sl);
+    }
+    contentLines.push("");
+  }
+
   // Track which content-line indices correspond to each entry (for scroll targeting)
   const entryStartLines: number[] = [];
 
@@ -208,6 +212,14 @@ export function renderDetailView(
       contentLines.push("  " + fg("dim", "thinking:"));
       for (const wl of wrapped) {
         contentLines.push("    " + fg("dim", wl));
+      }
+      contentLines.push("");
+    } else if (e.kind === "error") {
+      // Render as error block with ✗ prefix
+      const errWrapped = wordWrap(e.text, Math.max(10, inner - 4));
+      contentLines.push("  " + fg("error", "✗ Error:"));
+      for (const wl of errWrapped) {
+        contentLines.push("    " + fg("error", wl));
       }
       contentLines.push("");
     } else if (e.kind === "tool") {
@@ -291,10 +303,16 @@ export function computeExpandedContentLines(
   scroll: DetailScrollState,
   width: number,
   showThinking: boolean,
+  summary?: string,
 ): number {
   const filtered = showThinking ? entries : entries.filter(e => e.kind !== "thinking");
   const inner = width - 4;
   let total = 0;
+
+  // Account for summary block
+  if (summary) {
+    total += 1 + wordWrap(summary, Math.max(10, inner - 4)).length + 1; // label + wrapped lines + blank
+  }
 
   for (let i = 0; i < filtered.length; i++) {
     const e = filtered[i];
@@ -302,6 +320,8 @@ export function computeExpandedContentLines(
       total += wordWrap(e.text, Math.max(10, inner - 2)).length + 1;
     } else if (e.kind === "thinking") {
       total += wordWrap(e.text, Math.max(10, inner - 4)).length + 2;
+    } else if (e.kind === "error") {
+      total += wordWrap(e.text, Math.max(10, inner - 4)).length + 2; // label + wrapped lines + blank
     } else if (e.kind === "tool") {
       total += 1; // one-liner
       if (i === scroll.expandedIndex) {

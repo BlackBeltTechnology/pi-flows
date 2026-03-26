@@ -11,7 +11,7 @@ pi-flows registers tools in three distinct execution contexts. Understanding whi
 │  ├── flow_results      Read past flow execution results               │
 │  └── subagent          Dispatch agents (single or parallel)           │
 │                                                                       │
-│  Agent Subprocess (each agent runs in its own pi process)             │
+│  Agent Session (each agent runs as an in-process SDK session)         │
 │  ├── finish            Submit structured results (auto-injected)      │
 │  ├── skill_read        Read skill documentation files                 │
 │  ├── ask_user          Prompt the user for input                      │
@@ -31,7 +31,7 @@ pi-flows registers tools in three distinct execution contexts. Understanding whi
 ## Table of Contents
 
 - [Main Session Tools](#main-session-tools)
-- [Agent Subprocess Tools](#agent-subprocess-tools)
+- [Agent Session Tools](#agent-session-tools)
 - [Architect-Only Tools](#architect-only-tools)
 - [Tool Context Quick Reference](#tool-context-quick-reference)
 
@@ -72,7 +72,7 @@ Read results from completed flow executions. Results are stored as JSON files in
 
 ### subagent
 
-Dispatch one or more agents as subprocesses. Available in the main session for ad-hoc agent invocations outside of flows.
+Dispatch one or more agents as in-process SDK sessions. Available in the main session for ad-hoc agent invocations outside of flows.
 
 **Parameters:**
 
@@ -114,11 +114,11 @@ Dispatch one or more agents as subprocesses. Available in the main session for a
 
 ---
 
-## Agent Subprocess Tools
+## Agent Session Tools
 
-These tools are available inside agent subprocesses — the separate pi processes spawned for each agent during flow execution. They run alongside whatever tools the agent declares in its `tools:` frontmatter field.
+These tools are available inside agent sessions — in-process SDK sessions created via `createAgentSession()` for each agent during flow execution. They run alongside whatever tools the agent declares in its `tools:` frontmatter field.
 
-> **Important:** Agent subprocesses are separate pi instances. They do not have access to main session tools like `flow_results` or `subagent`.
+> **Important:** Agent sessions are isolated SDK contexts. They do not have access to main session tools like `flow_results` or `subagent`. The `finish` tool, `skill_read`, and `ask_user` are injected via guard and extension factories — not by the agent's `tools:` declaration.
 
 ### finish
 
@@ -196,7 +196,7 @@ Prompt the user for input during agent execution. Supports selection, confirmati
 
 These tools are available only during flow design sessions — when the user runs `/flows:new` or `/flows:edit`. They are used by the flow architect agent to create and validate agents and flows.
 
-> **Note:** These tools are not accessible from regular agents or the main session. They exist only in the architect agent's subprocess.
+> **Note:** These tools are not accessible from regular agents or the main session. They are passed as `customTools` to the architect's in-process SDK session — not registered as extension tools. This is because extension tools aren't available in SDK subagent sessions, so pi-flows captures the architect tool definitions at registration time and injects them via `SpawnOptions.extraCustomTools`.
 
 ### agent_catalog
 
@@ -289,17 +289,19 @@ Render a visual preview of a flow showing steps, dependencies, and agent assignm
 
 ## Tool Context Quick Reference
 
-| Tool | Main Session | Agent Subprocess | Architect Session |
+| Tool | Main Session | Agent Session | Architect Session |
 |------|:---:|:---:|:---:|
 | `flow_results` | ✓ | | |
 | `subagent` | ✓ | | |
-| `finish` | | ✓ (auto-injected) | |
+| `finish` | | ✓ (guard-injected) | |
 | `skill_read` | | ✓ | |
 | `ask_user` | | ✓ | |
 | `read`, `write`, `edit`, `bash`, etc. | | ✓ (if declared) | |
-| `agent_catalog` | | | ✓ |
-| `agent_validate` | | | ✓ |
-| `agent_write` | | | ✓ |
-| `flow_validate` | | | ✓ |
-| `flow_write` | | | ✓ |
-| `flow_preview` | | | ✓ |
+| `agent_catalog` | | | ✓ (customTools) |
+| `agent_validate` | | | ✓ (customTools) |
+| `agent_write` | | | ✓ (customTools) |
+| `flow_validate` | | | ✓ (customTools) |
+| `flow_write` | | | ✓ (customTools) |
+| `flow_preview` | | | ✓ (customTools) |
+
+> **Injection mechanism:** `finish` is registered by `createGuardExtension({ requireFinish: true })` inside the agent's in-process SDK session. Architect tools are passed as `SpawnOptions.extraCustomTools` — an array of tool definitions captured by the main session at startup time and injected into the architect agent's session.

@@ -225,6 +225,7 @@ export interface FlowResult {
   flowName: string;
   stepCount: number;
   totalDuration: number; // wall-clock ms for entire flow
+  status?: "success" | "error" | "aborted"; // outcome — absent on legacy results
 }
 
 // ---- Template context for variable expansion ------------------------------

@@ -18,7 +18,8 @@ export interface ToolHistoryEntry {
 export type DetailEntry =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string }
-  | { kind: "tool"; toolName: string; input: any; output: any; isError: boolean };
+  | { kind: "tool"; toolName: string; input: any; output: any; isError: boolean }
+  | { kind: "error"; text: string };
 
 export class AgentDashboard {
   private grid = new GridComponent();
@@ -88,6 +89,12 @@ export class AgentDashboard {
       card.status = result.success ? "complete" : "error";
       card.onComplete(result);
       card.renderer.onComplete(result);
+    }
+    // Capture error as an event log entry when agent failed
+    if (!result.success) {
+      const errorText = result.result?.summary || result.output || "Agent failed";
+      if (!this.eventLog.has(agentName)) this.eventLog.set(agentName, []);
+      this.eventLog.get(agentName)!.push({ kind: "error", text: errorText });
     }
     this.syncGrid();
     const anyRunning = Array.from(this.cards.values()).some(c => c.status === "running");

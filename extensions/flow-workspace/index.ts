@@ -14,6 +14,9 @@ import { join } from "node:path";
 import { getModelRole } from "../provider-register.js";
 import { setFlowWidget } from "../shared/flow-widget.js";
 
+// Module-scoped flag: true when a flow is running from staging (non-saved "Run" path)
+let runningFromStaging = false;
+
 // ---- Helpers --------------------------------------------------------------
 
 function slugify(text: string): string {
@@ -794,6 +797,9 @@ async function handleNewFlow(
   }
 
   // Step 5: Handle "Save & Run" — promote staging to final locations
+  // safeName is hoisted so Step 6 can build the discovery-derived name "custom:<safeName>"
+  let safeName = "";
+
   if (choice === "Save & Run") {
     const defaultName = slugify(desc);
     const flowName = await ctx.ui.input(
@@ -802,7 +808,7 @@ async function handleNewFlow(
     );
 
     if (flowName) {
-      const safeName = slugify(flowName);
+      safeName = slugify(flowName);
       const finalFlowPath = promoteStagingToFinal(projectRoot, safeName);
       flowPath = finalFlowPath || flowPath;
 
@@ -829,15 +835,29 @@ async function handleNewFlow(
     const { parseFlowFile } = await import("../flow-engine/flow-parser.js");
     const flowConfig = parseFlowFile(flowPath);
 
-    ctx.ui.notify(`Running flow: "${flowConfig.name}"...`, "info");
+    let runFlowName: string;
 
-    // Register staging flows dir temporarily so the flow can be discovered
-    pi.events.emit("flow:register-flows-dir", { dir: join(projectRoot, STAGING_FLOWS) });
-    // Re-discover again to pick up the staged flow
-    pi.events.emit("flow:rediscover", {});
+    if (choice === "Save & Run") {
+      // After promotion the flow lives at custom/<safeName>.flow.md.
+      // Discovery derives the name as "custom:<safeName>" — that is the Map key.
+      // flowConfig.name is the frontmatter name and does NOT match the Map key,
+      // so we must use the filesystem-derived name here.
+      runFlowName = `custom:${safeName}`;
+      runningFromStaging = false;
+    } else {
+      // "Run" path: flow is still in the flat staging dir.
+      // Register staging flows dir temporarily so the flow can be discovered.
+      pi.events.emit("flow:register-flows-dir", { dir: join(projectRoot, STAGING_FLOWS) });
+      // Re-discover again to pick up the staged flow
+      pi.events.emit("flow:rediscover", {});
+      runFlowName = flowConfig.name;
+      runningFromStaging = true;
+    }
+
+    ctx.ui.notify(`Running flow: "${runFlowName}"...`, "info");
 
     // Run via flow:run event — uses flowManager with proper dashboard, callbacks, cleanup
-    pi.events.emit("flow:run", { flowName: flowConfig.name, ctx });
+    pi.events.emit("flow:run", { flowName: runFlowName, ctx: ctx.ui });
   } catch (err: any) {
     ctx.ui.notify(`Flow execution failed: ${err.message}`, "error");
   }
@@ -870,5 +890,14 @@ export function activate(pi: ExtensionAPI) {
       return;
     }
     await handleEditFlow(pi, projectRoot, lastCtx, getModelRole, flowName, flowPath);
+  });
+
+  // Clean up staging after a non-saved flow run completes (success, error, or abort)
+  pi.events.on("flow:complete", () => {
+    if (!runningFromStaging) return;
+    runningFromStaging = false;
+    wipeStagingDir(projectRoot);
+    pi.events.emit("flow:unregister-flows-dir", { dir: join(projectRoot, STAGING_FLOWS) });
+    pi.events.emit("flow:unregister-agents-dir", { dir: join(projectRoot, STAGING_AGENTS) });
   });
 }

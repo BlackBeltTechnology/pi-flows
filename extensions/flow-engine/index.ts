@@ -545,11 +545,32 @@ class FlowManager {
       .catch((err: any) => {
         const wasAborted = abortController.signal.aborted;
         safeCleanup();
+        const errMsg = err instanceof Error ? err.message : String(err);
         if (!wasAborted) {
           // Surface the error to the user — don't swallow silently
-          const msg = err instanceof Error ? err.message : String(err);
-          ui?.notify?.(`Flow "${flowName}" failed: ${msg}`, "error");
+          ui?.notify?.(`Flow "${flowName}" failed: ${errMsg}`, "error");
         }
+        // Emit flow:complete on failure/abort so listeners can clean up
+        const summaryMsg = wasAborted ? "Aborted by user" : errMsg;
+        const errorResult: FlowResult = {
+          lastResult: {
+            success: false,
+            output: "",
+            stderr: "",
+            exitCode: null,
+            result: { status: "error", files: [], summary: summaryMsg, artifacts: "" },
+            toolCalls: [],
+            duration: 0,
+            tokens: { input: 0, output: 0 },
+          },
+          results: {},
+          forks: {},
+          flowName,
+          stepCount: 0,
+          totalDuration: 0,
+          status: wasAborted ? "aborted" : "error",
+        };
+        pi.events.emit("flow:complete", errorResult);
       });
   }
 }
@@ -880,6 +901,8 @@ export function activate(pi: ExtensionAPI) {
     if (lastWiredUi) {
       setFlowWidget(lastWiredUi, "flow-dashboard", undefined);
       lastWiredUi = null;
+      // Force a full re-render so differential rendering doesn't leave stale header lines
+      tui?.requestRender(true);
     }
   });
 
@@ -913,6 +936,25 @@ export function activate(pi: ExtensionAPI) {
           registerFlowCommand(pi, name, flow);
         }
       }
+    }
+  });
+
+  // Unregister directory events — used for staging cleanup
+  pi.events?.on("flow:unregister-agents-dir", (data) => {
+    const dir = (data as { dir: string }).dir;
+    const idx = extraAgentsDirs.indexOf(dir);
+    if (idx !== -1) {
+      extraAgentsDirs.splice(idx, 1);
+      init(pkgRoot, projectRoot);
+    }
+  });
+
+  pi.events?.on("flow:unregister-flows-dir", (data) => {
+    const dir = (data as { dir: string }).dir;
+    const idx = extraFlowsDirs.indexOf(dir);
+    if (idx !== -1) {
+      extraFlowsDirs.splice(idx, 1);
+      init(pkgRoot, projectRoot);
     }
   });
 
@@ -1015,15 +1057,22 @@ export function activate(pi: ExtensionAPI) {
     // Create a stable component once — avoid recreation on every spinner tick
     let tuiRef: any = null;
     let themeRef: any = null;
+    let disposed = false;
     const component = {
       render(width: number): string[] {
+        if (disposed) return [];
         const lines = dashboard.render(width, themeRef);
         // Prepend ANSI reset to prevent background bleed from conversation tool output
         if (lines.length > 0) lines[0] = "\x1b[0m" + lines[0];
         return lines;
       },
       invalidate() {
-        dashboard.invalidate();
+        if (!disposed) dashboard.invalidate();
+      },
+      dispose() {
+        disposed = true;
+        tuiRef = null;
+        themeRef = null;
       },
     };
 
@@ -1041,6 +1090,7 @@ export function activate(pi: ExtensionAPI) {
 
     // Spinner callback: invalidate + request render (no setWidget recreation)
     const update = () => {
+      if (disposed) return;
       component.invalidate();
       tuiRef?.requestRender();
     };
@@ -1070,6 +1120,8 @@ export function activate(pi: ExtensionAPI) {
         if (activeFlow.ui) setFlowWidget(activeFlow.ui, "flow-dashboard", undefined);
         dashboardVisible = false;
         activeDashboard = null;
+        // Force a full re-render so differential rendering doesn't leave stale header lines
+        tui?.requestRender(true);
       }
     },
   });

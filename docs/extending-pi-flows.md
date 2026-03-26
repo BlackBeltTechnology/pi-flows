@@ -14,6 +14,8 @@ Throughout this guide, [pi-judo](https://github.com/BlackBeltTechnology/pi-judo)
 - [Custom Card Renderers](#custom-card-renderers)
 - [Workflow Definitions](#workflow-definitions)
 - [Gates (Prerequisite Checks)](#gates-prerequisite-checks)
+- [Guard Extensions](#guard-extensions)
+- [Session Context](#session-context)
 - [Footer Segments](#footer-segments)
 - [Listening to Flow Events](#listening-to-flow-events)
 - [Querying Discovery State](#querying-discovery-state)
@@ -302,6 +304,121 @@ pi.events?.emit("flow:register-gate", {
 **Glob matching:** `"my-pkg:*"` matches any flow name starting with `"my-pkg:"`. Exact strings match only that flow name.
 
 > **pi-judo reference:** pi-judo registers two gates — a project gate and a research gate at [index.ts lines 77–92](https://github.com/BlackBeltTechnology/pi-judo/blob/main/extensions/judospec/index.ts).
+
+---
+
+## Guard Extensions
+
+Guard extensions are `ExtensionFactory` functions applied to every agent session your package's flows dispatch. They let you enforce custom sandboxing rules — restrict tool access, block writes to sensitive paths, or add domain-specific validation — on top of the built-in guard that pi-flows already injects.
+
+Agents run as **in-process SDK sessions** (not separate subprocesses), so guards are wired directly into the session's extension runtime before the agent starts.
+
+### Registering a Guard Extension
+
+```typescript
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+
+pi.events?.emit("flow:register-guard-extension", {
+  factory: (piApi: ExtensionAPI) => {
+    piApi.on("tool_call", (event: any) => {
+      const toolName = event.toolName || event.name;
+      const params = event.params || event.input || {};
+
+      // Block all writes to the protected model directory
+      if ((toolName === "write" || toolName === "edit") &&
+          (params.file_path || "").startsWith("model/")) {
+        return { block: true, reason: "Direct writes to model/ are blocked. Use the model update flow instead." };
+      }
+
+      return undefined;  // Allow the tool call
+    });
+  },
+});
+```
+
+The `factory` value is `(pi: ExtensionAPI) => void`. It can call `pi.on("tool_call", handler)` to intercept tool calls. The handler receives the event and should return `{ block: true, reason }` to block or `undefined` to allow.
+
+### Using createGuardExtension
+
+For common patterns (tool whitelists, access rules), you can use pi-flows' own guard factory directly:
+
+```typescript
+import { createGuardExtension } from "pi-flows/extensions/flow-engine/guard.js";
+
+pi.events?.emit("flow:register-guard-extension", {
+  factory: createGuardExtension({
+    accessRules: {
+      read: ["src/**", "docs/**"],
+      write: ["src/**"],
+      bash: { deny: ["curl", "wget"] },
+    },
+  }),
+});
+```
+
+See [public-api.md — Guard Extension API](public-api.md#guard-extension-api) for the full `GuardOptions` reference.
+
+> **pi-judo reference:** pi-judo registers a model protection guard via `flow:register-guard-extension` with `factory` to prevent agents from directly modifying model artifacts.
+
+---
+
+## Session Context
+
+When your extension dispatches agents directly (e.g., in a slash command that calls `spawnAgent()` without going through a `.flow.md` file), you need the live session's `authStorage` and `modelRegistry`. There are two ways to get them.
+
+### Option A: Capture session_start yourself
+
+```typescript
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { spawnAgent } from "pi-flows/extensions/flow-engine/execution.js";
+
+export default function activate(pi: ExtensionAPI) {
+  let authStorage: any;
+  let modelRegistry: any;
+
+  pi.on("session_start", (_event: any, ctx: any) => {
+    if (ctx.modelRegistry) {
+      modelRegistry = ctx.modelRegistry;
+      authStorage = (ctx.modelRegistry as any).authStorage;
+    }
+  });
+
+  pi.registerCommand("/my-run", async (_ctx: any) => {
+    const result = await spawnAgent({
+      agent: myAgent,
+      task: "Do the thing",
+      templateContext: { task: "Do the thing", inputs: {}, results: {}, forks: {} },
+      cwd: process.cwd(),
+      authStorage,
+      modelRegistry,
+    });
+  });
+}
+```
+
+### Option B: Query pi-flows for the captured context
+
+If pi-flows is loaded before your extension (which it is, since you depend on it), you can retrieve the already-captured context via the `flow:get-spawn-context` query event. This is simpler and automatically includes `extraGuardFactories` from all registered packages:
+
+```typescript
+pi.registerCommand("/my-run", async (_ctx: any) => {
+  const spawnCtx: any = {};
+  pi.events.emit("flow:get-spawn-context", spawnCtx);
+  const { authStorage, modelRegistry, extraGuardFactories } = spawnCtx;
+
+  const result = await spawnAgent({
+    agent: myAgent,
+    task: "Do the thing",
+    templateContext: { task: "Do the thing", inputs: {}, results: {}, forks: {} },
+    cwd: process.cwd(),
+    authStorage,
+    modelRegistry,
+    extraGuardFactories,
+  });
+});
+```
+
+See [events-api.md — flow:get-spawn-context](events-api.md#flowget-spawn-context) for the full event reference.
 
 ---
 
