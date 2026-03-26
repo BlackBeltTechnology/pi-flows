@@ -1062,8 +1062,10 @@ export function activate(pi: ExtensionAPI) {
       render(width: number): string[] {
         if (disposed) return [];
         const lines = dashboard.render(width, themeRef);
-        // Prepend ANSI reset to prevent background bleed from conversation tool output
-        if (lines.length > 0) lines[0] = "\x1b[0m" + lines[0];
+        // Prepend ANSI reset to every line to prevent background bleed from conversation tool output
+        for (let i = 0; i < lines.length; i++) {
+          lines[i] = "\x1b[0m" + lines[i];
+        }
         return lines;
       },
       invalidate() {
@@ -1092,7 +1094,13 @@ export function activate(pi: ExtensionAPI) {
     const update = () => {
       if (disposed) return;
       component.invalidate();
-      tuiRef?.requestRender();
+      // Force full TUI re-render when grid structure changed (new unpreloaded agent)
+      if (dashboard.forceNextRender) {
+        dashboard.forceNextRender = false;
+        tuiRef?.requestRender(true);
+      } else {
+        tuiRef?.requestRender();
+      }
     };
     dashboard.setUpdateCallback(update);
     return update;

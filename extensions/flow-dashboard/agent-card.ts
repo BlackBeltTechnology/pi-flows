@@ -90,11 +90,13 @@ export class AgentCard {
     // Build border helpers using theme — accent borders when selected
     const bordColor = selected ? "accent" : "dim";
     const bord = (s: string) => theme.fg(bordColor, s);
-    const top = "┌" + "─".repeat(w) + "┐";
-    const bot = "└" + "─".repeat(w) + "┘";
+    const top = bord("┌" + "─".repeat(w) + "┐");
+    const bot = bord("└" + "─".repeat(w) + "┘");
 
-    const border = (content: string, visLen: number) => {
-      const pad = " ".repeat(Math.max(0, w - visLen));
+    // Border helper: uses visibleWidth() on styled content for correct padding
+    const border = (content: string) => {
+      const contentVis = visibleWidth(content);
+      const pad = " ".repeat(Math.max(0, w - contentVis));
       return bord("│") + content + pad + bord("│");
     };
 
@@ -109,7 +111,6 @@ export class AgentCard {
       ? displayName.slice(0, Math.max(1, maxNameLen - 1)) + "…" : displayName;
     const iconStr = theme.fg(statusTheme, icon);
     const nameStr = theme.fg(nameColor, theme.bold(name));
-    const headerVis = 1 + 1 + 1 + name.length + (loopBadge ? 1 + badgeVisWidth : 0); // space+icon+space+name [+space+badge]
 
     // Body lines
     let raw0 = "";
@@ -136,7 +137,7 @@ export class AgentCard {
     const bodyLine0 = " " + theme.fg("muted", raw0);
     const toolRendered = rawTools.map(raw => {
       const styled = raw ? " " + theme.fg("dim", raw) : "";
-      return border(styled, raw ? 1 + raw.length : 0);
+      return border(styled);
     });
 
     // Role subtitle line — show tokens when complete, role when running/pending
@@ -149,33 +150,38 @@ export class AgentCard {
       roleText = truncate("  " + displayRole, w - 1);
     }
     const roleLine = roleText
-      ? border(" " + theme.fg("dim", roleText), 1 + roleText.length)
-      : border("", 0);
+      ? border(" " + theme.fg("dim", roleText))
+      : border("");
 
     // Build header content with optional right-aligned iteration badge
     const headerLeft = " " + iconStr + " " + nameStr;
-    // Badge with trailing space: "↻ 1/2 " — visible width = badgeVisWidth + 1
     const badgeStr = loopBadge ? theme.fg("accent", loopBadge) + " " : "";
     const headerContent = loopBadge
       ? (() => {
-          // Left side: " <icon> <name>" = 3 + name.length visible chars
-          const leftVis = 3 + name.length;
-          // Right side: "<badge> " = badgeVisWidth + 1 visible chars
-          const rightVis = badgeVisWidth + 1;
+          const leftVis = visibleWidth(headerLeft);
+          const rightVis = visibleWidth(badgeStr);
           const gap = Math.max(1, w - leftVis - rightVis);
           return headerLeft + " ".repeat(gap) + badgeStr;
         })()
       : headerLeft;
-    // Total visible width when badge present: leftVis + gap + rightVis = w
-    const headerVisTotal = loopBadge ? w : headerVis;
 
     const result = [
-      bord(top),
-      border(headerContent, headerVisTotal),
+      top,
+      border(headerContent),
       roleLine,
-      border(bodyLine0, 1 + raw0.length),
+      border(bodyLine0),
     ];
-    result.push(...toolRendered, bord(bot));
+    result.push(...toolRendered, bot);
+
+    // Debug assertion: verify all lines have exactly `width` visible characters
+    if (process.env.PI_DEBUG_CARDS === "1") {
+      for (let i = 0; i < result.length; i++) {
+        const vw = visibleWidth(result[i]);
+        if (vw !== width) {
+          console.error(`AgentCard line ${i} width mismatch: ${vw} !== ${width} (agent: ${this.agentName})`);
+        }
+      }
+    }
 
     return result;
   }
