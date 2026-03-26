@@ -23,6 +23,19 @@ import { createGuardExtension } from "./guard.js";
 // Template variable expansion
 export function expandTemplateVariables(template: string, ctx: TemplateContext): string {
   return template
+    // Primary syntax: ${{...}}
+    .replace(/\$\{\{task\}\}/g, ctx.task)
+    .replace(/\$\{\{input\.([\w-]+)\}\}/g, (_, name) => ctx.inputs[name] ?? "")
+    .replace(/\$\{\{fork\.(\w[\w-]*)\.answer\}\}/g, (_, id) => ctx.forks[id]?.answer ?? "")
+    .replace(/\$\{\{fork\.(\w[\w-]*)\.notes\}\}/g, (_, id) => ctx.forks[id]?.notes ?? "")
+    .replace(/\$\{\{result\.([\w-]+)\.status\}\}/g, (_, id) => ctx.results[id]?.status ?? "")
+    .replace(/\$\{\{result\.([\w-]+)\.summary\}\}/g, (_, id) => ctx.results[id]?.summary ?? "")
+    .replace(/\$\{\{result\.([\w-]+)\.artifacts\}\}/g, (_, id) => ctx.results[id]?.artifacts ?? "")
+    .replace(/\$\{\{result\.([\w-]+)\.files\}\}/g, (_, id) => ctx.results[id]?.files ?? "")
+    .replace(/\$\{\{result\.([\w-]+)\}\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
+    .replace(/\$\{\{loop\.([\w-]+)\.iteration\}\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 0))
+    .replace(/\$\{\{loop\.([\w-]+)\.max\}\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0))
+    // Deprecated fallback: {...}
     .replace(/\{task\}/g, ctx.task)
     .replace(/\{input\.([\w-]+)\}/g, (_, name) => ctx.inputs[name] ?? "")
     .replace(/\{fork\.(\w[\w-]*)\.answer\}/g, (_, id) => ctx.forks[id]?.answer ?? "")

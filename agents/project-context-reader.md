@@ -19,7 +19,7 @@ You are the Project Context Reader. You discover and read project planning files
 
 # Task
 
-{task}
+${{task}}
 
 # Discovery Process
 

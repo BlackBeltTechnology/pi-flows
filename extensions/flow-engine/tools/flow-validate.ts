@@ -253,8 +253,10 @@ export function validateFlowContent(
   // ---- 8. Unknown template variables --------------------------------------
 
   const knownPrefixes = ["result", "input", "fork", "task", "loop"];
+
+  // 8a. Primary syntax: ${{...}}
   for (let i = 0; i < lines.length; i++) {
-    const templateMatches = lines[i].matchAll(/\{([\w.]+)\}/g);
+    const templateMatches = lines[i].matchAll(/\$\{\{([\w.]+)\}\}/g);
     for (const m of templateMatches) {
       const varPath = m[1];
       const root = varPath.split(".")[0];
@@ -262,14 +264,32 @@ export function validateFlowContent(
         diagnostics.push({
           line: i + 1,
           severity: "warning",
-          message: `Unknown template variable "{${varPath}}"`,
+          message: `Unknown template variable "\${{${varPath}}}"`,
           suggestion: `Known prefixes: ${knownPrefixes.join(", ")}`,
         });
       }
     }
   }
 
-  // ---- 8b. Angle-bracket template syntax detection -------------------------
+  // 8b. Deprecated single-brace syntax: {...} matching known template patterns
+  for (let i = 0; i < lines.length; i++) {
+    // Match {word.word...} but exclude those already matched as ${{...}}
+    const singleBraceMatches = lines[i].matchAll(/(?<!\$\{)\{([\w][\w.]*)\}(?!\})/g);
+    for (const m of singleBraceMatches) {
+      const varPath = m[1];
+      const root = varPath.split(".")[0];
+      if (knownPrefixes.includes(root)) {
+        diagnostics.push({
+          line: i + 1,
+          severity: "warning",
+          message: `Deprecated single-brace syntax "{${varPath}}" — use \${{${varPath}}} instead`,
+          suggestion: `Replace {${varPath}} with \${{${varPath}}}`,
+        });
+      }
+    }
+  }
+
+  // ---- 8c. Angle-bracket template syntax detection -------------------------
 
   for (let i = 0; i < lines.length; i++) {
     const angleBracketMatches = lines[i].matchAll(/<([\w][\w-]*)\.(summary|artifacts|status|files|fullOutput)>/g);
@@ -278,7 +298,7 @@ export function validateFlowContent(
         line: i + 1,
         severity: "error",
         message: `Angle-bracket syntax "<${m[0]}>" is not supported for template references`,
-        suggestion: `Use {result.${m[1]}.${m[2]}} instead`,
+        suggestion: `Use \${{result.${m[1]}.${m[2]}}} instead`,
       });
     }
   }
@@ -530,8 +550,8 @@ function parseStepBodies(lines: string[]): ParsedStepBlock[] {
       currentBlock.blockedByLine = i + 1;
     }
 
-    // Parse result.X template references
-    const resultRefs = lines[i].matchAll(/\{result\.(\w[\w-]*)\}/g);
+    // Parse result.X template references (${{result.X}} and legacy {result.X})
+    const resultRefs = lines[i].matchAll(/(?:\$\{\{|\{)result\.(\w[\w-]*)(?:\}\}|\})/g);
     for (const m of resultRefs) {
       if (!currentBlock.inputRefs) currentBlock.inputRefs = [];
       currentBlock.inputRefs.push({ ref: m[1], line: i + 1 });

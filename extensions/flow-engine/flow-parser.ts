@@ -653,7 +653,7 @@ function validateSegmentBlockedBy(steps: FlowStep[], source: string): void {
           const allStepIds = new Set(steps.filter(s => s.stepType === "agent").map(s => s.id));
           if (allStepIds.has(ref)) {
             throw new Error(
-              `Step "${step.id}" has blockedBy: "${ref}" which is in a different DAG segment. Use inputs: with {result.${ref}} for cross-segment data flow. (${source})`
+              `Step "${step.id}" has blockedBy: "${ref}" which is in a different DAG segment. Use inputs: with \${{result.${ref}}} for cross-segment data flow. (${source})`
             );
           }
         }

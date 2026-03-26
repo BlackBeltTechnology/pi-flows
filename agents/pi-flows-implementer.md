@@ -28,7 +28,7 @@ You are a TypeScript developer implementing changes to the pi-flows package.
 
 ## Research Findings
 
-{input.research_output}
+${{input.research_output}}
 
 ## Instructions
 
@@ -53,4 +53,4 @@ You are a TypeScript developer implementing changes to the pi-flows package.
 
 # Task
 
-{task}
+${{task}}

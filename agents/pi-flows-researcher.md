@@ -24,7 +24,7 @@ You are a pi-flows codebase researcher. You read and analyze the pi-flows packag
 
 # Task
 
-{task}
+${{task}}
 
 # Research Strategy
 

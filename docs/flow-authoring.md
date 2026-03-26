@@ -154,10 +154,10 @@ access:
       - "rm -rf *"
 ---
 
-You are a backend developer. Your task: {task}
+You are a backend developer. Your task: ${{task}}
 
 Use the research context provided:
-{input.research_output}
+${{input.research_output}}
 
 Focus on clean, tested implementations. Run existing tests after changes.
 ```
@@ -191,7 +191,7 @@ Each `## heading` defines a step. The step type is determined by the **header pr
 | `## agent-loop-decision: id` | Agent loop decision step (iterative cycles) |
 | `## flow-ref: path` | Flow reference step (delegate to sub-flow) |
 
-For agent steps, the heading text is the **step ID** — used for wiring (`blockedBy`, `{result.ID}`), branching, and result storage. The `agent:` field is **always required**.
+For agent steps, the heading text is the **step ID** — used for wiring (`blockedBy`, `${{result.ID}}`), branching, and result storage. The `agent:` field is **always required**.
 
 #### agent
 
@@ -214,8 +214,8 @@ Dispatch a named agent to perform a task.
 agent: backend-developer
 blockedBy: researcher
 inputs:
-  research_output: "{result.researcher.summary}"
-task: Implement based on research: {input.research_output}
+  research_output: "${{result.researcher.summary}}"
+task: Implement based on research: ${{input.research_output}}
 ```
 
 #### fork
@@ -227,7 +227,7 @@ Ask the user a question and branch based on their answer. Fork steps use the `##
 | `question` | yes | Question to display |
 | `options` | yes | Answer choices (comma-separated or YAML list) |
 | `branches` | yes | Map of option text → step ID |
-| `allowNotes` | no | Prompt for optional freetext notes after selection. Access via `{fork.ID.notes}` — wire into downstream branch step tasks. |
+| `allowNotes` | no | Prompt for optional freetext notes after selection. Access via `${{fork.ID.notes}}` — wire into downstream branch step tasks. |
 | `allowCustom` | no | Append "Other (describe)" option. Freetext answers are routed by a decision agent. |
 | `multiSelect` | no | Allow multiple selections. All selected branches execute sequentially. |
 
@@ -270,7 +270,7 @@ Let an agent analyze results and choose a branch. Agent decision steps use the `
 ```
 ## agent-decision: route-decision
 agent: my-router
-task: "Analyze results and decide: {result.analyzer.summary}"
+task: "Analyze results and decide: ${{result.analyzer.summary}}"
 branches:
   needs-work: fix-step
   ready: deploy-step
@@ -293,7 +293,7 @@ Iterative verify/fix cycles. An agent decides whether to loop back or exit forwa
 ```
 ## agent-loop-decision: verify-loop
 agent: verifier
-task: "Check implementation: {result.developer.summary}"
+task: "Check implementation: ${{result.developer.summary}}"
 loop_target: developer
 exit_target: finalize
 max_iterations: 3
@@ -322,17 +322,17 @@ Use these in `task`, `inputs`, and `question` fields:
 
 | Variable | Resolves To |
 |----------|-------------|
-| `{task}` | The task passed when the flow was invoked |
-| `{result.<step-id>.summary}` | Summary from a completed step's `finish` call |
-| `{result.<step-id>.status}` | Status: `complete`, `error`, `blocked` |
-| `{result.<step-id>.artifacts}` | Structured data (XML) from a step's `finish` call |
-| `{result.<step-id>.files}` | Files touched by a step |
-| `{result.<step-id>}` | Full output from a step |
-| `{input.<name>}` | Resolved step input value (wired in `inputs:` block) |
-| `{fork.<id>.answer}` | User's answer from a fork step |
-| `{fork.<id>.notes}` | User's notes from a fork step |
-| `{loop.<id>.iteration}` | Current loop iteration number |
-| `{loop.<id>.max}` | Max iterations for a loop |
+| `${{task}}` | The task passed when the flow was invoked |
+| `${{result.<step-id>.summary}}` | Summary from a completed step's `finish` call |
+| `${{result.<step-id>.status}}` | Status: `complete`, `error`, `blocked` |
+| `${{result.<step-id>.artifacts}}` | Structured data (XML) from a step's `finish` call |
+| `${{result.<step-id>.files}}` | Files touched by a step |
+| `${{result.<step-id>}}` | Full output from a step |
+| `${{input.<name>}}` | Resolved step input value (wired in `inputs:` block) |
+| `${{fork.<id>.answer}}` | User's answer from a fork step |
+| `${{fork.<id>.notes}}` | User's notes from a fork step |
+| `${{loop.<id>.iteration}}` | Current loop iteration number |
+| `${{loop.<id>.max}}` | Max iterations for a loop |
 
 ### Flow Example
 
@@ -345,18 +345,18 @@ max_concurrent: 2
 
 ## researcher
 agent: researcher
-task: Investigate the codebase for {task}
+task: Investigate the codebase for ${{task}}
 
 ## developer
 agent: developer
 blockedBy: researcher
 inputs:
-  context: "{result.researcher.summary}"
-task: Implement based on research context: {input.context}
+  context: "${{result.researcher.summary}}"
+task: Implement based on research context: ${{input.context}}
 
 ## agent-loop-decision: verify-loop
 agent: verifier
-task: "Check if implementation is correct: {result.developer.summary}"
+task: "Check if implementation is correct: ${{result.developer.summary}}"
 loop_target: developer
 exit_target: finalize
 max_iterations: 3

@@ -26,11 +26,11 @@ You are a code reviewer verifying changes made to the pi-flows package.
 
 ## Research Context
 
-{input.research_output}
+${{input.research_output}}
 
 ## Task
 
-{task}
+${{task}}
 
 ## Verification Process
 

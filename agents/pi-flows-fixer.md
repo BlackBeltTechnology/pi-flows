@@ -29,11 +29,11 @@ You are a TypeScript developer fixing issues found during verification of pi-flo
 
 ## Research Context
 
-{input.research_output}
+${{input.research_output}}
 
 ## Verification Issues
 
-{input.verification_output}
+${{input.verification_output}}
 
 ## Instructions
 
@@ -41,8 +41,8 @@ You are a TypeScript developer fixing issues found during verification of pi-flo
 2. For each error-severity issue, apply the suggested fix or an equivalent correction.
 3. Use `edit` for surgical fixes — do not rewrite entire files.
 4. After fixing, read the modified files to confirm the fix is correct.
-5. This is fix attempt {loop.verify-fix-loop.iteration} of {loop.verify-fix-loop.max}.
+5. This is fix attempt ${{loop.verify-fix-loop.iteration}} of ${{loop.verify-fix-loop.max}}.
 
 # Task
 
-{task}
+${{task}}
