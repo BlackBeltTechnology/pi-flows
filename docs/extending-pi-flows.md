@@ -132,7 +132,36 @@ Place flow `.flow.md` files in your flows directory. After registering with `flo
 
 ### Skills
 
-Place skill directories (each containing a `SKILL.md`) in your skills directory. After registering with `flow:register-skills-dir`, they're available to agents via the `skills:` frontmatter field and the `skill_read` tool.
+Place skill directories inside your skills directory. After registering with `flow:register-skills-dir`, they're available to agents via the `skills:` frontmatter field and the `skill_read` tool.
+
+Each skill is a subdirectory containing a required `SKILL.md` and any number of detail files:
+
+```
+skills/
+└── my-framework-docs/       # Skill name
+    ├── SKILL.md              # Overview (injected into agent prompt) + detail file list
+    ├── api-reference.md      # Detail file
+    └── examples.md           # Detail file
+```
+
+**`SKILL.md` format:**
+
+```markdown
+# My Framework Docs
+
+Concise overview injected into the agent's system prompt.
+
+## Available Reference Files
+
+- `api-reference.md` — Full API reference
+- `examples.md` — Common usage patterns
+```
+
+The full `SKILL.md` content is prepended to the agent's system prompt. The detail file list tells the agent what to request via `skill_read`. The `skill_read` tool validates that any requested file is listed in `SKILL.md` before serving it — files not listed cannot be read by the agent.
+
+**Discovery priority for skills:**
+1. Extra registered directories (via `flow:register-skills-dir`, in registration order)
+2. pi-flows built-in skills
 
 ---
 

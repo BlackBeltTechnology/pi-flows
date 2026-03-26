@@ -11,13 +11,15 @@ pi-flows uses `pi.events` (the shared event bus from pi's extension API) for all
 │  │                                     │  │                              │
 │  │  flow:register-agents-dir           │  │  flow:run                    │
 │  │  flow:register-flows-dir            │  │  flow:complete               │
-│  │  flow:register-skills-dir           │  │  flow:rediscover             │
-│  │  flow:register-card                 │  │  flow:subagent-tool-call     │
-│  │  flow:register-workflow             │  │  flow:subagent-tool-result   │
-│  │  flow:register-gate                 │  │  flow:loop-iteration         │
-│  │  flow:register-guard-extension      │  │  flow:auto-decision          │
-│  │  flow:register-footer-segment       │  │                              │
-│  │  flow:register-tool                 │  └──────────────────────────────┘
+│  │  flow:unregister-agents-dir         │  │  flow:rediscover             │
+│  │  flow:unregister-flows-dir          │  │  flow:subagent-tool-call     │
+│  │  flow:register-skills-dir           │  │  flow:subagent-tool-result   │
+│  │  flow:register-card                 │  │  flow:loop-iteration         │
+│  │  flow:register-workflow             │  │  flow:auto-decision          │
+│  │  flow:register-gate                 │  │                              │
+│  │  flow:register-guard-extension      │  └──────────────────────────────┘
+│  │  flow:register-footer-segment       │
+│  │  flow:register-tool                 │
 │  │                                     │
 │  └─────────────────────────────────────┘
 │                                                                     │
@@ -37,6 +39,8 @@ pi-flows uses `pi.events` (the shared event bus from pi's extension API) for all
 - [Registration Events](#registration-events)
   - [flow:register-agents-dir](#flowregister-agents-dir)
   - [flow:register-flows-dir](#flowregister-flows-dir)
+  - [flow:unregister-agents-dir](#flowunregister-agents-dir)
+  - [flow:unregister-flows-dir](#flowunregister-flows-dir)
   - [flow:register-skills-dir](#flowregister-skills-dir)
   - [flow:register-card](#flowregister-card)
   - [flow:register-workflow](#flowregister-workflow)
@@ -102,6 +106,42 @@ pi.events?.emit("flow:register-flows-dir", {
   dir: join(pkgRoot, "flows"),
 });
 ```
+
+### flow:unregister-agents-dir
+
+Unregister a previously registered agents directory. Agents discovered from that directory are removed and re-discovery runs without it.
+
+| Property | Detail |
+|----------|--------|
+| **Direction** | You → pi-flows |
+| **Data shape** | `{ dir: string }` |
+| **Effect** | The directory is removed from the agents search path. Re-discovery runs immediately. |
+
+```typescript
+// Remove a staging agents directory after a flow design session
+pi.events?.emit("flow:unregister-agents-dir", {
+  dir: join(projectRoot, ".pi", "staging", "agents"),
+});
+```
+
+### flow:unregister-flows-dir
+
+Unregister a previously registered flows directory. Flows from that directory are removed from the registry and their slash commands are de-registered.
+
+| Property | Detail |
+|----------|--------|
+| **Direction** | You → pi-flows |
+| **Data shape** | `{ dir: string }` |
+| **Effect** | The directory is removed from the flows search path. Re-discovery runs immediately. Slash commands for removed flows are de-registered. |
+
+```typescript
+// Remove a staging flows directory after a flow design session
+pi.events?.emit("flow:unregister-flows-dir", {
+  dir: join(projectRoot, ".pi", "staging", "flows"),
+});
+```
+
+> **When to use:** These are primarily used by pi-flows' own workspace module to clean up temporary staging directories after `/flows:new` or `/flows:edit` sessions complete. External packages can use them if they dynamically register temporary directories that should be torn down later. Prefer permanent registration (`flow:register-*`) unless you specifically need temporary directory management.
 
 ### flow:register-skills-dir
 

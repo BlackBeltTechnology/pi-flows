@@ -9,6 +9,7 @@ Comprehensive reference for writing agents (`.md` files) and flows (`.flow.md` f
   - [Available Agent Tools](#available-agent-tools)
   - [Model Roles](#model-roles)
   - [Access Control](#access-control)
+  - [Skills Directory Format](#skills-directory-format)
   - [Agent Example](#agent-example)
 - [Writing Flows](#writing-flows)
   - [Flow Frontmatter](#flow-frontmatter)
@@ -125,6 +126,57 @@ access:
 | `access.write` | `string[]` | Glob patterns for allowed write paths. If set, writes outside these patterns are blocked. |
 | `access.bash.deny` | `string[]` | Command patterns to block. Matched against the `command` argument of bash tool calls. |
 
+### Skills Directory Format
+
+Skills are directories containing a `SKILL.md` entry point and optional detail files. Place skill directories inside a directory that is registered with `flow:register-skills-dir`. Project-local skills can also be placed in `.pi/skills/<skill-name>/`.
+
+```
+my-skills/
+└── my-framework-docs/       # Skill directory (= skill name)
+    ├── SKILL.md              # Required: overview + list of detail files
+    ├── getting-started.md    # Detail file (readable via skill_read)
+    ├── api-reference.md
+    └── examples.md
+```
+
+**`SKILL.md` format:**
+
+The full content of `SKILL.md` is injected into the agent's system prompt when the agent declares the skill in its `skills:` frontmatter field. It should provide a concise overview and list all available detail files so the agent knows what to request via `skill_read`.
+
+```markdown
+# My Framework Documentation
+
+This skill provides reference documentation for MyFramework.
+
+## Overview
+
+MyFramework is a ... (brief description for context).
+
+## Available Reference Files
+
+Read these files with `skill_read` for detailed information:
+
+- `getting-started.md` — Installation, setup, and first steps
+- `api-reference.md` — Complete API reference
+- `examples.md` — Common usage patterns and recipes
+
+## Key Concepts
+
+- **Concept A**: Brief explanation
+- **Concept B**: Brief explanation
+```
+
+**How skills are used:**
+
+1. The agent declares the skill in its frontmatter: `skills: my-framework-docs`
+2. At dispatch time, `SKILL.md` is prepended to the agent's system prompt
+3. The agent reads the overview and calls `skill_read` for detail files as needed
+
+**Discovery priority for skills:**
+1. Extra registered directories (via `flow:register-skills-dir`)
+2. pi-flows built-in skills directory
+3. There is no project-local skills auto-discovery — register `.pi/skills/` explicitly if needed
+
 ### Agent Example
 
 ```markdown
@@ -172,11 +224,18 @@ Flows are `.flow.md` files with YAML frontmatter and `##`-delimited steps. Save 
 
 | Field | Required | Type | Description |
 |-------|:---:|------|-------------|
-| `name` | yes | `string` | Flow identifier (becomes the slash command) |
+| `name` | yes | `string` | Flow identifier (for documentation purposes — see note below) |
 | `description` | yes | `string` | What this flow does |
 | `max_concurrent` | no | `number` | Maximum agents running in parallel (default: unlimited) |
 | `task_required` | no | `boolean` | When `true`, prompt user for task if no command args provided |
 | `task_prompt` | no | `string` | Custom prompt text (default: "Describe what you want \<name\> to do:") |
+
+> **Flow naming from the filesystem:** The flow's actual registered name — and thus its slash command — is derived from the file's path within the flows directory, **not** from the `name:` frontmatter field. The frontmatter `name:` is overridden at discovery time:
+>
+> - `flows/my-research.flow.md` → registers as `/my-research`
+> - `flows/judo/research.flow.md` → registers as `/judo:research`
+>
+> Subdirectory nesting maps to a colon prefix (max 1 level deep). Files nested 2+ levels are skipped. Keep the frontmatter `name:` in sync with the expected command name for clarity, but the command name is always filesystem-derived.
 
 ### Step Types
 
@@ -230,6 +289,10 @@ Ask the user a question and branch based on their answer. Fork steps use the `##
 | `allowNotes` | no | Prompt for optional freetext notes after selection. Access via `${{fork.ID.notes}}` — wire into downstream branch step tasks. |
 | `allowCustom` | no | Append "Other (describe)" option. Freetext answers are routed by a decision agent. |
 | `multiSelect` | no | Allow multiple selections. All selected branches execute sequentially. |
+| `agent` | no | Agent name for autonomous mode. When autonomous mode is active (Ctrl+A), this agent decides the branch instead of prompting the user. |
+| `task` | no | Task for the autonomous decision agent. Defaults to a prompt containing the question and options. |
+
+**Autonomous mode:** If the flow is running in autonomous mode (`🤖 auto` shown in the footer) and the fork step has an `agent:` field, the named agent automatically picks a branch. The agent calls `finish` with `branch: "<option>"`. If `agent:` is absent, autonomous-mode forks still prompt the user.
 
 ```
 ## fork: choose-approach
@@ -238,6 +301,19 @@ options: Quick fix, Full refactor
 branches:
   Quick fix: quick-fix-step
   Full refactor: refactor-step
+```
+
+With an autonomous agent added:
+
+```
+## fork: choose-approach
+question: Which approach do you prefer?
+options: Quick fix, Full refactor
+branches:
+  Quick fix: quick-fix-step
+  Full refactor: refactor-step
+agent: router-agent
+task: "Based on the research summary, choose the most appropriate approach: ${{result.researcher.summary}}"
 ```
 
 #### conditional

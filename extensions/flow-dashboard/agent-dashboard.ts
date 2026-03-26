@@ -1,7 +1,7 @@
 import type { WorkflowDefinition } from "./types.js";
 import type { AgentResult, AgentConfig } from "../flow-engine/types.js";
 import { AgentCard } from "./agent-card.js";
-import { GridComponent, CARD_HEIGHT, MIN_CARD_WIDTH } from "./grid-component.js";
+import { GridComponent, CARD_HEIGHT } from "./grid-component.js";
 import { renderBreadcrumb } from "./breadcrumb.js";
 import { getCardRenderer } from "./card-registry.js";
 
@@ -32,6 +32,7 @@ export class AgentDashboard {
 
   // Height stabilization: track expected grid rows to keep widget height constant
   private expectedGridRows = 0;
+  private lastRenderWidth = 0;
 
   // Flag to signal that grid structure changed (new card added) and a full TUI re-render is needed
   public forceNextRender = false;
@@ -75,15 +76,20 @@ export class AgentDashboard {
 
   private updateExpectedGridRows(): void {
     const cardCount = this.cards.size;
-    if (cardCount === 0) {
-      this.expectedGridRows = 0;
-      return;
+    if (cardCount === 0) { this.expectedGridRows = 0; return; }
+    let rows: number;
+    if (this.lastRenderWidth > 0) {
+      // Use actual width from last render for accurate row count
+      const cols = GridComponent.computeCols(cardCount, this.lastRenderWidth);
+      rows = Math.ceil(cardCount / cols);
+    } else {
+      // No render yet — conservative single-column upper bound
+      rows = cardCount;
     }
-    // Use MIN_CARD_WIDTH * 4 as a reasonable width estimate for row computation
-    // The actual rows will be recomputed on first render with real width
-    const estimatedWidth = MIN_CARD_WIDTH * 4 + 3; // 4 cols + 3 gaps
-    const cols = GridComponent.computeCols(cardCount, estimatedWidth);
-    this.expectedGridRows = Math.ceil(cardCount / cols);
+    // Only ratchet up — render() handles resets on width change
+    if (rows > this.expectedGridRows) {
+      this.expectedGridRows = rows;
+    }
   }
 
   onAgentStarted(agentName: string, agentConfig?: AgentConfig): void {
@@ -254,9 +260,14 @@ export class AgentDashboard {
     if (this.cards.size > 0) {
       const cols = GridComponent.computeCols(this.cards.size, width);
       const actualRows = Math.ceil(this.cards.size / cols);
-      if (actualRows > this.expectedGridRows) {
+      // Ratchet up at same width (stabilizes height as cards arrive),
+      // but reset when width changes (adapt to terminal resize).
+      if (width !== this.lastRenderWidth) {
+        this.expectedGridRows = actualRows;
+      } else if (actualRows > this.expectedGridRows) {
         this.expectedGridRows = actualRows;
       }
+      this.lastRenderWidth = width;
       const expectedGridLines = 1 + this.expectedGridRows * CARD_HEIGHT + 1; // padding + rows + padding
       while (lines.length < (this.workflow ? 1 : 0) +
              (this.workflow && this.workflow.stages.length > 1 ? 1 : 0) +
@@ -275,20 +286,6 @@ export class AgentDashboard {
     return lines;
   }
 
-  /** Compute the grid's rendered height for a given width (for matching detail view). */
-  computeGridHeight(width: number): number {
-    const cardCount = this.cards.size;
-    if (cardCount === 0) return 10;
-    const cols = GridComponent.computeCols(cardCount, width);
-    const gridRows = Math.ceil(cardCount / cols);
-    let height = gridRows * CARD_HEIGHT + 2; // +2 for grid padding lines (before + after)
-    // Account for header + breadcrumb lines
-    if (this.workflow) height++; // header
-    if (this.workflow && this.workflow.stages.length > 1) height++;
-    // Add navigate footer line
-    height++;
-    return Math.max(height, 10);
-  }
 
   dispose(): void {
     this.stopSpinner();

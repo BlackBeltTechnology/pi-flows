@@ -18,6 +18,7 @@ A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workfl
   - [Model Roles](#model-roles)
   - [Model Catalog](#model-catalog)
   - [Access Control](#access-control)
+  - [Skills Directory Format](#skills-directory-format)
   - [Dashboard Cards](#dashboard-cards)
 - [Writing Flows](#writing-flows)
   - [Flow Frontmatter](#flow-frontmatter)
@@ -324,6 +325,48 @@ access:
 - **`write`** — Glob patterns for allowed write paths. Writes outside are blocked.
 - **`bash.deny`** — Command patterns to block. Matched against the full `command` argument.
 
+### Skills Directory Format
+
+When you create a package (or project-local skills in `.pi/skills/`), each skill is a directory containing a `SKILL.md` file and optional detail files:
+
+```
+my-skills/
+└── my-framework-docs/      # Skill directory name = skill name used in frontmatter
+    ├── SKILL.md             # Required: injected into agent system prompt + lists detail files
+    ├── api-reference.md     # Detail file (agent can read via skill_read tool)
+    └── examples.md
+```
+
+**`SKILL.md`** serves a dual purpose:
+
+1. **Prompt injection** — its entire content is prepended to the agent's system prompt when the agent declares the skill.
+2. **Detail file registry** — lists the available detail files so the agent knows what to request via `skill_read`.
+
+```markdown
+# My Framework Docs
+
+Brief overview of the framework that the agent should know upfront.
+
+## Available Reference Files
+
+Read these with `skill_read` for detailed information:
+
+- `api-reference.md` — Full API reference
+- `examples.md` — Common usage patterns
+```
+
+Agents discover and use skills via their frontmatter:
+
+```yaml
+skills: my-framework-docs   # Single skill
+# or
+skills:
+  - my-framework-docs
+  - another-skill
+```
+
+Skills registered by packages (via `flow:register-skills-dir`) take precedence over pi-flows' built-in skills. See [docs/extending-pi-flows.md](docs/extending-pi-flows.md) for registration details.
+
 ### Dashboard Cards
 
 The `card` block controls how the agent appears on the live dashboard during flow execution:
@@ -358,11 +401,20 @@ task_prompt: "What should I research and build?"
 
 | Field | Required | Description |
 |-------|:--------:|-------------|
-| `name` | ✓ | Flow identifier — becomes the slash command (`/research-and-build`) |
+| `name` | ✓ | Flow identifier — for documentation; the actual slash command is derived from the file path (see note below) |
 | `description` | ✓ | What the flow does (shown in command list and dashboard) |
 | `max_concurrent` | | Maximum agents running in parallel (default: unlimited) |
 | `task_required` | | When `true`, prompts the user for a task if none was provided with the command |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
+
+> **Command name = file path, not `name:` field.** The slash command for a flow is determined by its position in the flows directory, not the `name:` frontmatter value:
+>
+> | File path | Registered command |
+> |-----------|-------------------|
+> | `.pi/flows/flows/research.flow.md` | `/research` |
+> | `.pi/flows/flows/judo/research.flow.md` | `/judo:research` |
+>
+> Subdirectories add a colon-separated prefix (max one level deep). Keep the frontmatter `name:` in sync for clarity, but know that pi-flows always uses the filesystem-derived name.
 
 ### Agent Steps
 
@@ -425,6 +477,8 @@ branches:
 | `allowNotes` | Prompt for optional freetext notes after selection. Access via `${{fork.ID.notes}}` |
 | `allowCustom` | Add an "Other (describe)" option. Freetext answers are handled by a decision agent |
 | `multiSelect` | Allow selecting multiple options. All selected branches execute sequentially |
+| `agent` | Agent name for autonomous mode. When `🤖 auto` is active (Ctrl+A), this agent decides the branch automatically instead of prompting the user |
+| `task` | Task description for the autonomous agent. Defaults to a prompt containing the question and options if omitted |
 
 The user's answer is available in downstream steps as `${{fork.choose-approach.answer}}` and notes as `${{fork.choose-approach.notes}}`.
 
@@ -632,7 +686,10 @@ When a flow runs, a live dashboard appears above the editor showing all agents i
 | **Ctrl+O** | Toggle navigation mode — use arrow keys to select cards |
 | **Enter** | Open detail view for the selected card |
 | **Ctrl+X** | Abort the running flow |
+| **Ctrl+A** | Toggle autonomous mode — fork steps auto-decide via their declared agent (see [Fork Steps](#fork-steps)) |
 | **Esc** | Exit detail view or navigation mode |
+
+When autonomous mode is active, `🤖 auto` appears in the footer bar. In this mode, fork steps that have an `agent:` field automatically select a branch without pausing to prompt the user — the named agent reads the flow context and calls `finish` with its choice. Fork steps without an `agent:` field continue to prompt the user even in autonomous mode.
 
 ### Agent Cards
 
@@ -706,6 +763,8 @@ export default function activate(pi: ExtensionAPI) {
 |-------|---------|
 | `flow:register-agents-dir` | Add a directory of agent `.md` files |
 | `flow:register-flows-dir` | Add a directory of `.flow.md` files (registered as commands) |
+| `flow:unregister-agents-dir` | Remove a previously registered agents directory |
+| `flow:unregister-flows-dir` | Remove a previously registered flows directory |
 | `flow:register-skills-dir` | Add a skills directory |
 | `flow:register-card` | Register a custom dashboard card metric renderer |
 | `flow:register-workflow` | Register a multi-stage workflow for dashboard breadcrumbs |
