@@ -123,7 +123,7 @@ Branches based on whether data is present in a previous result.
 
 ```
 ## conditional: has-gaps
-check: artifacts.gaps
+check: researcher.artifacts
 present: gap-filler
 absent: finalizer
 ```
@@ -143,7 +143,7 @@ branches:
 
 ### Agent Loop Decision Step: `## agent-loop-decision: id`
 
-Creates an iterative loop in the flow. Dispatches an agent to decide whether to re-execute a segment (loop) or continue forward (exit). The decision agent calls `finish({ branch: "loop" })` or `finish({ branch: "exit" })`.
+Creates an iterative loop in the flow. Dispatches an agent to decide whether to re-execute a segment (loop) or continue forward (exit). The decision agent calls `finish` with `branch` set to the `loop_target` step ID to loop back, or `branch` set to the `exit_target` step ID to exit forward.
 
 Properties:
 - `agent`: Agent name to make the loop/exit decision
@@ -173,10 +173,13 @@ task: >
   Evaluate the verification result: ${{result.judo-verifier.summary}}
   And the fix attempt: ${{result.judo-fixer.summary}}
   Decide whether to loop (re-verify and fix) or exit (move on).
+  Call finish with branch "judo-verifier" to loop back, or "deploy-step" to exit.
 loop_target: judo-verifier
 exit_target: deploy-step
 max_iterations: 5
 ```
+
+The decision agent calls `finish({ branch: "judo-verifier" })` to loop back, or `finish({ branch: "deploy-step" })` to exit forward. When `max_iterations` is exceeded, the flow forces exit to `exit_target`.
 
 Use `agent-loop-decision` when the number of iterations is unknown (e.g., "keep fixing until tests pass"). Use unrolled steps when the count is known and small (e.g., exactly one retry).
 
@@ -307,7 +310,10 @@ When no existing agent covers a need, create a custom agent definition:
 - Set appropriate model roles:
   - `@coding` for reading, analyzing, writing, or modifying code
   - `@planning` for decisions, design, and orchestration
+  - `@research` for investigation, analysis, and reading
+  - `@fast` for quick tasks and routing decisions
   - `@compact` for lightweight tasks like summarization
+  - `@vision` for image and visual analysis
 
 # Output Paths
 

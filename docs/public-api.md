@@ -545,6 +545,7 @@ interface FlowRunOptions {
   authStorage?: any;                   // From session_start capture
   modelRegistry?: any;                 // From session_start capture
   extraGuardFactories?: any[];         // Additional ExtensionFactory instances
+  extraCustomTools?: any[];            // Extension tool definitions injected into agent sessions
   getModelRole?: (role: string) => string | undefined;
   getAgent: (name: string) => AgentConfig | undefined;
   getSkillContent?: (name: string) => string | undefined;

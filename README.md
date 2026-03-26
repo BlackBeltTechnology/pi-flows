@@ -16,6 +16,7 @@ A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workfl
   - [Frontmatter Fields](#frontmatter-fields)
   - [Available Tools](#available-tools)
   - [Model Roles](#model-roles)
+  - [Model Catalog](#model-catalog)
   - [Access Control](#access-control)
   - [Dashboard Cards](#dashboard-cards)
 - [Writing Flows](#writing-flows)
@@ -61,6 +62,7 @@ Before running flows, assign models to roles so agents know which model to use:
 
 ```
 /provider          Add an LLM provider (Anthropic, OpenAI, etc.)
+/catalog           Browse or add custom models to the catalog (optional)
 /roles             Assign models to roles (@planning, @coding, @fast, etc.)
 ```
 
@@ -76,7 +78,7 @@ model: @research
 tools: read, grep, bash
 ---
 
-You are a research agent. Your task: {task}
+You are a research agent. Your task: ${{task}}
 
 Investigate the relevant code thoroughly. Call `finish` when done with your summary.
 ```
@@ -93,7 +95,7 @@ description: Run a research pass on the codebase
 
 ## researcher
 agent: researcher
-task: Investigate {task}
+task: Investigate ${{task}}
 ```
 
 ### 4. Run the flow
@@ -125,6 +127,7 @@ The Flow Architect reads your existing agents and helps you design, validate, an
 | `/flows:edit` | Modify an existing saved flow |
 | `/flows:delete` | Remove a flow and its results |
 | `/provider` | Add, list, or remove LLM providers |
+| `/catalog` | Browse, add, edit, or delete models in the model catalog |
 | `/roles` | Assign models to named roles |
 | `/<flow-name>` | Run a saved flow (auto-registered from `.pi/flows/`) |
 
@@ -168,7 +171,7 @@ Steps communicate with each other through **template variables** — placeholder
 ## developer
 agent: developer
 blockedBy: researcher
-task: Implement the changes. Research context: {result.researcher.summary}
+task: Implement the changes. Research context: ${{result.researcher.summary}}
 ```
 
 See the full [Template Variable Reference](#template-variable-reference) below.
@@ -206,10 +209,10 @@ access:
       - "rm -rf *"
 ---
 
-You are a backend developer. Your task: {task}
+You are a backend developer. Your task: ${{task}}
 
 Use the research context provided:
-{input.research_output}
+${{input.research_output}}
 
 Focus on clean, tested implementations. Run the existing test suite after making changes.
 ```
@@ -266,6 +269,39 @@ Assign models to roles with `/roles`, then reference them with an `@` prefix:
 
 **Setup:** Run `/provider` to add a provider, then `/roles` to assign models to roles.
 
+### Model Catalog
+
+The **model catalog** is the library of models available for role assignment. It is stored globally at `~/.pi/agent/providers.json` and pre-populated with common models. Use `/catalog` to manage it:
+
+```
+/catalog
+```
+
+The catalog overlay opens with a searchable list of all known models. From here you can:
+
+| Action | How |
+|--------|-----|
+| **Browse** | Scroll or type to filter — each entry shows the model ID, display name, and capability tags (`reasoning`, `vision`, context window size) |
+| **Add** | Select `+ Add new model`, enter the provider-prefixed model ID (e.g., `openai/gpt-5`) |
+| **Edit** | Select any model to open its settings — change display name, toggle reasoning/vision support, adjust context window and max tokens |
+| **Delete** | Open a model's edit screen and choose `Delete → confirm` |
+
+New models added via `/catalog` immediately appear in the `/roles` model selector. This is useful when your LLM provider offers models not yet in the default catalog.
+
+**Example: adding a custom OpenAI model**
+
+```
+/catalog
+→ + Add new model
+  Model ID: openai/gpt-5-mini
+→ saved to catalog
+
+/roles
+→ @fast → openai/gpt-5-mini
+```
+
+> **Config location:** All catalog changes are persisted to `~/.pi/agent/providers.json` alongside your provider credentials and role assignments.
+
 ### Access Control
 
 The `access` block restricts what an agent can read, write, and run. This sandboxes agents to prevent accidental damage:
@@ -304,7 +340,7 @@ Custom metric renderers can be registered by extension packages via `flow:regist
 
 ## Writing Flows
 
-Flows are `.flow.md` files with YAML frontmatter and `##`-delimited step sections. The step type is determined by the **`##` header prefix** — `## step-id` for agent steps, and `## type: id` for all other step types. The header text (after the prefix) is the **step ID**, used for dependency wiring (`blockedBy`), result references (`{result.ID.*}`), and branching.
+Flows are `.flow.md` files with YAML frontmatter and `##`-delimited step sections. The step type is determined by the **`##` header prefix** — `## step-id` for agent steps, and `## type: id` for all other step types. The header text (after the prefix) is the **step ID**, used for dependency wiring (`blockedBy`), result references (`${{result.ID.*}}`), and branching.
 
 Save flows in `.pi/flows/flows/` to auto-register them as slash commands.
 
@@ -335,7 +371,7 @@ The default step type. Dispatches a named agent with a task. The `##` header tex
 ```yaml
 ## researcher
 agent: researcher
-task: Investigate the codebase for {task}
+task: Investigate the codebase for ${{task}}
 ```
 
 When the same agent needs to run multiple times in a flow with different tasks, give each step a unique ID:
@@ -350,7 +386,7 @@ agent: writer
 task: Revise the draft based on feedback
 ```
 
-Wire dependencies and result references using the **step ID** (`blockedBy: create-draft`, `{result.create-draft.summary}`), not the agent name.
+Wire dependencies and result references using the **step ID** (`blockedBy: create-draft`, `${{result.create-draft.summary}}`), not the agent name.
 
 **All agent step fields:**
 
@@ -386,26 +422,32 @@ branches:
 | `question` | Question to display to the user |
 | `options` | Answer choices |
 | `branches` | Map of option text → step ID to run |
-| `allowNotes` | Prompt for optional freetext notes after selection. Access via `{fork.ID.notes}` |
+| `allowNotes` | Prompt for optional freetext notes after selection. Access via `${{fork.ID.notes}}` |
 | `allowCustom` | Add an "Other (describe)" option. Freetext answers are handled by a decision agent |
 | `multiSelect` | Allow selecting multiple options. All selected branches execute sequentially |
 
-The user's answer is available in downstream steps as `{fork.choose-approach.answer}` and notes as `{fork.choose-approach.notes}`.
+The user's answer is available in downstream steps as `${{fork.choose-approach.answer}}` and notes as `${{fork.choose-approach.notes}}`.
 
 > **`options:` format:** Options can be comma-separated inline (`options: fast, thorough`) or as a YAML list. Option text must exactly match the keys in `branches:`.
 
 ### Conditional Steps
 
-Branch based on whether a value exists in a previous step's artifacts. Conditional steps use the `## conditional: id` header syntax.
+Branch based on whether a field from a previous step's result is non-empty. Conditional steps use the `## conditional: id` header syntax.
 
 ```
-## conditional: check-gaps
-check: researcher.artifacts.gaps
+## conditional: check-research
+check: researcher.artifacts
 present: fill-gaps-step
 absent: proceed-to-build
 ```
 
-The `check` field is a dot-path checked against the accumulated result artifacts. If the path exists (and is non-empty), the `present` branch runs; otherwise `absent`.
+The `check` field is a `stepId.field` path. Supported fields: `artifacts` (default when no field given), `summary`, `files`, `status`. If the field's text content is non-empty, the `present` branch runs; otherwise `absent`.
+
+| Field | Description |
+|-------|-------------|
+| `check` | `stepId` or `stepId.field` to check. Field defaults to `artifacts` if omitted. |
+| `present` | Step ID to route to if the field is non-empty |
+| `absent` | Step ID to route to if the field is empty or the step has no result |
 
 ### Agent Decision Steps
 
@@ -414,7 +456,7 @@ Delegate a routing decision to an agent. The agent analyzes the situation and ca
 ```
 ## agent-decision: route-decision
 agent: router-agent
-task: "Review the analysis and decide what to do next: {result.analyzer.summary}"
+task: "Review the analysis and decide what to do next: ${{result.analyzer.summary}}"
 branches:
   needs-work: fix-step
   ready: deploy-step
@@ -429,7 +471,7 @@ Iterative verify/fix cycles. The agent decides on each iteration whether to loop
 ```
 ## agent-loop-decision: verify-loop
 agent: verifier
-task: "Check if the implementation is correct: {result.developer.summary}"
+task: "Check if the implementation is correct: ${{result.developer.summary}}"
 loop_target: developer
 exit_target: finalize
 max_iterations: 3
@@ -455,7 +497,7 @@ on_error: fix-step
 
 ## Input Wiring
 
-**Inputs** let you pass specific data from one step to another in a structured way. This is different from embedding a template variable directly in the `task` — inputs allow agents to reference structured values via `{input.NAME}` rather than inlining potentially long strings into the task text.
+**Inputs** let you pass specific data from one step to another in a structured way. This is different from embedding a template variable directly in the `task` — inputs allow agents to reference structured values via `${{input.NAME}}` rather than inlining potentially long strings into the task text.
 
 ### How It Works
 
@@ -474,16 +516,16 @@ on_error: fix-step
    agent: developer
    blockedBy: researcher
    inputs:
-     research_output: "{result.researcher.summary}"
+     research_output: "${{result.researcher.summary}}"
    ```
 
-3. Reference it in the **agent's system prompt** as `{input.research_output}`:
+3. Reference it in the **agent's system prompt** as `${{input.research_output}}`:
 
    ```markdown
-   You are a developer. Your task: {task}
+   You are a developer. Your task: ${{task}}
 
    Context from research:
-   {input.research_output}
+   ${{input.research_output}}
    ```
 
 ### Complete Example
@@ -496,14 +538,14 @@ description: Research the codebase then implement
 
 ## researcher
 agent: researcher
-task: Investigate the codebase for {task}
+task: Investigate the codebase for ${{task}}
 
 ## developer
 agent: developer
 blockedBy: researcher
 inputs:
-  research_output: "{result.researcher.summary}"
-task: Implement based on research. Context is in {input.research_output}.
+  research_output: "${{result.researcher.summary}}"
+task: Implement based on research. Context is in ${{input.research_output}}.
 ```
 
 ### Anti-Patterns
@@ -513,7 +555,7 @@ task: Implement based on research. Context is in {input.research_output}.
 ```yaml
 ## developer
 agent: developer
-task: "Implement this: {result.researcher.summary} {result.researcher.artifacts}"
+task: "Implement this: ${{result.researcher.summary}} ${{result.researcher.artifacts}}"
 ```
 
 **✓ Use inputs for structured data** — Cleaner, more readable, and properly separated:
@@ -522,12 +564,12 @@ task: "Implement this: {result.researcher.summary} {result.researcher.artifacts}
 ## developer
 agent: developer
 inputs:
-  context: "{result.researcher.summary}"
-  files_changed: "{result.researcher.files}"
-task: "Implement this feature. Context: {input.context}. Consider files: {input.files_changed}"
+  context: "${{result.researcher.summary}}"
+  files_changed: "${{result.researcher.files}}"
+task: "Implement this feature. Context: ${{input.context}}. Consider files: ${{input.files_changed}}"
 ```
 
-**❌ Referencing undeclared inputs** — If the agent's frontmatter doesn't list an input, `{input.X}` expands to an empty string:
+**❌ Referencing undeclared inputs** — If the agent's frontmatter doesn't list an input, `${{input.X}}` expands to an empty string:
 
 ```yaml
 # Developer agent has no `inputs:` declaration
@@ -541,39 +583,41 @@ inputs:
 
 ## Template Variable Reference
 
-Use these placeholders in `task`, `inputs`, and `question` fields in your flow steps:
+Use these placeholders in `task`, `inputs`, `question` fields in flow steps, and in agent system prompts:
 
 | Variable | Resolves To |
 |----------|-------------|
-| `{task}` | The task passed when the flow was invoked |
-| `{result.<step-id>}` | Full raw output from a completed step |
-| `{result.<step-id>.summary}` | Summary text from a step's `finish` call |
-| `{result.<step-id>.status}` | Status: `complete`, `error`, or `blocked` |
-| `{result.<step-id>.artifacts}` | Structured data (XML) from a step's `finish` `artifacts` field |
-| `{result.<step-id>.files}` | Files touched by a step, e.g. `src/auth.ts (created), ...` |
-| `{input.<name>}` | A wired input value for this step (set in the `inputs:` block) |
-| `{fork.<step-id>.answer}` | The user's answer from a fork step |
-| `{fork.<step-id>.notes}` | Optional notes the user added to a fork answer |
-| `{loop.<step-id>.iteration}` | Current iteration number in an agent-loop-decision step |
-| `{loop.<step-id>.max}` | Maximum iterations configured for a loop step |
+| `${{task}}` | The task passed when the flow was invoked |
+| `${{result.<step-id>}}` | Full raw output from a completed step |
+| `${{result.<step-id>.summary}}` | Summary text from a step's `finish` call |
+| `${{result.<step-id>.status}}` | Status: `complete`, `error`, or `blocked` |
+| `${{result.<step-id>.artifacts}}` | Structured data (XML) from a step's `finish` `artifacts` field |
+| `${{result.<step-id>.files}}` | Files touched by a step, e.g. `src/auth.ts (created), ...` |
+| `${{input.<name>}}` | A wired input value for this step (set in the `inputs:` block) |
+| `${{fork.<step-id>.answer}}` | The user's answer from a fork step |
+| `${{fork.<step-id>.notes}}` | Optional notes the user added to a fork answer |
+| `${{loop.<step-id>.iteration}}` | Current iteration number in an agent-loop-decision step |
+| `${{loop.<step-id>.max}}` | Maximum iterations configured for a loop step |
 
 **Examples:**
 
 ```yaml
 ## developer
 agent: developer
-task: "Implement feature: {task}. Research: {result.researcher.summary}"
+task: "Implement feature: ${{task}}. Research: ${{result.researcher.summary}}"
 
 ## verifier
 agent: verifier
-task: "Check iteration {loop.verify-loop.iteration} of {loop.verify-loop.max}: {result.developer.summary}"
+task: "Check iteration ${{loop.verify-loop.iteration}} of ${{loop.verify-loop.max}}: ${{result.developer.summary}}"
 
 ## post-fork
 agent: writer
-task: "User chose: {fork.choose-approach.answer}. Notes: {fork.choose-approach.notes}"
+task: "User chose: ${{fork.choose-approach.answer}}. Notes: ${{fork.choose-approach.notes}}"
 ```
 
-> **Resolution order:** Template variables are expanded just before an agent is dispatched, so `{result.X}` is only valid if step `X` ran before the current step (enforced by `blockedBy`). Referencing a step that hasn't completed yet resolves to an empty string.
+> **Resolution order:** Template variables are expanded just before an agent is dispatched, so `${{result.X}}` is only valid if step `X` ran before the current step (enforced by `blockedBy`). Referencing a step that hasn't completed yet resolves to an empty string.
+
+> **Legacy syntax:** The `{variable}` form (without the `${{...}}` wrapper) is still accepted for backward compatibility but is deprecated. Use `${{variable}}` in all new flows and agents.
 
 ---
 

@@ -246,16 +246,18 @@ Branch based on the presence of data in a previous step's result. Conditional st
 
 | Field | Required | Description |
 |-------|:---:|-------------|
-| `check` | yes | Dot-path to check in artifacts (e.g., `"test-runner.status"`) |
-| `present` | yes | Step ID to route to if the checked value exists |
-| `absent` | yes | Step ID to route to if the checked value is missing |
+| `check` | yes | `stepId` or `stepId.field` — field to check from a completed step's result. Supported fields: `artifacts` (default), `summary`, `files`, `status`. |
+| `present` | yes | Step ID to route to if the resolved field is non-empty |
+| `absent` | yes | Step ID to route to if the resolved field is empty or the step has no result |
 
 ```
 ## conditional: check-gaps
-check: researcher.artifacts.gaps
+check: researcher.artifacts
 present: fix-gaps-step
 absent: proceed-step
 ```
+
+The `check` field is parsed as `stepId.field`. If just `stepId` is given (no dot), the `artifacts` field is checked. The route to `present` if the field's text content is non-empty, `absent` otherwise.
 
 #### agent-decision
 
