@@ -27,6 +27,13 @@ pi-flows exports types and functions from its flow-engine and flow-dashboard mod
   - [Discovery](#discovery)
   - [Model Resolution](#model-resolution)
   - [Result Parsing](#result-parsing)
+- [Guard Extension API](#guard-extension-api)
+  - [createGuardExtension](#createguardextension)
+  - [GuardOptions](#guardoptions)
+- [SDK Integration Details](#sdk-integration-details)
+  - [In-Process Session Model](#in-process-session-model)
+  - [Capturing Session Context](#capturing-session-context)
+  - [Tool Factory Map](#tool-factory-map)
 
 ---
 
@@ -52,6 +59,10 @@ import { resolveModel } from "pi-flows/extensions/flow-engine/model-roles.js";
 import { parseResult, hasArtifactElement } from "pi-flows/extensions/flow-engine/result-parser.js";
 import { parseAgentFile, parseAgentString } from "pi-flows/extensions/flow-engine/agent-parser.js";
 import { parseFlowFile, parseFlowString } from "pi-flows/extensions/flow-engine/flow-parser.js";
+
+// Guard factory (for building custom guard extensions)
+import { createGuardExtension } from "pi-flows/extensions/flow-engine/guard.js";
+import type { GuardOptions } from "pi-flows/extensions/flow-engine/guard.js";
 
 // Types from flow-dashboard
 import type {
@@ -172,9 +183,11 @@ interface ForkStep {
   options: string[];
   branches: Record<string, string>;
   allowNotes?: boolean;
-  allowCustom?: boolean;
+  allowCustom?: boolean;    // @deprecated — use allowNotes instead
   multiSelect?: boolean;
-  decisionAgent?: string;
+  decisionAgent?: string;   // @deprecated — use agent field instead
+  agent?: string;           // Agent to use when auto-deciding (autonomous mode)
+  task?: string;            // Context/task for the agent when auto-deciding
 }
 
 interface ConditionalStep {
@@ -214,13 +227,13 @@ interface FlowRefStep {
 
 ### AgentResult
 
-Result from a single agent execution (subprocess).
+Result from a single agent execution (in-process SDK session).
 
 ```typescript
 interface AgentResult {
   success: boolean;             // Whether the agent completed successfully
-  output: string;               // Raw full output text
-  stderr: string;               // Subprocess stderr (diagnostics)
+  output: string;               // Raw full output text (last assistant message)
+  stderr: string;               // Session diagnostics (API errors, etc.)
   exitCode: number | null;      // Process exit code
   result: ParsedResult;         // Parsed from <result> envelope
   toolCalls: ToolCallRecord[];  // All tool calls made
@@ -254,6 +267,7 @@ interface FlowResult {
   flowName: string;
   stepCount: number;
   totalDuration: number;        // Wall-clock ms for entire flow
+  status?: "success" | "error" | "aborted"; // Overall flow outcome
 }
 ```
 
@@ -315,7 +329,7 @@ interface ToolCallRecord {
 
 ### SubagentEvent Types
 
-Event types for tracking agent subprocess activity.
+Event types for tracking agent session activity during flow execution.
 
 ```typescript
 type SubagentEventType = "started" | "complete" | "tool_call" | "tool_result";
@@ -488,24 +502,31 @@ function expandTemplateVariables(template: string, ctx: TemplateContext): string
 
 #### spawnAgent
 
-Spawn a pi subprocess to execute a single agent. Returns the full `AgentResult` including output, tool calls, tokens, and parsed result.
+Execute a single agent as an in-process SDK session. Returns the full `AgentResult` including output, tool calls, tokens, and parsed result.
+
+Agents no longer run as separate subprocesses — they run as in-process `createAgentSession()` calls from the pi-coding-agent SDK. The `authStorage` and `modelRegistry` needed to make model API calls are captured from the main session's `session_start` event (see [Capturing Session Context](#capturing-session-context)).
 
 ```typescript
+import type { AuthStorage, ModelRegistry, ExtensionFactory } from "@mariozechner/pi-coding-agent";
+
 interface SpawnOptions {
   agent: AgentConfig;
   task: string;
   templateContext: TemplateContext;
-  skillContents?: Map<string, string>;
-  contextFileContents?: string[];
+  skillContents?: Map<string, string>;      // Pre-loaded skill content to prepend to prompt
+  contextFileContents?: string[];           // Pre-loaded context file strings
   getModelRole?: (role: string) => string | undefined;
   cwd: string;
-  guardExtPath: string;
+  authStorage?: AuthStorage;               // From session_start capture (required for model calls)
+  modelRegistry?: ModelRegistry;           // From session_start capture (required for model lookup)
+  extraGuardFactories?: ExtensionFactory[]; // Additional guard factories beyond the built-in one
+  extraCustomTools?: any[];                 // Extra tool definitions passed as customTools to the session
   onToolCall?: (toolName: string, input: any) => void;
   onToolResult?: (toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (text: string) => void;
   onThinkingText?: (text: string) => void;
-  decisionBranches?: string[];
-  allowSubagent?: boolean;
+  onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void;
+  decisionBranches?: string[];              // Branch names for agent-decision steps
   signal?: AbortSignal;
 }
 
@@ -521,7 +542,9 @@ interface FlowRunOptions {
   flow: FlowConfig;
   task: string;
   cwd: string;
-  guardExtPath: string;
+  authStorage?: any;                   // From session_start capture
+  modelRegistry?: any;                 // From session_start capture
+  extraGuardFactories?: any[];         // Additional ExtensionFactory instances
   getModelRole?: (role: string) => string | undefined;
   getAgent: (name: string) => AgentConfig | undefined;
   getSkillContent?: (name: string) => string | undefined;
@@ -534,7 +557,10 @@ interface FlowRunOptions {
   onToolResult?: (agentName: string, toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (agentName: string, text: string) => void;
   onThinkingText?: (agentName: string, text: string) => void;
+  onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void) => void;
   onLoopIteration?: (stepId: string, iteration: number, maxIterations: number) => void;
+  isAutonomous?: () => boolean;        // If true, fork steps auto-decide via agent
+  onAutoDecision?: (forkId: string, agentName: string, chosenBranch: string, targetStepId: string) => void;
   signal?: AbortSignal;
 }
 
@@ -563,10 +589,13 @@ function discoverAll(
 
 #### resolvePackageRoot
 
-Resolve the pi-flows package root directory.
+Resolve a package root directory from `import.meta.url`. Goes up two levels from the calling file's directory (e.g., `extensions/my-ext/index.ts` → `my-pkg/`).
 
 ```typescript
-function resolvePackageRoot(): string
+function resolvePackageRoot(importMetaUrl: string): string
+
+// Usage in your extension:
+const pkgRoot = resolvePackageRoot(import.meta.url);
 ```
 
 ### Model Resolution
@@ -605,3 +634,153 @@ Check whether a specific element exists inside a raw `<artifacts>` XML string. U
 ```typescript
 function hasArtifactElement(artifacts: string, elementPath: string): boolean
 ```
+
+---
+
+## Guard Extension API
+
+The guard extension is the sandboxing layer injected into every agent session. It enforces tool whitelists, access rules, and the `finish` requirement.
+
+### createGuardExtension
+
+Creates an `ExtensionFactory` that sandboxes an agent session. Used internally by `spawnAgent()` but also exported for advanced use cases where you need to spawn agents directly outside the flow engine.
+
+```typescript
+import { createGuardExtension } from "pi-flows/extensions/flow-engine/guard.js";
+import type { GuardOptions } from "pi-flows/extensions/flow-engine/guard.js";
+
+const factory = createGuardExtension({
+  allowedTools: ["read", "grep", "finish"],
+  requireFinish: true,
+  accessRules: {
+    read: ["src/**", "docs/**"],
+    write: ["src/**"],
+    bash: { deny: ["rm -rf", "curl"] },
+  },
+});
+```
+
+The returned `ExtensionFactory` is a `(pi: ExtensionAPI) => void` function that wires the guard logic into the session via `pi.on("tool_call", ...)` and `pi.registerTool(...)`.
+
+### GuardOptions
+
+```typescript
+interface GuardOptions {
+  allowedTools?: string[];      // Whitelist of allowed tool names (finish always implicitly allowed)
+  requireFinish?: boolean;      // Register the finish tool and block post-finish calls
+  accessRules?: AccessRules;    // File read/write/bash path restrictions
+  decisionBranches?: string[];  // Add branch parameter to finish for agent-decision steps
+  allowAskUser?: boolean;       // Allow ask_user tool calls (default: false — agents must decide autonomously)
+}
+```
+
+When `decisionBranches` is set, the `finish` tool gains a required `branch` parameter constrained to one of the listed values. This is how `agent-decision` and `agent-loop-decision` steps enforce routing.
+
+---
+
+## SDK Integration Details
+
+This section documents how pi-flows uses the pi-coding-agent SDK internally to run agents as in-process sessions. This is relevant if you are calling `spawnAgent()` or `runFlow()` directly from your own code.
+
+### In-Process Session Model
+
+Agents no longer run as separate `pi` subprocesses. Instead, `spawnAgent()` creates an in-process SDK session using `createAgentSession()` from `@mariozechner/pi-coding-agent`:
+
+```typescript
+import {
+  createAgentSession,
+  SessionManager,
+  createExtensionRuntime,
+  createEventBus,
+} from "@mariozechner/pi-coding-agent";
+
+// Internally, spawnAgent() does:
+const { session } = await createAgentSession({
+  model,                          // Resolved Model object (from modelRegistry or getModel)
+  thinkingLevel: thinking,        // "high" | "medium" | "low" | "off" | undefined
+  tools,                          // SDK tool instances from TOOL_FACTORIES
+  customTools: extraCustomTools,  // Extra tool definitions (architect tools, etc.)
+  resourceLoader,                 // Provides guard extensions + appended system prompt
+  sessionManager: SessionManager.inMemory(),
+  authStorage,
+  modelRegistry,
+  cwd,
+});
+
+await session.bindExtensions({ uiContext });
+await session.prompt(userMessage, { expandPromptTemplates: false });
+```
+
+The guard extensions are passed via a `ResourceLoader` object:
+
+```typescript
+const resourceLoader: ResourceLoader = {
+  getExtensions: () => ({ extensions, errors: [], runtime }),
+  getAppendSystemPrompt: () => [capturedSystemPrompt],
+  // ... other no-op methods
+};
+```
+
+> **Why `getAppendSystemPrompt` and not `getSystemPrompt`?** Using `getSystemPrompt` would replace the SDK's default system prompt (which includes tool descriptions and guidelines). `getAppendSystemPrompt` appends the agent-specific system prompt *after* the SDK builds its default prompt, so the agent gets both tool descriptions and its custom instructions.
+
+Guard factories (`ExtensionFactory[]`) are converted to Extension objects via an internal `buildExtensionFromFactory()` helper, which constructs a minimal `ExtensionAPI` shim and runs the factory against it. This is necessary because the SDK's `loadExtensionFromFactory` is not exported from the top-level package path.
+
+### Capturing Session Context
+
+`spawnAgent()` requires `authStorage` and `modelRegistry` to resolve and call models. These are available from the pi session context, captured in the main session's `activate()` function:
+
+```typescript
+export default function activate(pi: ExtensionAPI) {
+  let authStorage: any;
+  let modelRegistry: any;
+
+  // Capture auth + registry from the live session
+  pi.on("session_start", (_event: any, ctx: any) => {
+    if (ctx.modelRegistry) {
+      modelRegistry = ctx.modelRegistry;
+      authStorage = (ctx.modelRegistry as any).authStorage;
+    }
+  });
+
+  // Pass them along when spawning agents directly:
+  const result = await spawnAgent({
+    agent,
+    task,
+    templateContext,
+    cwd: process.cwd(),
+    authStorage,
+    modelRegistry,
+    // ...
+  });
+}
+```
+
+Alternatively, use the `flow:get-spawn-context` query event to retrieve the captured values from pi-flows itself (useful when the values are captured by pi-flows but your extension needs them):
+
+```typescript
+const spawnCtx: any = {};
+pi.events.emit("flow:get-spawn-context", spawnCtx);
+const { authStorage, modelRegistry, extraGuardFactories } = spawnCtx;
+```
+
+See [events-api.md](events-api.md#flowget-spawn-context) for details on this query event.
+
+### Tool Factory Map
+
+`spawnAgent()` instantiates the agent's declared tools by mapping tool names to SDK factory functions:
+
+```typescript
+const TOOL_FACTORIES: Record<string, (cwd: string) => any> = {
+  read:  createReadTool,
+  bash:  createBashTool,
+  edit:  createEditTool,
+  write: createWriteTool,
+  grep:  createGrepTool,
+  find:  createFindTool,
+  ls:    createLsTool,
+};
+```
+
+Any tool name in the agent's `tools:` frontmatter that is not in this map is silently ignored (e.g., `skill_read`, `ask_user` — those are provided via extensions, not SDK tool factories).
+
+The `finish` tool is not in the factory map. It is injected exclusively by the guard extension (`createGuardExtension({ requireFinish: true })`), which registers it as a proper tool with TypeBox schema validation.

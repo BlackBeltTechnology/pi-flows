@@ -24,7 +24,8 @@ const segmentInvalidators = new Map<string, () => void>();
 // ---- Context usage helpers -------------------------------------------------
 
 function buildBar(percent: number): string {
-  const filled = Math.round((percent / 100) * 10);
+  const clamped = Math.max(0, Math.min(100, percent));
+  const filled = Math.round((clamped / 100) * 10);
   return "▓".repeat(filled) + "░".repeat(10 - filled);
 }
 

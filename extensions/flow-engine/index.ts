@@ -1,4 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { Container, type SelectItem, Spacer, Text } from "@mariozechner/pi-tui";
 import type {
   AgentConfig,
   FlowConfig,
@@ -6,7 +8,7 @@ import type {
   FlowResult,
 } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
-import { getModelRole } from "../provider-register.js";
+import { getModelRole, isAutonomousMode, setAutonomousMode } from "../provider-register.js";
 import { getSummaryState, setSummaryState } from "../flow-summary/index.js";
 import { registerSubagentTool } from "./tool.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
@@ -21,11 +23,14 @@ import { registerAgentWriteTool } from "./tools/agent-write.js";
 import { registerFlowValidateTool } from "./tools/flow-validate.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { registerFlowPreviewTool } from "./tools/flow-preview.js";
-import { readFileSync, existsSync } from "node:fs";
+import { FlowCancelledError } from "./flow-execution.js";
+import { CheckboxSelectList } from "../shared/checkbox-select-list.js";
+import { readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { GridComponent } from "../flow-dashboard/grid-component.js";
 import { createAgentDetailOverlay } from "../flow-dashboard/agent-detail-overlay.js";
+import { setFlowWidget } from "../shared/flow-widget.js";
 
 // Re-export public API
 export type {
@@ -39,7 +44,7 @@ export type {
   CardConfig,
 } from "./types.js";
 export { spawnAgent, expandTemplateVariables } from "./execution.js";
-export { runFlow } from "./flow-execution.js";
+export { runFlow, FlowCancelledError } from "./flow-execution.js";
 export type { FlowRunOptions, FlowContext } from "./flow-execution.js";
 export { discoverAll, resolvePackageRoot } from "./discovery.js";
 export { resolveModel } from "./model-roles.js";
@@ -52,6 +57,107 @@ let flows = new Map<string, FlowConfig>();
 let packageRoot = "";
 const extraAgentsDirs: string[] = [];
 const extraFlowsDirs: string[] = [];
+const extraGuardFactories: any[] = []; // ExtensionFactory[]
+const registeredExtensionTools: any[] = []; // Extension-registered tools for flow agent sessions
+
+// ---- Ask-user bridge queue ------------------------------------------------
+// Queues extension_ui_request events from parallel subagents and dispatches
+// them one at a time to the main session UI.
+
+interface AskUserQueueEntry {
+  requestId: string;
+  agentName: string;
+  request: any;                 // The extension_ui_request event
+  respond: (response: any) => void;  // Writes extension_ui_response to child stdin
+}
+
+class AskUserQueue {
+  private queue: AskUserQueueEntry[] = [];
+  private processing = false;
+  private ui: any = null;
+  private isOverlayOpen: () => boolean = () => false;
+  private aborted = false;
+
+  setUI(ui: any, isOverlayOpen: () => boolean) {
+    this.ui = ui;
+    this.isOverlayOpen = isOverlayOpen;
+  }
+
+  enqueue(entry: AskUserQueueEntry) {
+    if (this.aborted) {
+      entry.respond({ id: entry.requestId, cancelled: true });
+      return;
+    }
+    this.queue.push(entry);
+    this.processNext();
+  }
+
+  cancelAll() {
+    this.aborted = true;
+    for (const entry of this.queue) {
+      entry.respond({ id: entry.requestId, cancelled: true });
+    }
+    this.queue = [];
+  }
+
+  reset() {
+    this.queue = [];
+    this.processing = false;
+    this.aborted = false;
+  }
+
+  get pendingCount(): number {
+    return this.queue.length;
+  }
+
+  private async processNext() {
+    if (this.processing || this.queue.length === 0 || !this.ui) return;
+    this.processing = true;
+
+    while (this.queue.length > 0 && !this.aborted) {
+      // Wait for any open overlay to close
+      while (this.isOverlayOpen()) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      const entry = this.queue.shift()!;
+      const { request, respond, agentName, requestId } = entry;
+      const method = request.method;
+      const pendingHint = this.queue.length > 0 ? ` (${this.queue.length} more pending)` : "";
+      const decoratedTitle = `🤖 ${agentName} asks: ${request.title || request.message || ""}${pendingHint}`;
+
+      try {
+        if (method === "select") {
+          const answer = await this.ui.select(decoratedTitle, request.options || []);
+          if (answer === undefined) {
+            respond({ id: requestId, cancelled: true });
+          } else {
+            respond({ id: requestId, value: answer });
+          }
+        } else if (method === "confirm") {
+          const answer = await this.ui.confirm(decoratedTitle, request.message || "");
+          respond({ id: requestId, confirmed: answer });
+        } else if (method === "input") {
+          const answer = await this.ui.input(decoratedTitle, request.placeholder || "");
+          if (answer === undefined) {
+            respond({ id: requestId, cancelled: true });
+          } else {
+            respond({ id: requestId, value: answer });
+          }
+        } else {
+          // Unsupported method — cancel so child doesn't hang
+          respond({ id: requestId, cancelled: true });
+        }
+      } catch {
+        respond({ id: requestId, cancelled: true });
+      }
+    }
+
+    this.processing = false;
+  }
+}
+
+const askUserQueue = new AskUserQueue();
 
 /** Collect all agent names referenced by a flow (agent steps). */
 export function extractAgentNames(flow: FlowConfig): string[] {
@@ -121,10 +227,11 @@ interface ActiveFlow {
 interface FlowManagerDeps {
   pi: ExtensionAPI;
   getAgents: () => Map<string, AgentConfig>;
-  getGuardExtPath: () => string;
   getModelRole: () => ((role: string) => string | undefined) | undefined;
   getProjectRoot: () => string;
   getPkgRoot: () => string;
+  getAuthStorage?: () => any;
+  getModelRegistry?: () => any;
   extractAgentConfigs: (flow: FlowConfig) => AgentConfig[];
   buildAgentDeps: (flow: FlowConfig) => Map<string, string[]>;
   wireDashboard: (dashboard: any, ui: any) => () => void;
@@ -149,6 +256,7 @@ class FlowManager {
   }
 
   abort(): void {
+    askUserQueue.cancelAll();
     this._activeFlow?.abortController.abort();
   }
 
@@ -166,7 +274,11 @@ class FlowManager {
 
     const { flow, flowName, task, ui, dashboard, renderDashboard } = options;
     const abortController = new AbortController();
-    const { pi, getAgents, getGuardExtPath, getModelRole, getProjectRoot, getPkgRoot } = this.deps;
+    const { pi, getAgents, getModelRole, getProjectRoot, getPkgRoot } = this.deps;
+
+    // Set up ask-user queue for this flow
+    askUserQueue.reset();
+    askUserQueue.setUI(ui, this.deps.isOverlayOpen);
 
     // Dynamic import to avoid circular deps
     const { runFlow: runFlowFn } = await import("./flow-execution.js");
@@ -175,8 +287,17 @@ class FlowManager {
       flow,
       task,
       cwd: getProjectRoot(),
-      guardExtPath: getGuardExtPath(),
+      authStorage: this.deps.getAuthStorage?.(),
+      modelRegistry: this.deps.getModelRegistry?.(),
+      extraGuardFactories: [...extraGuardFactories],
+      extraCustomTools: [...registeredExtensionTools],
       signal: abortController.signal,
+      isAutonomous: () => isAutonomousMode(),
+      onAutoDecision: dashboard
+        ? (forkId, agentName, chosenBranch, targetStepId) => {
+            pi.events.emit("flow:auto-decision", { forkId, agentName, chosenBranch, targetStepId });
+          }
+        : undefined,
       getModelRole: (role) => getModelRole()?.(role),
       getAgent: (agentName) => getAgents().get(agentName),
       getSkillContent: (skillName) => {
@@ -195,44 +316,159 @@ class FlowManager {
             while (this.deps.isOverlayOpen()) {
               await new Promise(resolve => setTimeout(resolve, 100));
             }
+
+            const signal = abortController.signal;
+
+            // ── Multi-select: checkbox overlay ──
             if (extra?.multiSelect && askOptions) {
+              if (ui.custom) {
+                const selected: string[] = await ui.custom((tui: any, t: any, _kb: any, done: (val: string[]) => void) => {
+                    const checkboxItems: SelectItem[] = askOptions.map((opt) => ({
+                      value: opt,
+                      label: opt,
+                    }));
+                    const checkbox = new CheckboxSelectList(checkboxItems, Math.min(checkboxItems.length, 12), {
+                      selectedPrefix: (text: string) => t.fg("accent", text),
+                      selectedText: (text: string) => t.fg("accent", text),
+                      description: (text: string) => t.fg("muted", text),
+                      scrollInfo: (text: string) => t.fg("dim", text),
+                      noMatch: (text: string) => t.fg("warning", text),
+                    });
+                    checkbox.onConfirm = (items: SelectItem[]) => done(items.map((s) => s.value));
+                    checkbox.onCancel = () => done([]);
+
+                    // Dismiss on abort signal (Ctrl+X)
+                    const onAbort = () => done([]);
+                    signal.addEventListener("abort", onAbort, { once: true });
+
+                    const container = new Container();
+                    container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
+                    container.addChild(new Text(t.fg("accent", ` ${question}`), 0, 0));
+                    container.addChild(new Spacer(1));
+                    container.addChild(checkbox as any);
+                    container.addChild(new Spacer(1));
+                    container.addChild(new Text(t.fg("dim", " Space: toggle  Enter: confirm  Esc: cancel"), 0, 0));
+                    container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
+
+                    return {
+                      render: (w: number) => container.render(w),
+                      invalidate: () => container.invalidate(),
+                      handleInput: (data: string) => {
+                        checkbox.handleInput(data);
+                        tui.requestRender();
+                      },
+                    };
+                  });
+                if (!selected || selected.length === 0) throw new FlowCancelledError();
+                return { answer: selected as any };
+              }
+              // Fallback: per-option confirm if ui.custom not available
               const selected: string[] = [];
               for (const opt of askOptions) {
                 const yes = await ui.confirm(
                   `${question}\n  Include "${opt}"?`,
                   "",
+                  { signal },
                 );
                 if (yes) selected.push(opt);
               }
               return { answer: selected as any };
             }
+
+            // ── Select ──
             if (type === "select" && askOptions) {
-              const answer = await ui.select(question, askOptions);
-              return { answer: answer || askOptions[0] };
+              const options = [...askOptions];
+              if (extra?.allowCustom) options.push("Other (describe)");
+
+              // Add auto-decide option if fork has an agent for autonomous mode
+              const AUTO_DECIDE_OPTION = "🤖 Auto-decide (let AI choose)";
+              if (extra?.hasAutoAgent && !isAutonomousMode()) {
+                options.push(AUTO_DECIDE_OPTION);
+              }
+
+              // Append branch targets to option labels for transparency
+              const branches = extra?.branches as Record<string, string> | undefined;
+              const displayOptions = branches
+                ? options.map(opt => {
+                    const target = branches[opt];
+                    return target ? `${opt} → ${target}` : opt;
+                  })
+                : options;
+
+              const answer = await ui.select(question, displayOptions, { signal });
+              if (answer === undefined) throw new FlowCancelledError();
+
+              // Strip branch target suffix to get the real option value
+              let finalAnswer = answer;
+              if (branches) {
+                // Find original option name by stripping " → target" suffix
+                const originalOpt = options.find(opt => {
+                  const target = branches[opt];
+                  return target ? `${opt} → ${target}` === answer : opt === answer;
+                });
+                if (originalOpt) finalAnswer = originalOpt;
+              }
+
+              // Handle auto-decide: enable autonomous mode and return special signal
+              if (finalAnswer === AUTO_DECIDE_OPTION) {
+                setAutonomousMode(true);
+                return { answer: "__auto_decide__" };
+              }
+
+              // Handle "Other (describe)" custom freetext
+              if (extra?.allowCustom && finalAnswer === "Other (describe)") {
+                const custom = await ui.input("Describe:", "", { signal });
+                if (custom === undefined) throw new FlowCancelledError();
+                finalAnswer = custom;
+              }
+
+              // Handle allowNotes
+              let notes: string | undefined;
+              if (extra?.allowNotes) {
+                const notesInput = await ui.input("Optional notes (press Enter to skip):", "", { signal });
+                if (notesInput === undefined) throw new FlowCancelledError();
+                if (notesInput && notesInput.trim()) notes = notesInput.trim();
+              }
+
+              const result = notes !== undefined ? { answer: finalAnswer, notes } : { answer: finalAnswer };
+              return result;
             }
+
+            // ── Confirm ──
             if (type === "confirm") {
-              const answer = await ui.confirm(question, "");
+              const answer = await ui.confirm(question, "", { signal });
               return { answer: answer ? "yes" : "no" };
             }
-            const answer = await ui.input(question, "");
+
+            // ── Input (freetext) ──
+            const answer = await ui.input(question, "", { signal });
+            if (answer === undefined) throw new FlowCancelledError();
             return { answer: answer || "" };
           }
         : async (_question: string, _type: string, askOptions?: string[]) => {
             return { answer: askOptions?.[0] || "" };
           },
-      onAgentStarted: dashboard
-        ? (agentName: string) => {
+      onAgentStarted: (agentName: string) => {
+          if (dashboard) {
             const config = getAgents().get(agentName);
             dashboard.onAgentStarted(agentName, config);
             renderDashboard!();
           }
-        : undefined,
+        },
       onAgentComplete: dashboard
         ? (agentName: string, _stepId: string, result: any) => {
             dashboard.onAgentComplete(agentName, result);
             renderDashboard!();
           }
         : undefined,
+      onExtensionUIRequest: (agentName: string, request: any, respond: (response: any) => void) => {
+        askUserQueue.enqueue({
+          requestId: request.id,
+          agentName,
+          request,
+          respond,
+        });
+      },
       onToolCall: (agentName: string, toolName: string, input: any) => {
         pi.events.emit("flow:subagent-tool-call", {
           agentName,
@@ -311,11 +547,32 @@ class FlowManager {
       .catch((err: any) => {
         const wasAborted = abortController.signal.aborted;
         safeCleanup();
+        const errMsg = err instanceof Error ? err.message : String(err);
         if (!wasAborted) {
           // Surface the error to the user — don't swallow silently
-          const msg = err instanceof Error ? err.message : String(err);
-          ui?.notify?.(`Flow "${flowName}" failed: ${msg}`, "error");
+          ui?.notify?.(`Flow "${flowName}" failed: ${errMsg}`, "error");
         }
+        // Emit flow:complete on failure/abort so listeners can clean up
+        const summaryMsg = wasAborted ? "Aborted by user" : errMsg;
+        const errorResult: FlowResult = {
+          lastResult: {
+            success: false,
+            output: "",
+            stderr: "",
+            exitCode: null,
+            result: { status: "error", files: [], summary: summaryMsg, artifacts: "" },
+            toolCalls: [],
+            duration: 0,
+            tokens: { input: 0, output: 0 },
+          },
+          results: {},
+          forks: {},
+          flowName,
+          stepCount: 0,
+          totalDuration: 0,
+          status: wasAborted ? "aborted" : "error",
+        };
+        pi.events.emit("flow:complete", errorResult);
       });
   }
 }
@@ -330,9 +587,19 @@ export function activate(pi: ExtensionAPI) {
   // Initial discovery
   init(pkgRoot, projectRoot);
 
-  const guardExtPath = join(pkgRoot, "extensions", "flow-engine", "guard.ts");
+  // Crash recovery: clean up orphaned staging directory from previous session
+  {
+    const stagingDir = join(projectRoot, ".pi", "flows", ".staging");
+    if (existsSync(stagingDir)) {
+      try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
 
   // getModelRole is imported at top level — shared module instance via single entry point.
+
+  // Track authStorage and modelRegistry from session context
+  let sessionAuthStorage: any = undefined;
+  let sessionModelRegistry: any = undefined;
 
   // ── Interactive state ──
   let dashboardVisible = false;
@@ -355,6 +622,11 @@ export function activate(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event: any, ctx: any) => {
     uiCtx = ctx.ui;
+    // Capture modelRegistry from session context; authStorage lives on modelRegistry
+    if (ctx.modelRegistry) {
+      sessionModelRegistry = ctx.modelRegistry;
+      sessionAuthStorage = (ctx.modelRegistry as any).authStorage;
+    }
     if (ctx.hasUI) {
       // Print help once at session start, not as a persistent widget
       const lines = [
@@ -364,6 +636,7 @@ export function activate(pi: ExtensionAPI) {
         "  /flows:delete       Delete a flow",
         "  /provider           Manage LLM providers",
         "  /roles              Assign model roles",
+        "  /catalog            Manage model catalog",
         "",
       ];
       pi.sendMessage({
@@ -381,6 +654,12 @@ export function activate(pi: ExtensionAPI) {
   pi.events?.on("flow:complete", async (data: unknown) => {
     lastFlowResult = data as FlowResult;
     summaryVisible = true;
+    // Ensure dashboard widget is removed (safety net if cleanup missed it)
+    if (dashboardVisible || activeDashboard) {
+      if (uiCtx) setFlowWidget(uiCtx, "flow-dashboard", undefined);
+      dashboardVisible = false;
+      activeDashboard = null;
+    }
     // Share tool history and preserved cards with summary widget
     pi.events.emit("flow:set-summary-context", {
       toolHistory: lastToolHistory,
@@ -399,6 +678,7 @@ export function activate(pi: ExtensionAPI) {
   const KEY_BACKSPACE_1 = "\x7f";
   const KEY_BACKSPACE_2 = "\b";
   const KEY_CTRL_X = "\x18";
+  const KEY_CTRL_A = "\x01";
 
   function requestRender() {
     tui?.requestRender();
@@ -451,6 +731,12 @@ export function activate(pi: ExtensionAPI) {
     // Skip input handling while an overlay is open (overlay handles its own keys)
     if (overlayOpen) return undefined;
 
+    // ── Ctrl+X: always abort if a flow is running (even without dashboard focus) ──
+    if (data === KEY_CTRL_X && flowManager.isRunning) {
+      flowManager.abort();
+      return { consume: true };
+    }
+
     // ── Dashboard widget active (during flow) ──
     if (dashboardVisible && activeDashboard) {
       const db = activeDashboard;
@@ -465,6 +751,11 @@ export function activate(pi: ExtensionAPI) {
         }
         if (data === KEY_CTRL_X) {
           flowManager.abort();
+          return { consume: true };
+        }
+        if (data === KEY_CTRL_A) {
+          setAutonomousMode(!isAutonomousMode());
+          requestRender();
           return { consume: true };
         }
         return undefined;
@@ -529,7 +820,7 @@ export function activate(pi: ExtensionAPI) {
       }
       if (data === KEY_CTRL_X) {
         // Dismiss the summary widget entirely
-        uiCtx?.setWidget?.("flow-summary", undefined);
+        if (uiCtx) setFlowWidget(uiCtx, "flow-summary", undefined);
         summaryVisible = false;
         setSummaryState(null);
         requestRender();
@@ -610,8 +901,10 @@ export function activate(pi: ExtensionAPI) {
     activeDashboard = null;
     dashboardVisible = false;
     if (lastWiredUi) {
-      lastWiredUi.setWidget("flow-dashboard", undefined);
+      setFlowWidget(lastWiredUi, "flow-dashboard", undefined);
       lastWiredUi = null;
+      // Force a full re-render so differential rendering doesn't leave stale header lines
+      tui?.requestRender(true);
     }
   });
 
@@ -648,9 +941,52 @@ export function activate(pi: ExtensionAPI) {
     }
   });
 
+  // Unregister directory events — used for staging cleanup
+  pi.events?.on("flow:unregister-agents-dir", (data) => {
+    const dir = (data as { dir: string }).dir;
+    const idx = extraAgentsDirs.indexOf(dir);
+    if (idx !== -1) {
+      extraAgentsDirs.splice(idx, 1);
+      init(pkgRoot, projectRoot);
+    }
+  });
+
+  pi.events?.on("flow:unregister-flows-dir", (data) => {
+    const dir = (data as { dir: string }).dir;
+    const idx = extraFlowsDirs.indexOf(dir);
+    if (idx !== -1) {
+      extraFlowsDirs.splice(idx, 1);
+      init(pkgRoot, projectRoot);
+    }
+  });
+
   pi.events?.on("flow:register-skills-dir", (data) => {
     const dir = (data as { dir: string }).dir;
     if (dir) registerExtraSkillsDir(dir);
+  });
+
+  // Guard extension registration: dependent packages register additional
+  // guard extensions that are loaded into spawned subagent sessions.
+  // Accepts { factory: ExtensionFactory } or { path: string } (backward compat).
+  pi.events?.on("flow:register-guard-extension", (data) => {
+    const entry = data as { factory?: any; path?: string };
+    if (entry.factory) {
+      extraGuardFactories.push(entry.factory);
+    } else if (entry.path) {
+      // Backward compat: wrap path-based registration as a factory
+      const filePath = entry.path;
+      const factory = async (piApi: any) => {
+        const mod = await import(filePath);
+        if (mod.default) mod.default(piApi);
+      };
+      extraGuardFactories.push(factory);
+    }
+  });
+
+  // Register autonomous mode footer segment
+  pi.events?.emit("flow:register-footer-segment", {
+    name: "autonomous-mode",
+    render: () => isAutonomousMode() ? "🤖 auto" : null,
   });
 
   // Register tools
@@ -658,20 +994,33 @@ export function activate(pi: ExtensionAPI) {
     pi,
     () => agents,
     (role) => getModelRole(role),
-    guardExtPath,
     projectRoot,
+    () => sessionAuthStorage,
+    () => sessionModelRegistry,
+    () => [...extraGuardFactories],
   );
 
   registerAskUserTool(pi);
   registerSkillReadTool(pi, pkgRoot);
 
-  // Architect tools — used by flow-architect agent during flow design
-  registerAgentCatalogTool(pi, () => agents);
-  registerAgentValidateTool(pi);
-  registerAgentWriteTool(pi);
-  registerFlowValidateTool(pi, () => agents);
-  registerFlowWriteTool(pi, () => agents);
-  registerFlowPreviewTool(pi, () => agents);
+  // Architect tools — used by flow-architect agent during flow design.
+  // We capture the tool definitions so they can be passed to architect subagent sessions
+  // as customTools (since extension tools aren't available in SDK subagent sessions).
+  const architectToolDefs: any[] = [];
+  // Extension-registered tools populated via flow:register-tool events (module-level array)
+  const capturingPi = {
+    ...pi,
+    registerTool: (tool: any) => {
+      architectToolDefs.push(tool);
+      pi.registerTool(tool);
+    },
+  };
+  registerAgentCatalogTool(capturingPi as any, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
+  registerAgentValidateTool(capturingPi as any);
+  registerAgentWriteTool(capturingPi as any);
+  registerFlowValidateTool(capturingPi as any, () => agents);
+  registerFlowWriteTool(capturingPi as any, () => agents);
+  registerFlowPreviewTool(capturingPi as any, () => agents);
 
   /** Collect AgentConfig objects for all agents referenced by a flow. */
   function extractAgentConfigs(flow: FlowConfig): AgentConfig[] {
@@ -704,7 +1053,6 @@ export function activate(pi: ExtensionAPI) {
 
   /** Wire a dashboard to setWidget using the factory pattern. */
   function wireDashboard(dashboard: any, ui: any) {
-    ui.setWidget("flow-summary", undefined);
     summaryVisible = false;
     activeDashboard = dashboard;
     dashboardVisible = true;
@@ -712,20 +1060,30 @@ export function activate(pi: ExtensionAPI) {
     // Create a stable component once — avoid recreation on every spinner tick
     let tuiRef: any = null;
     let themeRef: any = null;
+    let disposed = false;
     const component = {
       render(width: number): string[] {
+        if (disposed) return [];
         const lines = dashboard.render(width, themeRef);
-        // Prepend ANSI reset to prevent background bleed from conversation tool output
-        if (lines.length > 0) lines[0] = "\x1b[0m" + lines[0];
+        // Prepend ANSI reset to every line to prevent background bleed from conversation tool output
+        for (let i = 0; i < lines.length; i++) {
+          lines[i] = "\x1b[0m" + lines[i];
+        }
         return lines;
       },
       invalidate() {
-        dashboard.invalidate();
+        if (!disposed) dashboard.invalidate();
+      },
+      dispose() {
+        disposed = true;
+        tuiRef = null;
+        themeRef = null;
       },
     };
 
-    // Register widget once — factory captures tui/theme refs on first call
-    ui.setWidget(
+    // Register widget — clears all other flow widgets automatically
+    setFlowWidget(
+      ui,
       "flow-dashboard",
       (tuiInstance: any, theme: any) => {
         tuiRef = tuiInstance;
@@ -733,13 +1091,23 @@ export function activate(pi: ExtensionAPI) {
         themeRef = theme; // store for overlay rendering
         return component;
       },
-      { placement: "aboveEditor" },
     );
+
+    // Force full re-render to clear stale lines from any previous widget
+    // (e.g., architect widget's Flow Preview box). nextTick ensures tuiRef is set.
+    process.nextTick(() => { tuiRef?.requestRender(true); });
 
     // Spinner callback: invalidate + request render (no setWidget recreation)
     const update = () => {
+      if (disposed) return;
       component.invalidate();
-      tuiRef?.requestRender();
+      // Force full TUI re-render when grid structure changed (new unpreloaded agent)
+      if (dashboard.forceNextRender) {
+        dashboard.forceNextRender = false;
+        tuiRef?.requestRender(true);
+      } else {
+        tuiRef?.requestRender();
+      }
     };
     dashboard.setUpdateCallback(update);
     return update;
@@ -749,22 +1117,26 @@ export function activate(pi: ExtensionAPI) {
   flowManager = new FlowManager({
     pi,
     getAgents: () => agents,
-    getGuardExtPath: () => guardExtPath,
     getModelRole: () => getModelRole,
     getProjectRoot: () => projectRoot,
     getPkgRoot: () => pkgRoot,
+    getAuthStorage: () => sessionAuthStorage,
+    getModelRegistry: () => sessionModelRegistry,
     extractAgentConfigs,
     buildAgentDeps,
     wireDashboard,
     isOverlayOpen: () => overlayOpen,
     onFlowCleanup: (activeFlow: ActiveFlow) => {
+      askUserQueue.reset();
       if (activeFlow.dashboard) {
         lastToolHistory = new Map(activeFlow.dashboard.getAllToolHistory());
         lastCards = new Map(activeFlow.dashboard.getAllCards());
         activeFlow.dashboard.dispose();
-        activeFlow.ui?.setWidget("flow-dashboard", undefined);
+        if (activeFlow.ui) setFlowWidget(activeFlow.ui, "flow-dashboard", undefined);
         dashboardVisible = false;
         activeDashboard = null;
+        // Force a full re-render so differential rendering doesn't leave stale header lines
+        tui?.requestRender(true);
       }
     },
   });
@@ -789,6 +1161,15 @@ export function activate(pi: ExtensionAPI) {
         if (gateMsg) {
           ctx.ui.notify(gateMsg, "error");
           return;
+        }
+
+        // Prompt for task if required and no args provided
+        let task = args || "";
+        if (flow.task_required && !task.trim()) {
+          const prompt = flow.task_prompt || `Describe what you want ${name} to do:`;
+          const answer = await ctx.ui.input(prompt, "");
+          if (!answer?.trim()) return; // cancelled or empty — don't launch
+          task = answer.trim();
         }
 
         // Try to resolve a workflow dashboard for this flow
@@ -821,7 +1202,7 @@ export function activate(pi: ExtensionAPI) {
         await flowManager.start({
           flow,
           flowName: name,
-          task: args || "",
+          task,
           ui: ctx.ui,
           dashboard,
           renderDashboard,
@@ -907,5 +1288,27 @@ export function activate(pi: ExtensionAPI) {
 
   pi.events.on("flow:get-flows", (data: any) => {
     data.flows = flows;
+  });
+
+  // Provide architect tool definitions for subagent sessions (flow-workspace)
+  pi.events.on("flow:get-architect-tools", (data: any) => {
+    data.tools = architectToolDefs;
+  });
+
+  // Allow extensions to register custom tool definitions for use in flow agent sessions.
+  // Extensions emit: pi.events.emit("flow:register-tool", { tool: toolDefinition })
+  // Collected tools are passed as extraCustomTools to all spawnAgent() calls in flow-execution.ts,
+  // filtered to only agents that declare the tool name in their frontmatter tools: list.
+  pi.events.on("flow:register-tool", (data: any) => {
+    if (data?.tool) {
+      registeredExtensionTools.push(data.tool);
+    }
+  });
+
+  // Provide authStorage/modelRegistry for subagent sessions (flow-workspace)
+  pi.events.on("flow:get-spawn-context", (data: any) => {
+    data.authStorage = sessionAuthStorage;
+    data.modelRegistry = sessionModelRegistry;
+    data.extraGuardFactories = [...extraGuardFactories];
   });
 }

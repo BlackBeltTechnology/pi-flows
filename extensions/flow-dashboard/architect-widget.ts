@@ -41,8 +41,6 @@ function extractInputPreview(toolName: string, input: any): string {
       return (input.pattern || "").slice(0, 20);
     case "Bash": case "bash":
       return (input.command || "").slice(0, 20);
-    case "model_cli":
-      return (input.query || "").slice(0, 20);
     case "flow_write":
       return input.name || "";
     default:
@@ -131,7 +129,16 @@ function parseFlowSteps(content: string): { name: string; description: string; m
         }
         const taskMatch = line.match(/^task:\s*(.+)$/);
         if (taskMatch) {
-          last.task = taskMatch[1].trim();
+          const taskValue = taskMatch[1].trim();
+          if (taskValue === ">" || taskValue === "|") {
+            // YAML multi-line: collect subsequent indented lines
+            last.task = "";
+          } else {
+            last.task = taskValue;
+          }
+        } else if (last.task !== undefined && /^\s{2,}/.test(line) && !line.match(/^\w+:/)) {
+          // Continuation of a multi-line task value
+          last.task = last.task ? last.task + " " + line.trim() : line.trim();
         }
       }
     }
@@ -238,13 +245,22 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   setUpdateCallback(cb: () => void): void;
   onToolCall(toolName: string, input: any): void;
   onToolResult(toolName: string, output: any, isError: boolean): void;
+  setReady(): void;
   getFlowContent(): string | null;
   hasFlowContent(): boolean;
+  getEventLog(): any[];
   dispose(): void;
 } {
   const resolveAgentType = opts?.resolveAgentType;
   // Stash flow content for overlay — updated on flow_write/flow_preview
   let lastFlowContent: string | null = null;
+
+  // Catalog metadata — stored separately from state.agents to avoid cluttering the display
+  let catalogAgentTypes = new Map<string, "built-in" | "local">();
+  let catalogCount = 0;
+
+  // Event log for detail overlay (same shape as AgentDashboard event log)
+  const eventLog: Array<{ kind: string; toolName?: string; input?: any; output?: any; isError?: boolean; text?: string }> = [];
 
   const state: ArchitectState = {
     mode: "design",
@@ -298,6 +314,9 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   function onToolCall(toolName: string, input: any): void {
     startSpinner();
 
+    // Record in event log for detail overlay
+    eventLog.push({ kind: "tool", toolName, input, output: undefined, isError: false });
+
     // Track the most recent tool call for display (all tools, not just architect-specific)
     state.lastToolCall = { toolName, inputPreview: extractInputPreview(toolName, input) };
 
@@ -313,6 +332,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         // Check if this agent is already in the list
         const existing = state.agents.find((a) => a.name === name);
         if (existing) {
+          existing.type = "custom";  // agent_write always means custom
           existing.status = "creating";
           existing.statusText = "Writing frontmatter\u2026";
         } else {
@@ -350,16 +370,16 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           if (parsed.maxConcurrent) state.maxConcurrent = parsed.maxConcurrent;
           state.dagSteps = parsed.steps;
 
-          // Register any agents mentioned in the flow that aren't already tracked
-          // and mark source type on steps
-          const agentTypeMap = new Map(state.agents.map((a) => [a.name, a.type]));
+          // Register agents from flow steps — resolve source type from catalog metadata
           for (const step of parsed.steps) {
-            step.sourceType = agentTypeMap.get(step.id) || "built-in";
+            step.sourceType = catalogAgentTypes.get(step.id)
+              || state.agents.find((a) => a.name === step.id)?.type
+              || "built-in";
             if (!state.agents.find((a) => a.name === step.id)) {
               state.agents.push({
                 name: step.id,
-                type: "built-in",
-                status: "pending",
+                type: step.sourceType as "built-in" | "local" | "custom",
+                status: "done",
               });
             }
           }
@@ -376,6 +396,20 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           if (parsed.name) state.flowName = parsed.name;
           if (parsed.description) state.flowDescription = parsed.description;
           state.dagSteps = parsed.steps;
+
+          // Register agents from flow steps — resolve source type from catalog metadata
+          for (const step of parsed.steps) {
+            step.sourceType = catalogAgentTypes.get(step.id)
+              || state.agents.find((a) => a.name === step.id)?.type
+              || "built-in";
+            if (!state.agents.find((a) => a.name === step.id)) {
+              state.agents.push({
+                name: step.id,
+                type: step.sourceType as "built-in" | "local" | "custom",
+                status: "done",
+              });
+            }
+          }
         }
         // Transition to preview mode
         state.mode = "preview";
@@ -398,27 +432,32 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     output: any,
     isError: boolean,
   ): void {
+    // Update last tool entry in event log
+    for (let i = eventLog.length - 1; i >= 0; i--) {
+      if (eventLog[i].kind === "tool" && eventLog[i].output === undefined) {
+        eventLog[i].output = output;
+        eventLog[i].isError = isError;
+        break;
+      }
+    }
     switch (toolName) {
       case "agent_catalog": {
-        state.statusLeft = "";
-        // Populate agents from the catalog result, resolving source type
+        // Store catalog metadata for source type resolution — don't add to display list
         try {
           const catalog = typeof output === "string" ? JSON.parse(output) : output;
           if (Array.isArray(catalog)) {
+            catalogCount = catalog.length;
             for (const entry of catalog) {
-              if (entry.name && !state.agents.find((a) => a.name === entry.name)) {
+              if (entry.name) {
                 const agentType = resolveAgentType ? resolveAgentType(entry.name) : "built-in";
-                state.agents.push({
-                  name: entry.name,
-                  type: agentType,
-                  status: "done",
-                });
+                catalogAgentTypes.set(entry.name, agentType);
               }
             }
           }
         } catch {
           // Non-critical — catalog may be in unexpected format
         }
+        state.statusLeft = `Catalog: ${catalogCount} agents`;
         break;
       }
 
@@ -484,8 +523,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         if (isError) {
           state.previewApproval = "Preview failed";
         }
-        // Stop spinner since preview is now waiting for user action
-        stopSpinner();
+        // Keep spinner running — setReady() will stop it when the approval prompt is ready
         break;
 
       default:
@@ -642,8 +680,8 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
         // -- Status bar -------------------------------------------------------
         const left = state.statusLeft
-          ? " Status: " + state.statusLeft
-          : " Status: idle";
+          ? " " + state.statusLeft
+          : "";
         const right = state.statusRight || "";
         const separator = right ? " \u2502 " : "";
         const statusVis = left.length + separator.length + right.length;
@@ -658,8 +696,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
         // -- Keyboard hints ---------------------------------------------------
         {
-          const hints: string[] = ["Ctrl+X stop"];
-          if (lastFlowContent) hints.push("Ctrl+O inspect flow");
+          const hints: string[] = ["Ctrl+X stop", "Ctrl+O inspect"];
           const hintText = " " + hints.join(" \u00B7 ");
           const hintVis = hintText.length;
           lines.push(
@@ -687,12 +724,17 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
             bord("\u2500".repeat(Math.max(0, afterTitle)) + "\u2510"),
         );
 
-        // Header: flow name + description + metadata
+        // Header: flow name + description + metadata (spinner when still working)
         const flowLabel = state.flowName || "unnamed";
-        const nameStr = ` ${theme.fg("accent", flowLabel)}`;
-        const nameVis = 1 + flowLabel.length;
+        const spinnerActive = spinTimer !== null;
+        const namePrefix = spinnerActive
+          ? ` ${theme.fg("accent", SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length])} `
+          : " ";
+        const nameStr = `${namePrefix}${theme.fg("accent", flowLabel)}`;
+        // Visible length: space + (spinner + space if active) + flowLabel
+        const nameVisLen = spinnerActive ? (1 + 1 + 1 + flowLabel.length) : (1 + flowLabel.length);
         lines.push(
-          bord("\u2502") + nameStr + " ".repeat(Math.max(0, w - nameVis)) + bord("\u2502"),
+          bord("\u2502") + nameStr + " ".repeat(Math.max(0, w - nameVisLen)) + bord("\u2502"),
         );
 
         if (state.flowDescription) {
@@ -743,9 +785,8 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           for (let i = 0; i < visibleSteps.length; i++) {
             const step = visibleSteps[i];
             const num = `${i + 1}.`;
-            const typeTag = step.sourceType === "custom" ? "(custom)" : step.sourceType === "local" ? "(local)" : "(built-in)";
-            const stepHeader = ` ${num} ${theme.fg("accent", step.id)}  ${theme.fg("dim", typeTag)}`;
-            const stepHeaderVis = 1 + num.length + 1 + step.id.length + 2 + typeTag.length;
+            const stepHeader = ` ${num} ${theme.fg("accent", step.id)}`;
+            const stepHeaderVis = 1 + num.length + 1 + step.id.length;
             lines.push(
               bord("\u2502") + stepHeader + " ".repeat(Math.max(0, w - stepHeaderVis)) + bord("\u2502"),
             );
@@ -864,6 +905,12 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     onUpdate = null;
   }
 
+  function setReady(): void {
+    stopSpinner();
+    state.previewApproval = "";
+    invalidateFn?.();
+  }
+
   function getFlowContent(): string | null {
     return lastFlowContent;
   }
@@ -872,5 +919,19 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     return lastFlowContent !== null;
   }
 
-  return { factory, setUpdateCallback, onToolCall, onToolResult, getFlowContent, hasFlowContent, dispose };
+  function onAssistantText(text: string): void {
+    if (!text) return;
+    eventLog.push({ kind: "text", text });
+  }
+
+  function onThinkingText(text: string): void {
+    if (!text) return;
+    eventLog.push({ kind: "thinking", text });
+  }
+
+  function getEventLog(): any[] {
+    return eventLog;
+  }
+
+  return { factory, setUpdateCallback, onToolCall, onToolResult, setReady, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getEventLog, dispose };
 }

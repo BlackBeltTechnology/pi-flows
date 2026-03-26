@@ -41,33 +41,51 @@ A flow is a `.flow.md` file with YAML frontmatter and step sections.
 name: my-flow
 description: What this flow does
 max_concurrent: 3
+task_required: true
+task_prompt: "Describe what you want to accomplish:"
 ---
 ```
 
 - `name` (required): Unique flow identifier
 - `description` (required): Human-readable description
 - `max_concurrent` (optional): Maximum parallel agents (default: 3)
+- `task_required` (optional): When `true`, the command handler prompts the user for a task description if no command arguments are provided. The response becomes `{task}`. Use this when agents need to know what the user wants to accomplish.
+- `task_prompt` (optional): Custom prompt text shown when `task_required` triggers. Defaults to `"Describe what you want <name> to do:"`.
 
 ## Step Types
 
 Steps are defined as `##` headers in the body. Each step type has specific properties.
 
-### Agent Step: `## agent-name`
+### Agent Step: `## step-id`
 
-Dispatches a named agent. The header IS the agent name and step ID.
+Dispatches a named agent. The `## header` is the **step ID** — used for wiring (`blockedBy`, `{result.step-id}`), branching, and result storage. The `agent:` field (required) specifies which agent to dispatch.
 
 ```
 ## judo-backend-developer
+agent: judo-backend-developer
 task: Implement backend based on model changes
 blockedBy: judo-model-designer
 inputs:
   model_output: {result.judo-model-designer.summary}
-reads: proposal.md, tasks.md
-model: @coding
-output: output.md
 ```
 
+When the same agent needs to run multiple times with different tasks, give each step a unique ID:
+
+```
+## create-proposal
+agent: judo-proposal-writer
+task: MODE: Create. Create proposal.md from research.
+
+## revise-proposal
+agent: judo-proposal-writer
+task: MODE: Revise. Update existing proposal.md.
+```
+
+Wire dependencies and result references using the **step ID**, not the agent name:
+`blockedBy: create-proposal` and `{result.create-proposal.summary}`.
+
 Properties:
+- `agent` (required): Which agent to dispatch
 - `task`: Override the agent's task (template string)
 - `blockedBy`: Comma-separated step IDs that must complete first
 - `inputs`: Named inputs wired from template expressions (nested key:value block). Each key becomes `{input.KEY}` in the agent's system prompt.
@@ -94,7 +112,10 @@ allowCustom: true
 decisionAgent: intent-mapper
 ```
 
+- `allowNotes` (optional): After selecting an option, prompt the user for freetext notes. The notes are stored as `{fork.ID.notes}` and the answer as `{fork.ID.answer}`. When you use `allowNotes: true`, you MUST wire `{fork.ID.notes}` into the downstream branch step's task so the agent receives the user's input.
+- `allowCustom` (optional): Appends an "Other (describe)" option. If the user selects it and types freetext, a decision agent interprets the answer and routes to the closest branch.
 - `decisionAgent` (optional): Agent name to interpret custom freetext answers. Defaults to built-in `flow-decision` agent if omitted.
+- `multiSelect` (optional): Allow the user to select multiple options. All selected branches execute sequentially.
 
 ### Conditional Step: `## conditional: id`
 
@@ -133,12 +154,14 @@ Properties:
 
 ```
 ## judo-verifier
+agent: judo-verifier
 task: Build and verify all acceptance criteria
 blockedBy: judo-backend-developer
 inputs:
   implementation_output: {result.judo-backend-developer.summary}
 
 ## judo-fixer
+agent: judo-fixer
 task: Fix issues found by verification. This is attempt {loop.verify-loop.iteration} of {loop.verify-loop.max}.
 blockedBy: judo-verifier
 inputs:
@@ -192,6 +215,7 @@ For long task descriptions, use YAML multiline scalars:
 
 ```
 ## my-agent
+agent: my-agent
 task: >
   Analyze the codebase and identify all modules
   that need refactoring based on the research.
@@ -213,27 +237,32 @@ Agents declare expected inputs in their frontmatter. The `agent_catalog` tool re
 
 ```
 ## project-context-reader
+agent: project-context-reader
 task: Read project planning files relevant to: {task}
 
 ## judo-model-designer
+agent: judo-model-designer
 task: Design model entities as specified in the proposal
 blockedBy: project-context-reader
 inputs:
   project_context: {result.project-context-reader.summary}
 
 ## judo-backend-developer
+agent: judo-backend-developer
 task: Implement backend operations
 blockedBy: judo-model-designer
 inputs:
   model_output: {result.judo-model-designer.summary}
 
 ## judo-frontend-developer
+agent: judo-frontend-developer
 task: Build frontend UI
 blockedBy: judo-model-designer
 inputs:
   model_output: {result.judo-model-designer.summary}
 
 ## judo-verifier
+agent: judo-verifier
 task: Build and verify all acceptance criteria
 blockedBy: judo-backend-developer, judo-frontend-developer
 inputs:
@@ -250,6 +279,7 @@ inputs:
 
 ```
 ## judo-backend-developer
+agent: judo-backend-developer
 task: Implement based on model changes. Model summary: {result.judo-model-designer.summary}
 blockedBy: judo-model-designer
 ```
@@ -257,6 +287,16 @@ blockedBy: judo-model-designer
 This embeds the result inline in the task text. The agent expects `{input.model_output}` in its system prompt — embedding in task text means the agent never receives its declared input. Always use `inputs:` instead.
 
 # Custom Agent Creation Rules
+
+## Editing Existing Flows
+
+When modifying an existing flow, **always check `agent_catalog` first**. Agents with `source_type: "local"` are project-specific custom agents already on disk. When the existing flow references these agents:
+
+- **Reuse them by name** — do NOT create new agents that duplicate existing local agents
+- To modify a local agent, `read` its `source_path` from the catalog, make your changes, and write it back with `agent_write` to the same path
+- Only create a new agent if the flow truly needs a capability not covered by any existing agent in the catalog
+
+## Creating New Agents
 
 When no existing agent covers a need, create a custom agent definition:
 
@@ -283,6 +323,7 @@ If the user explicitly requests writing to a different location (e.g., editing a
 
 - Do NOT include archive/commit steps in the flow -- the engine handles lifecycle automatically
 - Prefer built-in agents when their `use_when` matches the task
+- When editing a flow, reuse existing local agents (source_type "local" in catalog) — do NOT recreate them
 - Create custom agents only when no existing agent covers the need
 - Every `## agent-name` step MUST reference an agent that exists in the catalog (check with `agent_catalog`) or one you create with `agent_write`. If `flow_validate` reports "Agent not in catalog", create the missing agent with `agent_write` and re-validate before calling `flow_write`.
 - Design flows with proper parallelism -- use `blockedBy` only where there are real data or ordering dependencies
@@ -302,9 +343,11 @@ If `project-context-reader` is available in the agent catalog:
 
 ```
 ## project-context-reader
+agent: project-context-reader
 task: Read project planning files and documentation relevant to: {task}
 
 ## implementation-agent
+agent: implementation-agent
 task: Implement the requested changes
 blockedBy: project-context-reader
 inputs:

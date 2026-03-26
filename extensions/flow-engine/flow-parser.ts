@@ -54,10 +54,15 @@ export function parseFlowString(content: string, source: string): FlowConfig {
   // Validate: blockedBy references must be within the same DAG segment
   validateSegmentBlockedBy(steps, source);
 
+  const task_required = meta.task_required === "true" || meta.task_required === true;
+  const task_prompt = meta.task_prompt ? String(meta.task_prompt) : undefined;
+
   return {
     name,
     description,
     ...(max_concurrent !== undefined ? { max_concurrent } : {}),
+    ...(task_required ? { task_required } : {}),
+    ...(task_prompt ? { task_prompt } : {}),
     steps,
     source,
   };
@@ -234,10 +239,16 @@ function parseAgentStep(
 ): AgentStep {
   const props = parseProperties(body);
   const id = header;
+  if (!props.agent) {
+    throw new Error(
+      `AgentStep "${id}" missing required "agent" in ${source}. Add agent: <agent-name> to specify which agent to dispatch.`,
+    );
+  }
+
   const step: AgentStep = {
     stepType: "agent",
     id,
-    agent: id,
+    agent: props.agent,
   };
 
   if (props.task) step.task = props.task;
@@ -304,6 +315,8 @@ function parseForkStep(
   if (props.allowCustom === "true") step.allowCustom = true;
   if (props.multiSelect === "true") step.multiSelect = true;
   if (props.decisionAgent) step.decisionAgent = props.decisionAgent;
+  if (props.agent) step.agent = props.agent;
+  if (props.task) step.task = props.task;
 
   return step;
 }
@@ -460,6 +473,7 @@ function parseProperties(body: string): Record<string, any> {
   const lines = body.split("\n");
   let currentBlock: string | null = null;
   let blockContent: Record<string, string> = {};
+  let currentList: string[] | null = null; // List items (- value) under a key
   // Multiline scalar state (YAML > and | syntax)
   let multilineKey: string | null = null;
   let multilineMode: ">" | "|" | null = null;
@@ -492,18 +506,30 @@ function parseProperties(body: string): Record<string, any> {
     // Skip empty lines
     if (line.trim() === "") continue;
 
-    // Indented line (part of a block)
-    const indentedMatch = line.match(/^\s{2,}(\S[\w-]*):\s*(.+)$/);
-    if (indentedMatch && currentBlock) {
-      blockContent[indentedMatch[1]] = indentedMatch[2].trim();
+    // List item (indented "- value") under a block key
+    const listItemMatch = line.match(/^\s+-\s+(.+)$/);
+    if (listItemMatch && currentBlock) {
+      if (!currentList) currentList = [];
+      currentList.push(listItemMatch[1].trim());
       continue;
     }
 
-    // Flush previous block
+    // Indented key:value line (part of a map block)
+    if (currentBlock && !currentList && line.match(/^\s{2,}/) && line.includes(": ")) {
+      const trimmed = line.trim();
+      const colonPos = trimmed.indexOf(": ");
+      if (colonPos > 0) {
+        blockContent[trimmed.slice(0, colonPos)] = trimmed.slice(colonPos + 2).trim();
+        continue;
+      }
+    }
+
+    // Flush previous block or list
     if (currentBlock) {
-      result[currentBlock] = blockContent;
+      result[currentBlock] = currentList ?? blockContent;
       currentBlock = null;
       blockContent = {};
+      currentList = null;
     }
 
     // Top-level key: value
@@ -519,9 +545,10 @@ function parseProperties(body: string): Record<string, any> {
       multilineMode = value as ">" | "|";
       multilineLines = [];
     } else if (value === "") {
-      // Start of a nested block
+      // Start of a nested block (list or key:value determined by first child)
       currentBlock = key;
       blockContent = {};
+      currentList = null;
     } else {
       result[key] = value;
     }
@@ -536,9 +563,9 @@ function parseProperties(body: string): Record<string, any> {
     }
   }
 
-  // Flush trailing block
+  // Flush trailing block or list
   if (currentBlock) {
-    result[currentBlock] = blockContent;
+    result[currentBlock] = currentList && currentList.length > 0 ? currentList : blockContent;
   }
 
   return result;

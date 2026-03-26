@@ -1,5 +1,5 @@
 import { AgentCard } from "./agent-card.js";
-import { Text } from "@mariozechner/pi-tui";
+import { visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
 
 export const MIN_CARD_WIDTH = 40;
 export const CARD_HEIGHT = 8;
@@ -8,7 +8,6 @@ const GAP = 1;
 export class GridComponent {
   private cards: AgentCard[] = [];
   private theme: any;
-  private text = new Text("", 0, 1);
   private _selectedIndex = -1; // -1 = no selection
 
   setCards(cards: AgentCard[]): void { this.cards = cards; }
@@ -44,10 +43,22 @@ export class GridComponent {
       }
     }
 
-    const output = rows.map(cols => cols.join(" ".repeat(GAP)));
-    this.text.setText(output.join("\n"));
-    return this.text.render(width);
-  }
+    // Join columns with gap and pad each line to exactly `width` visible chars
+    const emptyLine = " ".repeat(width);
+    const output: string[] = [emptyLine]; // padding before grid (replaces Text paddingY=1)
 
-  invalidate(): void { this.text.invalidate(); }
+    for (const cols of rows) {
+      let joined = cols.join(" ".repeat(GAP));
+      const vw = visibleWidth(joined);
+      if (vw < width) {
+        joined += " ".repeat(width - vw);
+      } else if (vw > width) {
+        joined = truncateToWidth(joined, width);
+      }
+      output.push(joined);
+    }
+
+    output.push(emptyLine); // padding after grid (replaces Text paddingY=1)
+    return output;
+  }
 }

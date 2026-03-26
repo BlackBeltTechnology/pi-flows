@@ -49,8 +49,10 @@ export interface FlowPreviewOverlayOptions {
 }
 
 function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 3) + "...";
+  // Collapse newlines and extra whitespace (YAML multi-line strings)
+  const clean = s.replace(/\s*\n\s*/g, " ").trim();
+  if (clean.length <= max) return clean;
+  return clean.slice(0, max - 3) + "...";
 }
 
 /**
@@ -217,7 +219,7 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
   // ── Legend ──
   lines.push(fg("dim", `  Legend: ○ agent  ◇ fork  ◆ conditional  ◈ decision  ↻ loop  ▷ flow-ref`));
   lines.push("");
-  lines.push(fg("dim", "  ↑↓ scroll · Backspace close"));
+  lines.push(fg("dim", "  ↑ ↓ scroll · Backspace close"));
 
   return lines;
 }

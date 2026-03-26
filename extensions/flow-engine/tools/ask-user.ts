@@ -1,8 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Container, type SelectItem, Spacer, Text } from "@mariozechner/pi-tui";
-import { CheckboxSelectList } from "../../shared/checkbox-select-list.js";
+import type { SelectItem } from "@mariozechner/pi-tui";
+import { checkboxOverlay, type CheckboxResult } from "../../shared/overlays.js";
 
 export function registerAskUserTool(pi: ExtensionAPI): void {
   pi.registerTool({
@@ -34,43 +33,18 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
         if (params.allowCustom) options.push("Other (describe)");
 
         if (params.multiSelect) {
-          // Multi-select via checkbox-toggle overlay
+          // Multi-select via shared checkbox overlay
           const checkboxItems: SelectItem[] = options.map((opt) => ({
             value: opt,
             label: opt,
           }));
 
-          answer = await new Promise<string[]>((resolve) => {
-            ctx.ui.custom((tui: any, t: any, _kb: any, done: (val: string[]) => void) => {
-              const checkbox = new CheckboxSelectList(checkboxItems, Math.min(checkboxItems.length, 12), {
-                selectedPrefix: (text: string) => t.fg("accent", text),
-                selectedText: (text: string) => t.fg("accent", text),
-                description: (text: string) => t.fg("muted", text),
-                scrollInfo: (text: string) => t.fg("dim", text),
-                noMatch: (text: string) => t.fg("warning", text),
-              });
-              checkbox.onConfirm = (selected: SelectItem[]) => done(selected.map((s) => s.value));
-              checkbox.onCancel = () => done([]);
-
-              const container = new Container();
-              container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
-              container.addChild(new Text(t.fg("accent", ` ${params.question}`), 0, 0));
-              container.addChild(new Spacer(1));
-              container.addChild(checkbox as any);
-              container.addChild(new Spacer(1));
-              container.addChild(new Text(t.fg("dim", " Space: toggle  Enter: confirm  Esc: cancel"), 0, 0));
-              container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
-
-              return {
-                render: (w: number) => container.render(w),
-                invalidate: () => container.invalidate(),
-                handleInput: (data: string) => {
-                  checkbox.handleInput(data);
-                  tui.requestRender();
-                },
-              };
-            }, { overlay: true }).then(resolve);
+          const result: CheckboxResult = await checkboxOverlay(ctx, params.question, checkboxItems, {
+            overlayMode: true,
+            hints: ["Space: toggle  Enter: confirm  Esc: cancel"],
           });
+
+          answer = result.type === "selected" ? result.ids : [];
         } else {
           answer = await ctx.ui.select(params.question, options);
         }

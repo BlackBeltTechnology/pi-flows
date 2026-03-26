@@ -123,6 +123,7 @@ export function createAgentDetailOverlay(opts: AgentDetailOverlayOptions) {
           scroll,
           innerWidth,
           showThinking,
+          summary,
         );
         moveDown(scroll, filtered.length, totalLines, viewportHeight);
         tui?.requestRender();

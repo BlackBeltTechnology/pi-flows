@@ -9,8 +9,13 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync, rmSync, copyFileSync, mkdirSync } from "node:fs";
+import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS, STAGING_FLOWS } from "./staging.js";
 import { join } from "node:path";
 import { getModelRole } from "../provider-register.js";
+import { setFlowWidget } from "../shared/flow-widget.js";
+
+// Module-scoped flag: true when a flow is running from staging (non-saved "Run" path)
+let runningFromStaging = false;
 
 // ---- Helpers --------------------------------------------------------------
 
@@ -62,6 +67,20 @@ Rules:
   {"needsMore": true}
 - slug: max 50 chars, lowercase, kebab-case, no special chars
 - desc: max 120 chars, imperative mood ("Add X", "Fix Y", "Implement Z")`;
+
+/** Get architect tool definitions and spawn context from flow-engine via events */
+function getArchitectSpawnContext(pi: ExtensionAPI): { tools: any[]; authStorage: any; modelRegistry: any; extraGuardFactories: any[] } {
+  const toolsQuery: any = {};
+  pi.events.emit("flow:get-architect-tools", toolsQuery);
+  const spawnCtx: any = {};
+  pi.events.emit("flow:get-spawn-context", spawnCtx);
+  return {
+    tools: toolsQuery.tools ?? [],
+    authStorage: spawnCtx.authStorage,
+    modelRegistry: spawnCtx.modelRegistry,
+    extraGuardFactories: spawnCtx.extraGuardFactories ?? [],
+  };
+}
 
 // ---- Flow edit handler ----------------------------------------------------
 
@@ -175,33 +194,63 @@ async function handleEditFlow(
       architectAbort.abort();
       return { consume: true } as const;
     }
-    // Ctrl+O: open flow preview overlay
-    if (data === KEY_CTRL_O && architectWidget?.hasFlowContent?.() && !overlayOpen) {
+    // Ctrl+O: open detail overlay (tool calls) or flow preview overlay
+    if (data === KEY_CTRL_O && architectWidget && !overlayOpen) {
       overlayOpen = true;
       try {
-        const content = architectWidget.getFlowContent();
-        if (!content) return { consume: true } as const;
-        const { parseFlowString } = await import("../flow-engine/flow-parser.js");
-        const flowConfig = parseFlowString(content, "<preview>");
-        const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
-        await ctx.ui.custom(
-          (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
-            return createFlowPreviewOverlay({
-              flow: flowConfig,
-              theme,
-              tui: tuiInstance,
-              done,
-            });
-          },
-          {
-            overlay: true,
-            overlayOptions: {
-              width: "90%",
-              maxHeight: "85%",
-              anchor: "center",
+        if (architectWidget.hasFlowContent()) {
+          // Flow exists — show flow preview
+          const content = architectWidget.getFlowContent();
+          if (!content) { overlayOpen = false; return { consume: true } as const; }
+          const { parseFlowString } = await import("../flow-engine/flow-parser.js");
+          const flowConfig = parseFlowString(content, "<preview>");
+          const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+          await ctx.ui.custom(
+            (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+              return createFlowPreviewOverlay({
+                flow: flowConfig,
+                theme,
+                tui: tuiInstance,
+                done,
+              });
             },
-          },
-        );
+            {
+              overlay: true,
+              overlayOptions: {
+                width: "90%",
+                maxHeight: "85%",
+                anchor: "center",
+              },
+            },
+          );
+        } else {
+          // No flow yet — show architect detail (tool calls, messages)
+          const entries = architectWidget.getEventLog?.() || [];
+          if (entries.length > 0) {
+            const { createAgentDetailOverlay } = await import("../flow-dashboard/agent-detail-overlay.js");
+            await ctx.ui.custom(
+              (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+                return createAgentDetailOverlay({
+                  agentName: "flow-architect",
+                  status: "running",
+                  summary: undefined,
+                  entries,
+                  theme,
+                  tui: tuiInstance,
+                  done,
+                });
+              },
+              {
+                overlay: true,
+                overlayOptions: {
+                  width: "90%",
+                  maxHeight: "85%",
+                  anchor: "center",
+                },
+              },
+            );
+          }
+        }
       } catch { /* overlay not available */ }
       finally { overlayOpen = false; }
       return { consume: true } as const;
@@ -209,21 +258,30 @@ async function handleEditFlow(
     return undefined;
   });
 
+  let widgetTuiRef: any = null;
   const mountWidget = async () => {
     try {
       const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
       architectWidget = createArchitectWidget({ resolveAgentType });
-      renderWidget = () => {
-        ctx.ui.setWidget("flow-architect", architectWidget.factory, { placement: "aboveEditor" });
+      // Wrap factory to capture TUI reference for requestRender
+      const wrappedFactory = (tui: any, theme: any) => {
+        widgetTuiRef = tui;
+        return architectWidget.factory(tui, theme);
       };
+      // setFlowWidget clears all other flow widgets automatically
+      setFlowWidget(ctx.ui, "flow-architect", wrappedFactory);
+      renderWidget = () => { widgetTuiRef?.requestRender(); };
       architectWidget.setUpdateCallback(renderWidget);
-      renderWidget();
     } catch { /* widget not available */ }
   };
   await mountWidget();
 
-  const guardExtPath = join(pkgRoot, "extensions", "flow-engine", "guard.ts");
-  const task = `Modify this existing flow:\n\n${existingContent}\n\nModification request: ${modificationRequest}`;
+  // Set up staging directory for architect session
+  createStagingDir(projectRoot);
+  pi.events.emit("flow:register-agents-dir", { dir: join(projectRoot, STAGING_AGENTS) });
+
+  const stagingInstructions = `\n\nIMPORTANT: Write all agent files to ${STAGING_AGENTS}/ and all flow files to ${STAGING_FLOWS}/ (these are staging directories).`;
+  const task = `Modify this existing flow:\n\n${existingContent}\n\nModification request: ${modificationRequest}${stagingInstructions}`;
   const templateCtx = {
     task,
     inputs: {} as Record<string, string>,
@@ -231,11 +289,16 @@ async function handleEditFlow(
     forks: {} as Record<string, any>,
   };
 
+  // Extract conversation context to give the architect awareness of what the user discussed
+  // before requesting this flow edit.
+  const editArchitectConvoContext = extractConversationContext(ctx.sessionManager?.getEntries?.() ?? []);
+
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";
   let flowPath = "";
   let replanNotes = "";
   const createdFiles: string[] = [];
+  const allCreatedFiles = new Set<string>();
 
   while (true) {
     const currentTask = replanNotes
@@ -248,14 +311,22 @@ async function handleEditFlow(
     );
 
     architectAbort = new AbortController();
+    const spawnCtx = getArchitectSpawnContext(pi);
     const result = await spawnAgent({
       agent: architectConfig,
       task: currentTask,
       templateContext: { ...templateCtx, task: currentTask },
       getModelRole: getModelRole ? (role: string) => getModelRole!(role) : undefined,
       cwd: projectRoot,
-      guardExtPath,
-      allowSubagent: true,
+      authStorage: spawnCtx.authStorage,
+      modelRegistry: spawnCtx.modelRegistry,
+      extraGuardFactories: spawnCtx.extraGuardFactories,
+      extraCustomTools: spawnCtx.tools,
+      contextFileContents: editArchitectConvoContext.length > 50
+        ? [
+            `## Conversation Context\n\nThe following is the recent conversation from the user's main session that led to this flow edit request. Use it to understand what the user is trying to change and why:\n\n${editArchitectConvoContext}`,
+          ]
+        : undefined,
       signal: architectAbort.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
@@ -268,6 +339,12 @@ async function handleEditFlow(
           architectWidget.onToolResult(toolName, output, isError);
           renderWidget?.();
         }
+      },
+      onAssistantText: (text) => {
+        architectWidget?.onAssistantText?.(text);
+      },
+      onThinkingText: (text) => {
+        architectWidget?.onThinkingText?.(text);
       },
     });
     architectAbort = null;
@@ -284,24 +361,40 @@ async function handleEditFlow(
     for (const tc of result.toolCalls) {
       if (tc.toolName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) { flowPath = path; createdFiles.push(path); }
+        if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
       if (tc.toolName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) createdFiles.push(path);
+        if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
       }
     }
 
     if (!flowPath) {
-      const tcSummary = result.toolCalls.map(tc =>
-        `  ${tc.toolName}${tc.isError ? " [ERROR]" : ""}`
-      ).join("\n") || "  (none)";
-      ctx.ui.notify(
-        `Architect did not produce a flow file.\nTool calls:\n${tcSummary}`,
-        "error",
-      );
+      // Graceful exit: show architect's summary and let user retry or cancel
+      while (overlayOpen) await new Promise(r => setTimeout(r, 100));
+      const summary = result.result?.summary || result.output?.slice(0, 500) || "No details available";
+      const retryChoice = await ctx.ui.select(
+        `Architect couldn't produce a flow:\n${summary}\n\nWhat would you like to do?`,
+        ["Retry", "Cancel"],
+      ) || "Cancel";
+      if (retryChoice === "Retry") {
+        replanNotes = await ctx.ui.input("Additional guidance for the architect:", "") || "";
+        if (!replanNotes) { choice = "Cancel"; break; }
+        if (architectWidget) {
+          architectWidget.dispose();
+          setFlowWidget(ctx.ui, "flow-architect", undefined);
+        }
+        await mountWidget();
+        continue;
+      }
       break;
     }
+
+    // Wait for any open preview overlay to close before prompting
+    while (overlayOpen) await new Promise(r => setTimeout(r, 100));
+
+    // Signal widget that we're ready for user input (stops spinner)
+    architectWidget?.setReady?.();
 
     choice = await ctx.ui.select(
       "What would you like to do?",
@@ -311,9 +404,13 @@ async function handleEditFlow(
     if (choice === "Replan") {
       replanNotes = await ctx.ui.input("What should be changed?", "") || "";
       if (!replanNotes) { choice = "Cancel"; break; }
+      wipeStagingDir(projectRoot);
+      createStagingDir(projectRoot);
+      createdFiles.length = 0;
+      flowPath = "";
       if (architectWidget) {
         architectWidget.dispose();
-        ctx.ui.setWidget("flow-architect", undefined);
+        setFlowWidget(ctx.ui, "flow-architect", undefined);
       }
       await mountWidget();
       continue;
@@ -326,13 +423,13 @@ async function handleEditFlow(
   unregisterInput?.();
   if (architectWidget) {
     architectWidget.dispose();
-    ctx.ui.setWidget("flow-architect", undefined);
+    setFlowWidget(ctx.ui, "flow-architect", undefined);
+    // Force full re-render to clear stale widget lines from differential rendering
+    widgetTuiRef?.requestRender(true);
   }
 
   if (choice === "Cancel" || !flowPath) {
-    for (const f of createdFiles) {
-      try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
-    }
+    wipeStagingDir(projectRoot);
     ctx.ui.notify("Cancelled.", "warning");
     return;
   }
@@ -340,13 +437,23 @@ async function handleEditFlow(
   // Save: copy the edited flow back to the original location
   if (choice === "Save") {
     try {
-      copyFileSync(flowPath, selectedFlow.path);
-      // Clean up temp files
-      for (const f of createdFiles) {
-        if (f !== selectedFlow.path) {
-          try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
+      // Promote staging: copy agents to final, copy flow to original path
+      const stagingAgentsDir = join(projectRoot, STAGING_AGENTS);
+      const finalAgentsDir = join(projectRoot, ".pi", "flows", "agents");
+      mkdirSync(finalAgentsDir, { recursive: true });
+      if (existsSync(stagingAgentsDir)) {
+        const { readdirSync } = await import("node:fs");
+        for (const file of readdirSync(stagingAgentsDir)) {
+          if (file.endsWith(".md")) {
+            copyFileSync(join(stagingAgentsDir, file), join(finalAgentsDir, file));
+          }
         }
       }
+      // Copy the staged flow to the original flow's location
+      if (flowPath && existsSync(flowPath)) {
+        copyFileSync(flowPath, selectedFlow.path);
+      }
+      wipeStagingDir(projectRoot);
       pi.events.emit("flow:rediscover", {});
       ctx.ui.notify(`Flow "${selectedFlow.name}" updated.`, "info");
     } catch (err: any) {
@@ -467,32 +574,60 @@ async function handleNewFlow(
       architectAbort2.abort();
       return { consume: true } as const;
     }
-    if (data === KEY_CTRL_O_2 && architectWidget?.hasFlowContent?.() && !overlayOpen2) {
+    if (data === KEY_CTRL_O_2 && architectWidget && !overlayOpen2) {
       overlayOpen2 = true;
       try {
-        const content = architectWidget.getFlowContent();
-        if (!content) return { consume: true } as const;
-        const { parseFlowString } = await import("../flow-engine/flow-parser.js");
-        const flowConfig = parseFlowString(content, "<preview>");
-        const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
-        await ctx.ui.custom(
-          (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
-            return createFlowPreviewOverlay({
-              flow: flowConfig,
-              theme,
-              tui: tuiInstance,
-              done,
-            });
-          },
-          {
-            overlay: true,
-            overlayOptions: {
-              width: "90%",
-              maxHeight: "85%",
-              anchor: "center",
+        if (architectWidget.hasFlowContent()) {
+          const content = architectWidget.getFlowContent();
+          if (!content) { overlayOpen2 = false; return { consume: true } as const; }
+          const { parseFlowString } = await import("../flow-engine/flow-parser.js");
+          const flowConfig = parseFlowString(content, "<preview>");
+          const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+          await ctx.ui.custom(
+            (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+              return createFlowPreviewOverlay({
+                flow: flowConfig,
+                theme,
+                tui: tuiInstance,
+                done,
+              });
             },
-          },
-        );
+            {
+              overlay: true,
+              overlayOptions: {
+                width: "90%",
+                maxHeight: "85%",
+                anchor: "center",
+              },
+            },
+          );
+        } else {
+          const entries = architectWidget.getEventLog?.() || [];
+          if (entries.length > 0) {
+            const { createAgentDetailOverlay } = await import("../flow-dashboard/agent-detail-overlay.js");
+            await ctx.ui.custom(
+              (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+                return createAgentDetailOverlay({
+                  agentName: "flow-architect",
+                  status: "running",
+                  summary: undefined,
+                  entries,
+                  theme,
+                  tui: tuiInstance,
+                  done,
+                });
+              },
+              {
+                overlay: true,
+                overlayOptions: {
+                  width: "90%",
+                  maxHeight: "85%",
+                  anchor: "center",
+                },
+              },
+            );
+          }
+        }
       } catch { /* overlay not available */ }
       finally { overlayOpen2 = false; }
       return { consume: true } as const;
@@ -500,15 +635,19 @@ async function handleNewFlow(
     return undefined;
   });
 
+  let widgetTuiRef2: any = null;
   const mountWidget = async () => {
     try {
       const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
       architectWidget = createArchitectWidget({ resolveAgentType: resolveAgentType2 });
-      renderWidget = () => {
-        ctx.ui.setWidget("flow-architect", architectWidget.factory, { placement: "aboveEditor" });
+      const wrappedFactory = (tui: any, theme: any) => {
+        widgetTuiRef2 = tui;
+        return architectWidget.factory(tui, theme);
       };
+      // setFlowWidget clears all other flow widgets automatically
+      setFlowWidget(ctx.ui, "flow-architect", wrappedFactory);
+      renderWidget = () => { widgetTuiRef2?.requestRender(); };
       architectWidget.setUpdateCallback(renderWidget);
-      renderWidget();
     } catch {
       // Widget not available — continue without visual feedback
     }
@@ -516,7 +655,10 @@ async function handleNewFlow(
   await mountWidget();
 
   // Step 4: Spawn architect subagent (with replan loop)
-  const guardExtPath = join(pkgRoot, "extensions", "flow-engine", "guard.ts");
+  // Set up staging directory and register for discovery
+  createStagingDir(projectRoot);
+  pi.events.emit("flow:register-agents-dir", { dir: join(projectRoot, STAGING_AGENTS) });
+
   const templateCtx = {
     task: desc,
     inputs: {} as Record<string, string>,
@@ -524,16 +666,22 @@ async function handleNewFlow(
     forks: {} as Record<string, any>,
   };
 
+  // Extract conversation context to give the architect awareness of what led to this flow request.
+  // This is extracted here (after desc is resolved) so it's always fresh and in scope for the spawn loop.
+  const architectConvoContext = extractConversationContext(ctx.sessionManager?.getEntries?.() ?? []);
+
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";
   let flowPath = "";
   let replanNotes = "";
   const createdFiles: string[] = [];
+  const allCreatedFiles = new Set<string>();
 
   while (true) {
+    const stagingInstructions = `\n\nIMPORTANT: Write all agent files to ${STAGING_AGENTS}/ and all flow files to ${STAGING_FLOWS}/ (these are staging directories).`;
     const task = replanNotes
-      ? `${desc}\n\nReplan notes: ${replanNotes}`
-      : desc;
+      ? `${desc}\n\nReplan notes: ${replanNotes}${stagingInstructions}`
+      : `${desc}${stagingInstructions}`;
 
     ctx.ui.notify(
       replanNotes ? "Replanning flow..." : "Flow Architect is designing your flow...",
@@ -541,14 +689,22 @@ async function handleNewFlow(
     );
 
     architectAbort2 = new AbortController();
+    const spawnCtx2 = getArchitectSpawnContext(pi);
     const result = await spawnAgent({
       agent: architectConfig,
       task,
       templateContext: { ...templateCtx, task },
       getModelRole: getModelRole ? (role: string) => getModelRole!(role) : undefined,
       cwd: projectRoot,
-      guardExtPath,
-      allowSubagent: true,
+      authStorage: spawnCtx2.authStorage,
+      modelRegistry: spawnCtx2.modelRegistry,
+      extraGuardFactories: spawnCtx2.extraGuardFactories,
+      extraCustomTools: spawnCtx2.tools,
+      contextFileContents: architectConvoContext.length > 50
+        ? [
+            `## Conversation Context\n\nThe following is the recent conversation from the user's main session that led to this flow request. Use it to understand what the user is trying to accomplish, what tools or patterns were discussed, and what they actually want the flow to do:\n\n${architectConvoContext}`,
+          ]
+        : undefined,
       signal: architectAbort2.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
@@ -561,6 +717,12 @@ async function handleNewFlow(
           architectWidget.onToolResult(toolName, output, isError);
           renderWidget?.();
         }
+      },
+      onAssistantText: (text) => {
+        architectWidget?.onAssistantText?.(text);
+      },
+      onThinkingText: (text) => {
+        architectWidget?.onThinkingText?.(text);
       },
     });
     architectAbort2 = null;
@@ -578,29 +740,40 @@ async function handleNewFlow(
     for (const tc of result.toolCalls) {
       if (tc.toolName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) { flowPath = path; createdFiles.push(path); }
+        if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
       if (tc.toolName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
-        if (path) createdFiles.push(path);
+        if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
       }
     }
 
     if (!flowPath) {
-      // Surface diagnostics so the user can see what happened
-      const tcSummary = result.toolCalls.map(tc =>
-        `  ${tc.toolName}${tc.isError ? " [ERROR]" : ""}`
-      ).join("\n") || "  (none)";
-      const diag = [
-        `Architect did not produce a flow file.`,
-        `Exit code: ${result.exitCode}`,
-        `Tool calls:\n${tcSummary}`,
-        result.stderr ? `Stderr: ${result.stderr.slice(0, 500)}` : "",
-        result.output ? `Output: ${result.output.slice(0, 500)}` : "",
-      ].filter(Boolean).join("\n");
-      ctx.ui.notify(diag, "error");
+      // Graceful exit: show architect's summary and let user retry or cancel
+      while (overlayOpen2) await new Promise(r => setTimeout(r, 100));
+      const summary = result.result?.summary || result.output?.slice(0, 500) || "No details available";
+      const retryChoice = await ctx.ui.select(
+        `Architect couldn't produce a flow:\n${summary}\n\nWhat would you like to do?`,
+        ["Retry", "Cancel"],
+      ) || "Cancel";
+      if (retryChoice === "Retry") {
+        replanNotes = await ctx.ui.input("Additional guidance for the architect:", "") || "";
+        if (!replanNotes) { choice = "Cancel"; break; }
+        if (architectWidget) {
+          architectWidget.dispose();
+          setFlowWidget(ctx.ui, "flow-architect", undefined);
+        }
+        await mountWidget();
+        continue;
+      }
       break;
     }
+
+    // Wait for any open preview overlay to close before prompting
+    while (overlayOpen2) await new Promise(r => setTimeout(r, 100));
+
+    // Signal widget that we're ready for user input (stops spinner)
+    architectWidget?.setReady?.();
 
     // Present choice to user — flow details are visible in the widget above
     choice = await ctx.ui.select(
@@ -614,10 +787,15 @@ async function handleNewFlow(
         choice = "Cancel";
         break;
       }
+      // Wipe staging and recreate for fresh iteration
+      wipeStagingDir(projectRoot);
+      createStagingDir(projectRoot);
+      createdFiles.length = 0;
+      flowPath = "";
       // Reset widget for new design cycle
       if (architectWidget) {
         architectWidget.dispose();
-        ctx.ui.setWidget("flow-architect", undefined);
+        setFlowWidget(ctx.ui, "flow-architect", undefined);
       }
       await mountWidget();
       continue;
@@ -630,14 +808,13 @@ async function handleNewFlow(
   unregisterInput2?.();
   if (architectWidget) {
     architectWidget.dispose();
-    ctx.ui.setWidget("flow-architect", undefined);
+    setFlowWidget(ctx.ui, "flow-architect", undefined);
+    // Force full re-render to clear stale widget lines from differential rendering
+    widgetTuiRef2?.requestRender(true);
   }
 
   if (choice === "Cancel") {
-    // Cleanup created files on cancel
-    for (const f of createdFiles) {
-      try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
-    }
+    wipeStagingDir(projectRoot);
     ctx.ui.notify("Cancelled.", "warning");
     return;
   }
@@ -647,7 +824,10 @@ async function handleNewFlow(
     return;
   }
 
-  // Step 5: Handle "Save & Run" — ask for name, persist to .pi/flows/
+  // Step 5: Handle "Save & Run" — promote staging to final locations
+  // safeName is hoisted so Step 6 can build the discovery-derived name "custom:<safeName>"
+  let safeName = "";
+
   if (choice === "Save & Run") {
     const defaultName = slugify(desc);
     const flowName = await ctx.ui.input(
@@ -656,27 +836,9 @@ async function handleNewFlow(
     );
 
     if (flowName) {
-      const safeName = slugify(flowName);
-      const piFlowsDir = join(projectRoot, ".pi", "flows", "flows", "custom");
-      const piAgentsDir = join(projectRoot, ".pi", "flows", "agents");
-
-      // Ensure directories exist
-      mkdirSync(piFlowsDir, { recursive: true });
-      mkdirSync(piAgentsDir, { recursive: true });
-
-      // Copy flow file
-      const destFlowPath = join(piFlowsDir, `${safeName}.flow.md`);
-      copyFileSync(flowPath, destFlowPath);
-
-      // Copy custom agent files
-      for (const f of createdFiles) {
-        if (f !== flowPath && existsSync(f)) {
-          const agentFileName = f.split("/").pop() || "";
-          if (agentFileName) {
-            copyFileSync(f, join(piAgentsDir, agentFileName));
-          }
-        }
-      }
+      safeName = slugify(flowName);
+      const finalFlowPath = promoteStagingToFinal(projectRoot, safeName);
+      flowPath = finalFlowPath || flowPath;
 
       // Re-discover so the saved flow registers as a command immediately
       pi.events.emit("flow:rediscover", {});
@@ -691,128 +853,40 @@ async function handleNewFlow(
     }
   }
 
-  // Step 6: Execute the designed flow
+  // Step 6: Execute the designed flow via the flow manager (proper lifecycle)
+  setFlowWidget(ctx.ui, "flow-architect", undefined);
+  widgetTuiRef2?.requestRender(true);
+
   try {
     // Re-discover to pick up custom agents written by architect
     pi.events.emit("flow:rediscover", {});
 
     const { parseFlowFile } = await import("../flow-engine/flow-parser.js");
     const flowConfig = parseFlowFile(flowPath);
-    const { runFlow } = await import("../flow-engine/flow-execution.js");
-    const { findSkillDir } = await import("../flow-engine/tools/skill-read.js");
 
-    // Retrieve agent discovery state via events
-    const agentsQuery: any = {};
-    pi.events.emit("flow:get-agents", agentsQuery);
-    const discoveredAgents: Map<string, any> = agentsQuery.agents ?? new Map();
+    let runFlowName: string;
 
-    // Wire up flow dashboard
-    let dashboard: any = null;
-    let renderDashboard: (() => void) | undefined;
-    try {
-      const { AgentDashboard, resolveWorkflow } = await import("../flow-dashboard/index.js");
-      const resolved = resolveWorkflow(flowConfig.name);
-
-      // Collect agent configs and deps for the dashboard
-      const agentConfigs: any[] = [];
-      const agentDeps = new Map<string, string[]>();
-      for (const step of flowConfig.steps) {
-        if (step.stepType === "agent") {
-          const cfg = discoveredAgents.get(step.agent);
-          if (cfg) agentConfigs.push(cfg);
-          if (step.blockedBy?.length) agentDeps.set(step.agent, step.blockedBy);
-        }
-      }
-
-      if (resolved) {
-        dashboard = new AgentDashboard(resolved.workflow, resolved.stageIndex, undefined);
-      } else {
-        // No workflow definition — create a basic dashboard
-        dashboard = new AgentDashboard(
-          { id: flowConfig.name, stages: [{ name: flowConfig.name, flows: [flowConfig.name] }] },
-          0,
-          undefined,
-        );
-      }
-      dashboard.preloadAgents(agentConfigs, agentDeps);
-
-      // Wire via event — sets activeDashboard/dashboardVisible in flow-engine
-      const wireData: any = { dashboard, ui: ctx.ui };
-      pi.events.emit("flow:wire-dashboard", wireData);
-      renderDashboard = wireData.renderCallback;
-      if (renderDashboard) renderDashboard();
-    } catch { /* flow-dashboard not available, continue without */ }
-
-    ctx.ui.notify(`Running flow: "${flowConfig.name}"...`, "info");
-
-    const flowResult = await runFlow({
-      flow: flowConfig,
-      task: desc,
-      cwd: projectRoot,
-      guardExtPath,
-      getModelRole: getModelRole ? (role: string) => getModelRole!(role) : undefined,
-      getAgent: (name: string) => discoveredAgents.get(name),
-      askUser: async (question, type, options, extra) => {
-        if (extra?.multiSelect && options) {
-          const selected: string[] = [];
-          for (const opt of options) {
-            const yes = await ctx.ui.confirm(`${question}\n  Include "${opt}"?`, "");
-            if (yes) selected.push(opt);
-          }
-          return { answer: selected as any };
-        }
-        if (type === "select" && options) {
-          const answer = await ctx.ui.select(question, options);
-          return { answer: answer || options[0] };
-        }
-        if (type === "confirm") {
-          const answer = await ctx.ui.confirm(question, "");
-          return { answer: answer ? "yes" : "no" };
-        }
-        const answer = await ctx.ui.input(question, "");
-        return { answer: answer || "" };
-      },
-      onAgentStarted: dashboard ? (agentName: string) => {
-        const config = discoveredAgents.get(agentName);
-        dashboard.onAgentStarted(agentName, config);
-        renderDashboard!();
-      } : undefined,
-      onAgentComplete: dashboard ? (agentName: string, _stepId: string, result: any) => {
-        dashboard.onAgentComplete(agentName, result);
-        renderDashboard!();
-      } : undefined,
-      onToolCall: (agentName: string, toolName: string, input: any) => {
-        pi.events.emit("flow:subagent-tool-call", { agentName, toolName, input });
-        if (dashboard) { dashboard.onToolCall(agentName, toolName, input); renderDashboard!(); }
-      },
-      onToolResult: (agentName: string, toolName: string, output: any, isError?: boolean) => {
-        pi.events.emit("flow:subagent-tool-result", { agentName, toolName, output, isError });
-        if (dashboard) { dashboard.onToolResult(agentName, toolName, output); renderDashboard!(); }
-      },
-      getSkillContent: (skillName: string) => {
-        const dir = findSkillDir(pkgRoot, skillName);
-        if (!dir) return undefined;
-        try { return readFileSync(join(dir, "SKILL.md"), "utf-8"); } catch { return undefined; }
-      },
-    });
-
-    // Emit flow:complete to trigger summary widget
-    pi.events.emit("flow:complete", flowResult);
-
-    // Cleanup dashboard
-    if (dashboard) {
-      pi.events.emit("flow:unwire-dashboard", {});
-      dashboard.dispose();
+    if (choice === "Save & Run") {
+      // After promotion the flow lives at custom/<safeName>.flow.md.
+      // Discovery derives the name as "custom:<safeName>" — that is the Map key.
+      // flowConfig.name is the frontmatter name and does NOT match the Map key,
+      // so we must use the filesystem-derived name here.
+      runFlowName = `custom:${safeName}`;
+      runningFromStaging = false;
+    } else {
+      // "Run" path: flow is still in the flat staging dir.
+      // Register staging flows dir temporarily so the flow can be discovered.
+      pi.events.emit("flow:register-flows-dir", { dir: join(projectRoot, STAGING_FLOWS) });
+      // Re-discover again to pick up the staged flow
+      pi.events.emit("flow:rediscover", {});
+      runFlowName = flowConfig.name;
+      runningFromStaging = true;
     }
 
-    // Cleanup for "Run" mode — delete temp artifacts
-    if (choice === "Run") {
-      for (const f of createdFiles) {
-        try { if (existsSync(f)) rmSync(f); } catch { /* ignore */ }
-      }
-    }
+    ctx.ui.notify(`Running flow: "${runFlowName}"...`, "info");
 
-    ctx.ui.notify(`Flow "${flowConfig.name}" complete.`, "info");
+    // Run via flow:run event — uses flowManager with proper dashboard, callbacks, cleanup
+    pi.events.emit("flow:run", { flowName: runFlowName, ctx: ctx.ui });
   } catch (err: any) {
     ctx.ui.notify(`Flow execution failed: ${err.message}`, "error");
   }
@@ -845,5 +919,14 @@ export function activate(pi: ExtensionAPI) {
       return;
     }
     await handleEditFlow(pi, projectRoot, lastCtx, getModelRole, flowName, flowPath);
+  });
+
+  // Clean up staging after a non-saved flow run completes (success, error, or abort)
+  pi.events.on("flow:complete", () => {
+    if (!runningFromStaging) return;
+    runningFromStaging = false;
+    wipeStagingDir(projectRoot);
+    pi.events.emit("flow:unregister-flows-dir", { dir: join(projectRoot, STAGING_FLOWS) });
+    pi.events.emit("flow:unregister-agents-dir", { dir: join(projectRoot, STAGING_AGENTS) });
   });
 }

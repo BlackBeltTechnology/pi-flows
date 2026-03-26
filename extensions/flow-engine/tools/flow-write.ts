@@ -2,6 +2,7 @@
 // Flow Write Tool
 //
 // Validates flow .md content via flow-validate, then writes to disk if valid.
+// Emits "flow:rediscover" event after successful write to trigger re-discovery.
 // Returns validation errors if the content is invalid.
 // ---------------------------------------------------------------------------
 
@@ -63,6 +64,9 @@ export function registerFlowWriteTool(
           details: {},
         };
       }
+
+      // Trigger re-discovery so the new flow is available immediately
+      pi.events.emit("flow:rediscover", {});
 
       return {
         content: [

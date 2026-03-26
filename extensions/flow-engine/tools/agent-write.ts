@@ -21,8 +21,9 @@ export function registerAgentWriteTool(pi: ExtensionAPI): void {
       content: Type.String({ description: "The agent .md content to validate and write" }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      // Run validation first
-      const validation = validateAgentContent(params.content);
+      // Run validation first (with dynamically discovered tools)
+      const dynamicTools = new Set(pi.getAllTools().map(t => t.name));
+      const validation = validateAgentContent(params.content, dynamicTools);
 
       if (!validation.valid) {
         return {

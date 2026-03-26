@@ -58,6 +58,8 @@ export interface FlowConfig {
   name: string;
   description: string;
   max_concurrent?: number;
+  task_required?: boolean; // Prompt user for task if no command args provided
+  task_prompt?: string; // Custom prompt text (default: "Describe what you want <name> to do:")
   steps: FlowStep[];
   source: string; // File path where this flow was discovered
 }
@@ -93,9 +95,11 @@ export interface ForkStep {
   options: string[];
   branches: Record<string, string>; // option -> step ID mapping
   allowNotes?: boolean;
-  allowCustom?: boolean;
+  allowCustom?: boolean;  // @deprecated — use allowNotes instead
   multiSelect?: boolean;
-  decisionAgent?: string; // Agent to delegate custom answers to (default: "flow-decision")
+  decisionAgent?: string; // @deprecated — use agent field instead
+  agent?: string;         // Agent to use when auto-deciding (autonomous mode)
+  task?: string;          // Context/task for the agent when auto-deciding
 }
 
 export interface ConditionalStep {
@@ -221,6 +225,7 @@ export interface FlowResult {
   flowName: string;
   stepCount: number;
   totalDuration: number; // wall-clock ms for entire flow
+  status?: "success" | "error" | "aborted"; // outcome — absent on legacy results
 }
 
 // ---- Template context for variable expansion ------------------------------

@@ -1,7 +1,7 @@
 import type { WorkflowDefinition } from "./types.js";
 import type { AgentResult, AgentConfig } from "../flow-engine/types.js";
 import { AgentCard } from "./agent-card.js";
-import { GridComponent, CARD_HEIGHT } from "./grid-component.js";
+import { GridComponent, CARD_HEIGHT, MIN_CARD_WIDTH } from "./grid-component.js";
 import { renderBreadcrumb } from "./breadcrumb.js";
 import { getCardRenderer } from "./card-registry.js";
 
@@ -18,7 +18,8 @@ export interface ToolHistoryEntry {
 export type DetailEntry =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string }
-  | { kind: "tool"; toolName: string; input: any; output: any; isError: boolean };
+  | { kind: "tool"; toolName: string; input: any; output: any; isError: boolean }
+  | { kind: "error"; text: string };
 
 export class AgentDashboard {
   private grid = new GridComponent();
@@ -28,6 +29,12 @@ export class AgentDashboard {
   private stageDetail = "";
   private spinTimer: ReturnType<typeof setInterval> | null = null;
   private onUpdate?: () => void;
+
+  // Height stabilization: track expected grid rows to keep widget height constant
+  private expectedGridRows = 0;
+
+  // Flag to signal that grid structure changed (new card added) and a full TUI re-render is needed
+  public forceNextRender = false;
 
   // Interactive state machine
   mode: DashboardMode = "passive";
@@ -62,18 +69,37 @@ export class AgentDashboard {
       }
     }
     this.syncGrid();
+    // Compute expected grid rows based on current card count (use a reasonable default width)
+    this.updateExpectedGridRows();
+  }
+
+  private updateExpectedGridRows(): void {
+    const cardCount = this.cards.size;
+    if (cardCount === 0) {
+      this.expectedGridRows = 0;
+      return;
+    }
+    // Use MIN_CARD_WIDTH * 4 as a reasonable width estimate for row computation
+    // The actual rows will be recomputed on first render with real width
+    const estimatedWidth = MIN_CARD_WIDTH * 4 + 3; // 4 cols + 3 gaps
+    const cols = GridComponent.computeCols(cardCount, estimatedWidth);
+    this.expectedGridRows = Math.ceil(cardCount / cols);
   }
 
   onAgentStarted(agentName: string, agentConfig?: AgentConfig): void {
     if (!this.eventLog.has(agentName)) this.eventLog.set(agentName, []);
     let card = this.cards.get(agentName);
     if (!card) {
+      // New card not previously preloaded — grid structure will change
       const renderer = getCardRenderer(agentConfig);
       card = new AgentCard(agentName, "running", renderer);
       card.modelRole = agentConfig?.model || "";
       card.cardRole = agentConfig?.card?.role || "";
       card.label = agentConfig?.card?.label || "";
       this.cards.set(agentName, card);
+      // Recompute expected rows and flag for full TUI re-render
+      this.updateExpectedGridRows();
+      this.forceNextRender = true;
     } else {
       card.status = "running";
       if (agentConfig?.model) card.modelRole = agentConfig.model;
@@ -88,6 +114,12 @@ export class AgentDashboard {
       card.status = result.success ? "complete" : "error";
       card.onComplete(result);
       card.renderer.onComplete(result);
+    }
+    // Capture error as an event log entry when agent failed
+    if (!result.success) {
+      const errorText = result.result?.summary || result.output || "Agent failed";
+      if (!this.eventLog.has(agentName)) this.eventLog.set(agentName, []);
+      this.eventLog.get(agentName)!.push({ kind: "error", text: errorText });
     }
     this.syncGrid();
     const anyRunning = Array.from(this.cards.values()).some(c => c.status === "running");
@@ -213,13 +245,31 @@ export class AgentDashboard {
       lines.push(bc);
     }
 
-    lines.push(...this.grid.render(width));
+    const gridLines = this.grid.render(width);
+    lines.push(...gridLines);
+
+    // Stabilize height: compute expected grid output lines and pad if grid produced fewer
+    // Grid output = 1 (padding before) + gridRows * CARD_HEIGHT + 1 (padding after)
+    // Update expectedGridRows with actual width on first render
+    if (this.cards.size > 0) {
+      const cols = GridComponent.computeCols(this.cards.size, width);
+      const actualRows = Math.ceil(this.cards.size / cols);
+      if (actualRows > this.expectedGridRows) {
+        this.expectedGridRows = actualRows;
+      }
+      const expectedGridLines = 1 + this.expectedGridRows * CARD_HEIGHT + 1; // padding + rows + padding
+      while (lines.length < (this.workflow ? 1 : 0) +
+             (this.workflow && this.workflow.stages.length > 1 ? 1 : 0) +
+             expectedGridLines) {
+        lines.push("");
+      }
+    }
 
     // Footer hints
     if (this.mode === "navigate") {
-      lines.push(t?.fg?.("dim", "  ←→↑↓ navigate · Enter open · Ctrl+X stop · ESC close") ?? "  ←→↑↓ navigate · Enter open · Ctrl+X stop · ESC close");
+      lines.push(t?.fg?.("dim", "  ← → ↑ ↓ navigate · Enter open · Ctrl+X stop · ESC close") ?? "  ← → ↑ ↓ navigate · Enter open · Ctrl+X stop · ESC close");
     } else {
-      lines.push(t?.fg?.("dim", "  Ctrl+O inspect · Ctrl+X stop flow") ?? "  Ctrl+O inspect · Ctrl+X stop flow");
+      lines.push(t?.fg?.("dim", "  Ctrl+O inspect · Ctrl+A auto-decide · Ctrl+X stop flow") ?? "  Ctrl+O inspect · Ctrl+A auto-decide · Ctrl+X stop flow");
     }
 
     return lines;
@@ -231,7 +281,7 @@ export class AgentDashboard {
     if (cardCount === 0) return 10;
     const cols = GridComponent.computeCols(cardCount, width);
     const gridRows = Math.ceil(cardCount / cols);
-    let height = gridRows * CARD_HEIGHT;
+    let height = gridRows * CARD_HEIGHT + 2; // +2 for grid padding lines (before + after)
     // Account for header + breadcrumb lines
     if (this.workflow) height++; // header
     if (this.workflow && this.workflow.stages.length > 1) height++;
@@ -244,5 +294,5 @@ export class AgentDashboard {
     this.stopSpinner();
   }
 
-  invalidate(): void { this.grid.invalidate(); }
+  invalidate(): void { /* grid no longer caches — re-renders fresh each call */ }
 }
