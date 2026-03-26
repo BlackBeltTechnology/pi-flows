@@ -57,13 +57,14 @@ export function moveDown(state: DetailScrollState, entryCount: number, maxConten
 
 export function toggleExpand(state: DetailScrollState): void {
   if (state.expandedIndex === state.selectedIndex) {
-    // Collapse
+    // Collapse — restore scroll to where the entry was in browsing mode
     state.expandedIndex = -1;
     state.contentScroll = 0;
   } else {
-    // Expand
+    // Expand — contentScroll will be set by the render function
+    // to the expanded entry's start line (see renderDetailView)
     state.expandedIndex = state.selectedIndex;
-    state.contentScroll = 0;
+    state.contentScroll = -1; // signal: needs positioning
   }
 }
 
@@ -179,7 +180,7 @@ export function renderDetailView(
   const thinkingHint = showThinking ? "ctrl+t hide thinking" : "ctrl+t show thinking";
   const footerLines = [
     "",
-    fg("dim", `  Backspace back · ↑↓ ${scroll.expandedIndex >= 0 ? "scroll" : "navigate"} · Enter ${scroll.expandedIndex >= 0 ? "collapse" : "expand"} · ${thinkingHint}`),
+    fg("dim", `  Backspace back · ↑ ↓ ${scroll.expandedIndex >= 0 ? "scroll" : "navigate"} · Enter ${scroll.expandedIndex >= 0 ? "collapse" : "expand"} · ${thinkingHint}`),
   ];
 
   // ── Viewport budget ──
@@ -204,7 +205,7 @@ export function renderDetailView(
     } else if (e.kind === "thinking") {
       // Render as dimmed block
       const wrapped = wordWrap(e.text, Math.max(10, inner - 4));
-      contentLines.push("  " + fg("dim", "💭 thinking:"));
+      contentLines.push("  " + fg("dim", "thinking:"));
       for (const wl of wrapped) {
         contentLines.push("    " + fg("dim", wl));
       }
@@ -240,6 +241,11 @@ export function renderDetailView(
   if (scroll.expandedIndex >= 0) {
     // EXPANDED mode: line-by-line scroll through the full content
     const maxScroll = Math.max(0, contentLines.length - viewportHeight);
+    // Position to expanded entry on first open (contentScroll === -1)
+    if (scroll.contentScroll < 0) {
+      const expandedStart = entryStartLines[scroll.expandedIndex] ?? 0;
+      scroll.contentScroll = Math.min(expandedStart, maxScroll);
+    }
     if (scroll.contentScroll > maxScroll) scroll.contentScroll = maxScroll;
     visibleContent = contentLines.slice(scroll.contentScroll, scroll.contentScroll + viewportHeight);
   } else {

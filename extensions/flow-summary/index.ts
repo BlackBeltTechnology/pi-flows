@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { getModelRole as getModelRoleFromProvider } from "../provider-register.js";
+import { setFlowWidget } from "../shared/flow-widget.js";
 
 export type SummaryMode = "summary" | "navigate";
 
@@ -130,7 +131,7 @@ export function activate(pi: ExtensionAPI) {
     let spinnerTimer: ReturnType<typeof setInterval> | null = null;
 
     const setSpinnerWidget = () => {
-      ui.setWidget("flow-summary", (_tui: any, theme: any) => {
+      setFlowWidget(ui, "flow-summary", (_tui: any, theme: any) => {
         const text = new Text("", 0, 1);
         return {
           render(width: number): string[] {
@@ -250,7 +251,7 @@ export function activate(pi: ExtensionAPI) {
       summaryBoxHeight: 0,
     });
 
-    ui.setWidget("flow-summary", (_tui: any, theme: any) => {
+    setFlowWidget(ui, "flow-summary", (_tui: any, theme: any) => {
       let tuiRef = _tui;
       const text = new Text("", 0, 1);
       return {
@@ -305,7 +306,10 @@ export function activate(pi: ExtensionAPI) {
             // Pad to match summary box height
             while (lines.length < state.summaryBoxHeight) lines.push("");
             state.summaryBoxHeight = Math.max(state.summaryBoxHeight, lines.length);
-            return lines;
+
+            // Use Text component for consistent width padding (same as summary mode)
+            text.setText(lines.join("\n"));
+            return text.render(width);
           }
 
           // ── Summary box mode (default) ──

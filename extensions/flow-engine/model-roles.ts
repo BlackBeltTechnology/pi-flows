@@ -33,9 +33,15 @@ export function resolveModel(
   thinking?: string,
   getModelRole?: (role: string) => string | undefined,
 ): { modelId: string; thinking?: string } {
+  // Strip surrounding quotes (YAML may preserve them: "@coding" → @coding)
+  let ref = modelRef.trim();
+  if ((ref.startsWith('"') && ref.endsWith('"')) || (ref.startsWith("'") && ref.endsWith("'"))) {
+    ref = ref.slice(1, -1);
+  }
+
   // --- Role alias (@role) ---
-  if (modelRef.startsWith("@")) {
-    const role = modelRef.slice(1);
+  if (ref.startsWith("@")) {
+    const role = ref.slice(1);
     if (!getModelRole) {
       throw new Error(`Cannot resolve @${role}: getModelRole not provided`);
     }
@@ -47,11 +53,11 @@ export function resolveModel(
   }
 
   // --- Model ID with thinking suffix (id:level) ---
-  if (modelRef.includes(":")) {
-    const [id, thinkingSuffix] = modelRef.split(":");
+  if (ref.includes(":")) {
+    const [id, thinkingSuffix] = ref.split(":");
     return { modelId: id, thinking: thinking || thinkingSuffix };
   }
 
   // --- Plain model ID ---
-  return { modelId: modelRef, thinking };
+  return { modelId: ref, thinking };
 }

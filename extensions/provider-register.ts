@@ -46,9 +46,15 @@ interface ModelEntry {
   maxTokens: number;
 }
 
+interface RolePreset {
+  name: string;
+  roles: Record<string, string>;
+}
+
 interface Config {
   providers: Record<string, ProviderEntry>;
   roles: Record<string, string>;
+  rolePresets?: RolePreset[];
   models: ModelEntry[];
   autonomousMode?: boolean;
 }
@@ -75,7 +81,6 @@ const DEFAULT_CONFIG: Config = {
   roles: {
     planning: "anthropic/claude-opus-4-6",
     coding: "anthropic/claude-sonnet-4-6",
-    modelling: "anthropic/claude-opus-4-6",
     compact: "anthropic/claude-haiku-4-5",
     fast: "anthropic/claude-haiku-4-5",
     research: "anthropic/claude-opus-4-6",
@@ -100,6 +105,7 @@ function loadConfig(): Config {
       return {
         providers,
         roles: { ...DEFAULT_CONFIG.roles, ...raw.roles },
+        rolePresets: Array.isArray(raw.rolePresets) ? raw.rolePresets : [],
         models: Array.isArray(raw.models) ? raw.models : DEFAULT_MODELS,
       };
     } catch {
@@ -206,12 +212,83 @@ export function activate(pi: ExtensionAPI) {
   pi.registerCommand("roles", {
     description: "Assign models to roles",
     handler: async (_args, ctx) => {
-        // Build merged model list: registry models + user-defined custom models
+        // Top-level menu: Edit roles or manage presets
+        const topItems: SelectItem[] = [
+          { value: "__edit__", label: "Edit roles", description: "Assign models to roles" },
+          { value: "__save_preset__", label: "Save as preset", description: "Save current roles as a named preset" },
+        ];
+
+        // Add existing presets
+        const presets = config.rolePresets ?? [];
+        if (presets.length > 0) {
+          for (const preset of presets) {
+            const summary = Object.values(preset.roles).slice(0, 2).join(", ") + (Object.keys(preset.roles).length > 2 ? "…" : "");
+            topItems.push({ value: `__preset__${preset.name}`, label: `▶ ${preset.name}`, description: summary });
+          }
+          topItems.push({ value: "__delete_preset__", label: "Delete preset", description: "Remove a saved preset" });
+        }
+
+        const topChoice = await selectOverlay(ctx, "Model Roles", topItems);
+        if (!topChoice) return;
+
+        // -- Save current roles as preset ---
+        if (topChoice === "__save_preset__") {
+          const name = await ctx.ui.input("Preset name", "default");
+          if (!name) return;
+          if (!config.rolePresets) config.rolePresets = [];
+          const existing = config.rolePresets.findIndex((p) => p.name === name);
+          const preset: RolePreset = { name, roles: { ...config.roles } };
+          if (existing >= 0) {
+            config.rolePresets[existing] = preset;
+          } else {
+            config.rolePresets.push(preset);
+          }
+          saveConfig(config);
+          ctx.ui.notify(`Saved preset "${name}"`, "info");
+          return;
+        }
+
+        // -- Load a preset ---
+        if (topChoice.startsWith("__preset__")) {
+          const presetName = topChoice.slice("__preset__".length);
+          const preset = presets.find((p) => p.name === presetName);
+          if (preset) {
+            // Apply preset roles (merge: keep existing role keys, override with preset values)
+            for (const [role, model] of Object.entries(preset.roles)) {
+              config.roles[role] = model;
+            }
+            currentRoles = { ...config.roles };
+            saveConfig(config);
+            ctx.ui.notify(`Loaded preset "${presetName}"`, "info");
+          }
+          return;
+        }
+
+        // -- Delete a preset ---
+        if (topChoice === "__delete_preset__") {
+          const deleteItems: SelectItem[] = presets.map((p) => ({
+            value: p.name,
+            label: p.name,
+            description: Object.values(p.roles).slice(0, 2).join(", "),
+          }));
+          const toDelete = await selectOverlay(ctx, "Delete which preset?", deleteItems);
+          if (toDelete && config.rolePresets) {
+            config.rolePresets = config.rolePresets.filter((p) => p.name !== toDelete);
+            saveConfig(config);
+            ctx.ui.notify(`Deleted preset "${toDelete}"`, "info");
+          }
+          return;
+        }
+
+        // -- Edit roles (original behavior, filtered to available models) ---
+
+        // Build model list: only authenticated/available models
         const seen = new Set<string>();
         const modelItems: SelectItem[] = [];
 
-        // Add models from pi's ModelRegistry (built-in + configured providers)
-        for (const model of ctx.modelRegistry.getAll()) {
+        // Use getAvailable() to only show models with auth configured
+        const availableModels = ctx.modelRegistry.getAvailable?.() ?? ctx.modelRegistry.getAll();
+        for (const model of availableModels) {
           const value = `${model.provider}/${model.id}`;
           if (!seen.has(value)) {
             seen.add(value);
@@ -219,16 +296,24 @@ export function activate(pi: ExtensionAPI) {
           }
         }
 
-        // Add user-defined custom model strings (deduplicated)
-        // Skip entries whose id is already a suffix of a registered model
+        // Add user-defined custom models only if their provider has auth
         for (const m of config.models) {
           if (!seen.has(m.id)) {
             const alreadyRegistered = [...seen].some((key) => key.endsWith(`/${m.id}`));
             if (!alreadyRegistered) {
-              seen.add(m.id);
-              modelItems.push({ value: m.id, label: m.id, description: m.name });
+              // Check if the custom model's provider has API key configured
+              const providerName = m.id.split("/")[0];
+              if (providerName && config.providers[providerName] && hasApiKey(providerName, config.providers[providerName])) {
+                seen.add(m.id);
+                modelItems.push({ value: m.id, label: m.id, description: m.name });
+              }
             }
           }
+        }
+
+        if (modelItems.length === 0) {
+          ctx.ui.notify("No authenticated models found. Use /login or /provider to configure.", "warning");
+          return;
         }
 
         await ctx.ui.custom((tui: any, t: any, _kb: any, done: () => void) => {

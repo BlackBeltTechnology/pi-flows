@@ -288,6 +288,16 @@ This embeds the result inline in the task text. The agent expects `{input.model_
 
 # Custom Agent Creation Rules
 
+## Editing Existing Flows
+
+When modifying an existing flow, **always check `agent_catalog` first**. Agents with `source_type: "local"` are project-specific custom agents already on disk. When the existing flow references these agents:
+
+- **Reuse them by name** — do NOT create new agents that duplicate existing local agents
+- To modify a local agent, `read` its `source_path` from the catalog, make your changes, and write it back with `agent_write` to the same path
+- Only create a new agent if the flow truly needs a capability not covered by any existing agent in the catalog
+
+## Creating New Agents
+
 When no existing agent covers a need, create a custom agent definition:
 
 - Use `context:` for small reference files injected before the agent starts
@@ -313,6 +323,7 @@ If the user explicitly requests writing to a different location (e.g., editing a
 
 - Do NOT include archive/commit steps in the flow -- the engine handles lifecycle automatically
 - Prefer built-in agents when their `use_when` matches the task
+- When editing a flow, reuse existing local agents (source_type "local" in catalog) — do NOT recreate them
 - Create custom agents only when no existing agent covers the need
 - Every `## agent-name` step MUST reference an agent that exists in the catalog (check with `agent_catalog`) or one you create with `agent_write`. If `flow_validate` reports "Agent not in catalog", create the missing agent with `agent_write` and re-validate before calling `flow_write`.
 - Design flows with proper parallelism -- use `blockedBy` only where there are real data or ordering dependencies

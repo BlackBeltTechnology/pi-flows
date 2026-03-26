@@ -195,7 +195,11 @@ function parseFrontmatterFields(
         } else {
           // Check if this is an array item line inside nested block
           const prefix = [...blockStack, nestedKey].join(".");
-          fields.set(prefix, nestedValue);
+          // Strip surrounding quotes from YAML values
+          const cleanNested = (nestedValue.startsWith('"') && nestedValue.endsWith('"')) || (nestedValue.startsWith("'") && nestedValue.endsWith("'"))
+            ? nestedValue.slice(1, -1)
+            : nestedValue;
+          fields.set(prefix, cleanNested);
         }
       } else if (/^- /.test(trimmedLine)) {
         // Array item within nested block
@@ -227,7 +231,11 @@ function parseFrontmatterFields(
       blockStack = [key];
     } else {
       currentKey = key;
-      fields.set(key, value);
+      // Strip surrounding quotes from YAML values
+      const cleanValue = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))
+        ? value.slice(1, -1)
+        : value;
+      fields.set(key, cleanValue);
     }
   }
 

@@ -286,7 +286,7 @@ Modes: `summary` (overview) → `navigate` (agent list) → detail overlay. Shar
 ## 7. Architect Tools (Flow/Agent Design)
 
 ### 7.1 `agent_catalog` Tool
-Returns JSON of all discovered agents with name, description, tools, inputs, card config, and architect metadata. Fallback: uses description as `use_when` when no architect block.
+Returns JSON of all discovered agents with name, description, tools, inputs, card config, source info (`source_type`, `source_path`), and architect metadata. Agents are classified as `"local"` (project .pi/flows/), `"package"` (extension packages), or `"built-in"` (pi-flows). Fallback: uses description as `use_when` when no architect block.
 
 - **File**: `extensions/flow-engine/tools/agent-catalog.ts`
 

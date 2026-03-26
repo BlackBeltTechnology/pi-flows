@@ -1,9 +1,8 @@
 // ---------------------------------------------------------------------------
 // Session File Tracker Extension
 //
-// Tracks file modifications (edit/write tool calls) per session.
+// Tracks file modifications (edit/write tool calls) in the main session.
 // Provides session-scoped file counts + insertions/deletions for the footer.
-// Also tracks subagent file modifications via flow:subagent-tool-result events.
 // ---------------------------------------------------------------------------
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -75,28 +74,20 @@ export function onFileStatsChange(cb: () => void): void {
 // ---- Extension activation -------------------------------------------------
 
 export function activate(pi: ExtensionAPI) {
-  // Track main session tool results
+  // Track main session tool results only (not subagent calls)
   pi.on("tool_result", (event: any) => {
     const toolName = event.toolName || "";
-    const params = event.params || event.input || {};
-    const result = event.result;
+    const input = event.input || {};
+    const details = event.details;
 
-    if (toolName === "edit" && params.file_path && result?.diff) {
-      recordEdit(params.file_path, result.diff);
-    } else if (toolName === "write" && params.file_path && params.content) {
-      const lineCount = (params.content as string).split("\n").length;
-      recordWrite(params.file_path, lineCount);
+    // Edit tool: input.path + details.diff
+    if (toolName === "edit" && input.path && details?.diff) {
+      recordEdit(input.path, details.diff);
     }
-  });
-
-  // Track subagent file modifications via bridge events
-  pi.events?.on("flow:subagent-tool-result", (data: any) => {
-    const { toolName, output } = data || {};
-    if (toolName === "write" && output?.file_path) {
-      const lineCount = output.lineCount || 0;
-      recordWrite(output.file_path, lineCount);
-    } else if (toolName === "edit" && output?.file_path && output?.diff) {
-      recordEdit(output.file_path, output.diff);
+    // Write tool: input.path + input.content
+    else if (toolName === "write" && input.path && input.content) {
+      const lineCount = (input.content as string).split("\n").length;
+      recordWrite(input.path, lineCount);
     }
   });
 

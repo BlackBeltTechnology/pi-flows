@@ -219,7 +219,7 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
   // ── Legend ──
   lines.push(fg("dim", `  Legend: ○ agent  ◇ fork  ◆ conditional  ◈ decision  ↻ loop  ▷ flow-ref`));
   lines.push("");
-  lines.push(fg("dim", "  ↑↓ scroll · Backspace close"));
+  lines.push(fg("dim", "  ↑ ↓ scroll · Backspace close"));
 
   return lines;
 }

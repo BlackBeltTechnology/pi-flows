@@ -25,11 +25,12 @@ import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { registerFlowPreviewTool } from "./tools/flow-preview.js";
 import { FlowCancelledError } from "./flow-execution.js";
 import { CheckboxSelectList } from "../shared/checkbox-select-list.js";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { GridComponent } from "../flow-dashboard/grid-component.js";
 import { createAgentDetailOverlay } from "../flow-dashboard/agent-detail-overlay.js";
+import { setFlowWidget } from "../shared/flow-widget.js";
 
 // Re-export public API
 export type {
@@ -563,6 +564,14 @@ export function activate(pi: ExtensionAPI) {
   // Initial discovery
   init(pkgRoot, projectRoot);
 
+  // Crash recovery: clean up orphaned staging directory from previous session
+  {
+    const stagingDir = join(projectRoot, ".pi", "flows", ".staging");
+    if (existsSync(stagingDir)) {
+      try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }
+
   // getModelRole is imported at top level — shared module instance via single entry point.
 
   // Track authStorage and modelRegistry from session context
@@ -621,6 +630,12 @@ export function activate(pi: ExtensionAPI) {
   pi.events?.on("flow:complete", async (data: unknown) => {
     lastFlowResult = data as FlowResult;
     summaryVisible = true;
+    // Ensure dashboard widget is removed (safety net if cleanup missed it)
+    if (dashboardVisible || activeDashboard) {
+      if (uiCtx) setFlowWidget(uiCtx, "flow-dashboard", undefined);
+      dashboardVisible = false;
+      activeDashboard = null;
+    }
     // Share tool history and preserved cards with summary widget
     pi.events.emit("flow:set-summary-context", {
       toolHistory: lastToolHistory,
@@ -691,6 +706,12 @@ export function activate(pi: ExtensionAPI) {
   function handleDashboardInput(data: string): { consume: true } | undefined {
     // Skip input handling while an overlay is open (overlay handles its own keys)
     if (overlayOpen) return undefined;
+
+    // ── Ctrl+X: always abort if a flow is running (even without dashboard focus) ──
+    if (data === KEY_CTRL_X && flowManager.isRunning) {
+      flowManager.abort();
+      return { consume: true };
+    }
 
     // ── Dashboard widget active (during flow) ──
     if (dashboardVisible && activeDashboard) {
@@ -775,7 +796,7 @@ export function activate(pi: ExtensionAPI) {
       }
       if (data === KEY_CTRL_X) {
         // Dismiss the summary widget entirely
-        uiCtx?.setWidget?.("flow-summary", undefined);
+        if (uiCtx) setFlowWidget(uiCtx, "flow-summary", undefined);
         summaryVisible = false;
         setSummaryState(null);
         requestRender();
@@ -856,7 +877,7 @@ export function activate(pi: ExtensionAPI) {
     activeDashboard = null;
     dashboardVisible = false;
     if (lastWiredUi) {
-      lastWiredUi.setWidget("flow-dashboard", undefined);
+      setFlowWidget(lastWiredUi, "flow-dashboard", undefined);
       lastWiredUi = null;
     }
   });
@@ -948,7 +969,7 @@ export function activate(pi: ExtensionAPI) {
       pi.registerTool(tool);
     },
   };
-  registerAgentCatalogTool(capturingPi as any, () => agents);
+  registerAgentCatalogTool(capturingPi as any, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
   registerAgentValidateTool(capturingPi as any);
   registerAgentWriteTool(capturingPi as any);
   registerFlowValidateTool(capturingPi as any, () => agents);
@@ -986,7 +1007,6 @@ export function activate(pi: ExtensionAPI) {
 
   /** Wire a dashboard to setWidget using the factory pattern. */
   function wireDashboard(dashboard: any, ui: any) {
-    ui.setWidget("flow-summary", undefined);
     summaryVisible = false;
     activeDashboard = dashboard;
     dashboardVisible = true;
@@ -1006,8 +1026,9 @@ export function activate(pi: ExtensionAPI) {
       },
     };
 
-    // Register widget once — factory captures tui/theme refs on first call
-    ui.setWidget(
+    // Register widget — clears all other flow widgets automatically
+    setFlowWidget(
+      ui,
       "flow-dashboard",
       (tuiInstance: any, theme: any) => {
         tuiRef = tuiInstance;
@@ -1015,7 +1036,6 @@ export function activate(pi: ExtensionAPI) {
         themeRef = theme; // store for overlay rendering
         return component;
       },
-      { placement: "aboveEditor" },
     );
 
     // Spinner callback: invalidate + request render (no setWidget recreation)
@@ -1046,7 +1066,7 @@ export function activate(pi: ExtensionAPI) {
         lastToolHistory = new Map(activeFlow.dashboard.getAllToolHistory());
         lastCards = new Map(activeFlow.dashboard.getAllCards());
         activeFlow.dashboard.dispose();
-        activeFlow.ui?.setWidget("flow-dashboard", undefined);
+        if (activeFlow.ui) setFlowWidget(activeFlow.ui, "flow-dashboard", undefined);
         dashboardVisible = false;
         activeDashboard = null;
       }

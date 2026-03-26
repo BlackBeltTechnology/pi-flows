@@ -182,9 +182,23 @@ export function validateAgentContent(
 
   if (fields.has("model")) {
     const modelEntry = fields.get("model")!;
-    const modelValue = modelEntry.value;
+    let modelValue = modelEntry.value;
+
+    // Strip quotes — YAML may preserve them: "@coding" → @coding
+    if ((modelValue.startsWith('"') && modelValue.endsWith('"')) ||
+        (modelValue.startsWith("'") && modelValue.endsWith("'"))) {
+      diagnostics.push({
+        line: modelEntry.line,
+        severity: "warning",
+        message: `Model value has unnecessary quotes: ${modelValue}`,
+        suggestion: `Use model: ${modelValue.slice(1, -1)} without quotes`,
+      });
+      modelValue = modelValue.slice(1, -1);
+    }
+
+    // Only role aliases (@role) are allowed — not bare model IDs.
+    // Roles are resolved at runtime via the provider-register module.
     if (modelValue.startsWith("@")) {
-      // Role alias -- check against known roles
       const role = modelValue.split(":")[0]; // strip thinking suffix if present
       if (!KNOWN_MODEL_ROLES.has(role)) {
         diagnostics.push({

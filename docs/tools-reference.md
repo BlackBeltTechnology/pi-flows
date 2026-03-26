@@ -200,7 +200,7 @@ These tools are available only during flow design sessions — when the user run
 
 ### agent_catalog
 
-List all discovered agents with their descriptions, tools, inputs, card config, and architect metadata. The architect uses this to understand available agents before building flows.
+List all discovered agents with their descriptions, tools, inputs, card config, source info, and architect metadata. The architect uses this to understand available agents before building flows. Agents with `source_type: "local"` are project-specific custom agents that can be read and modified with `agent_write`.
 
 **Parameters:** None.
 
@@ -213,6 +213,8 @@ List all discovered agents with their descriptions, tools, inputs, card config, 
     "description": "Investigates the codebase",
     "tools": ["read", "grep", "bash"],
     "inputs": ["focus_area"],
+    "source_type": "local",
+    "source_path": "/path/to/project/.pi/flows/agents/researcher.md",
     "card": { "label": "Research", "metric": "researcher" },
     "architect": {
       "use_when": "When codebase investigation is needed",
@@ -223,6 +225,13 @@ List all discovered agents with their descriptions, tools, inputs, card config, 
   }
 ]
 ```
+
+The `source_type` field indicates where the agent comes from:
+- `"local"` — Project-specific agent in `.pi/flows/agents/` (can be modified)
+- `"package"` — From a registered extension package
+- `"built-in"` — Built into pi-flows
+
+The `source_path` field is included for `"local"` and `"package"` agents, providing the file path for reading/modifying.
 
 ### agent_validate
 

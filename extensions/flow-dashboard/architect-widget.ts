@@ -129,7 +129,16 @@ function parseFlowSteps(content: string): { name: string; description: string; m
         }
         const taskMatch = line.match(/^task:\s*(.+)$/);
         if (taskMatch) {
-          last.task = taskMatch[1].trim();
+          const taskValue = taskMatch[1].trim();
+          if (taskValue === ">" || taskValue === "|") {
+            // YAML multi-line: collect subsequent indented lines
+            last.task = "";
+          } else {
+            last.task = taskValue;
+          }
+        } else if (last.task !== undefined && /^\s{2,}/.test(line) && !line.match(/^\w+:/)) {
+          // Continuation of a multi-line task value
+          last.task = last.task ? last.task + " " + line.trim() : line.trim();
         }
       }
     }
@@ -238,11 +247,15 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   onToolResult(toolName: string, output: any, isError: boolean): void;
   getFlowContent(): string | null;
   hasFlowContent(): boolean;
+  getEventLog(): any[];
   dispose(): void;
 } {
   const resolveAgentType = opts?.resolveAgentType;
   // Stash flow content for overlay — updated on flow_write/flow_preview
   let lastFlowContent: string | null = null;
+
+  // Event log for detail overlay (same shape as AgentDashboard event log)
+  const eventLog: Array<{ kind: string; toolName?: string; input?: any; output?: any; isError?: boolean; text?: string }> = [];
 
   const state: ArchitectState = {
     mode: "design",
@@ -296,6 +309,9 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   function onToolCall(toolName: string, input: any): void {
     startSpinner();
 
+    // Record in event log for detail overlay
+    eventLog.push({ kind: "tool", toolName, input, output: undefined, isError: false });
+
     // Track the most recent tool call for display (all tools, not just architect-specific)
     state.lastToolCall = { toolName, inputPreview: extractInputPreview(toolName, input) };
 
@@ -311,6 +327,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         // Check if this agent is already in the list
         const existing = state.agents.find((a) => a.name === name);
         if (existing) {
+          existing.type = "custom";  // agent_write always means custom
           existing.status = "creating";
           existing.statusText = "Writing frontmatter\u2026";
         } else {
@@ -396,6 +413,14 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     output: any,
     isError: boolean,
   ): void {
+    // Update last tool entry in event log
+    for (let i = eventLog.length - 1; i >= 0; i--) {
+      if (eventLog[i].kind === "tool" && eventLog[i].output === undefined) {
+        eventLog[i].output = output;
+        eventLog[i].isError = isError;
+        break;
+      }
+    }
     switch (toolName) {
       case "agent_catalog": {
         state.statusLeft = "";
@@ -640,8 +665,8 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
         // -- Status bar -------------------------------------------------------
         const left = state.statusLeft
-          ? " Status: " + state.statusLeft
-          : " Status: idle";
+          ? " " + state.statusLeft
+          : "";
         const right = state.statusRight || "";
         const separator = right ? " \u2502 " : "";
         const statusVis = left.length + separator.length + right.length;
@@ -656,8 +681,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
         // -- Keyboard hints ---------------------------------------------------
         {
-          const hints: string[] = ["Ctrl+X stop"];
-          if (lastFlowContent) hints.push("Ctrl+O inspect flow");
+          const hints: string[] = ["Ctrl+X stop", "Ctrl+O inspect"];
           const hintText = " " + hints.join(" \u00B7 ");
           const hintVis = hintText.length;
           lines.push(
@@ -741,9 +765,8 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           for (let i = 0; i < visibleSteps.length; i++) {
             const step = visibleSteps[i];
             const num = `${i + 1}.`;
-            const typeTag = step.sourceType === "custom" ? "(custom)" : step.sourceType === "local" ? "(local)" : "(built-in)";
-            const stepHeader = ` ${num} ${theme.fg("accent", step.id)}  ${theme.fg("dim", typeTag)}`;
-            const stepHeaderVis = 1 + num.length + 1 + step.id.length + 2 + typeTag.length;
+            const stepHeader = ` ${num} ${theme.fg("accent", step.id)}`;
+            const stepHeaderVis = 1 + num.length + 1 + step.id.length;
             lines.push(
               bord("\u2502") + stepHeader + " ".repeat(Math.max(0, w - stepHeaderVis)) + bord("\u2502"),
             );
@@ -870,5 +893,19 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     return lastFlowContent !== null;
   }
 
-  return { factory, setUpdateCallback, onToolCall, onToolResult, getFlowContent, hasFlowContent, dispose };
+  function onAssistantText(text: string): void {
+    if (!text) return;
+    eventLog.push({ kind: "text", text });
+  }
+
+  function onThinkingText(text: string): void {
+    if (!text) return;
+    eventLog.push({ kind: "thinking", text });
+  }
+
+  function getEventLog(): any[] {
+    return eventLog;
+  }
+
+  return { factory, setUpdateCallback, onToolCall, onToolResult, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getEventLog, dispose };
 }
