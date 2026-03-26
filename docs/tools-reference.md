@@ -296,7 +296,8 @@ Render a visual preview of a flow showing steps, dependencies, and agent assignm
 | `finish` | | ✓ (guard-injected) | |
 | `skill_read` | | ✓ | |
 | `ask_user` | | ✓ | |
-| `read`, `write`, `edit`, `bash`, etc. | | ✓ (if declared) | |
+| `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` | | ✓ (if declared) | |
+| Extension tools (via `flow:register-tool`) | | ✓ (if declared) | |
 | `agent_catalog` | | | ✓ (customTools) |
 | `agent_validate` | | | ✓ (customTools) |
 | `agent_write` | | | ✓ (customTools) |
@@ -304,4 +305,26 @@ Render a visual preview of a flow showing steps, dependencies, and agent assignm
 | `flow_write` | | | ✓ (customTools) |
 | `flow_preview` | | | ✓ (customTools) |
 
-> **Injection mechanism:** `finish` is registered by `createGuardExtension({ requireFinish: true })` inside the agent's in-process SDK session. Architect tools are passed as `SpawnOptions.extraCustomTools` — an array of tool definitions captured by the main session at startup time and injected into the architect agent's session.
+> **Injection mechanism:** `finish` is registered by `createGuardExtension({ requireFinish: true })` inside the agent's in-process SDK session. Architect tools are passed as `SpawnOptions.extraCustomTools` — an array of tool definitions captured by the main session at startup time and injected into the architect agent's session. Extension tools are passed alongside architect tools via `extraCustomTools`, filtered by each agent's `tools:` declaration.
+
+### Extension Tools
+
+Domain packages can make custom tools available to agents by registering them via `flow:register-tool`:
+
+```typescript
+pi.events?.emit("flow:register-tool", {
+  tool: {
+    name: "model_cli",
+    description: "Run a model CLI command and return the result",
+    parameters: Type.Object({
+      command: Type.String({ description: "CLI command to run" }),
+    }),
+    execute: async ({ command }: { command: string }) => {
+      // Implementation...
+      return { result: "ok" };
+    },
+  },
+});
+```
+
+Agents can then use the tool by declaring it in their `tools:` frontmatter. The flow engine filters registered extension tools and only injects those the agent has declared. See [events-api.md — flow:register-tool](events-api.md#flowregister-tool) for the full registration reference.

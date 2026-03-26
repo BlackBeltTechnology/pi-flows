@@ -58,6 +58,7 @@ let packageRoot = "";
 const extraAgentsDirs: string[] = [];
 const extraFlowsDirs: string[] = [];
 const extraGuardFactories: any[] = []; // ExtensionFactory[]
+const registeredExtensionTools: any[] = []; // Extension-registered tools for flow agent sessions
 
 // ---- Ask-user bridge queue ------------------------------------------------
 // Queues extension_ui_request events from parallel subagents and dispatches
@@ -289,6 +290,7 @@ class FlowManager {
       authStorage: this.deps.getAuthStorage?.(),
       modelRegistry: this.deps.getModelRegistry?.(),
       extraGuardFactories: [...extraGuardFactories],
+      extraCustomTools: [...registeredExtensionTools],
       signal: abortController.signal,
       isAutonomous: () => isAutonomousMode(),
       onAutoDecision: dashboard
@@ -1005,6 +1007,7 @@ export function activate(pi: ExtensionAPI) {
   // We capture the tool definitions so they can be passed to architect subagent sessions
   // as customTools (since extension tools aren't available in SDK subagent sessions).
   const architectToolDefs: any[] = [];
+  // Extension-registered tools populated via flow:register-tool events (module-level array)
   const capturingPi = {
     ...pi,
     registerTool: (tool: any) => {
@@ -1089,6 +1092,10 @@ export function activate(pi: ExtensionAPI) {
         return component;
       },
     );
+
+    // Force full re-render to clear stale lines from any previous widget
+    // (e.g., architect widget's Flow Preview box). nextTick ensures tuiRef is set.
+    process.nextTick(() => { tuiRef?.requestRender(true); });
 
     // Spinner callback: invalidate + request render (no setWidget recreation)
     const update = () => {
@@ -1286,6 +1293,16 @@ export function activate(pi: ExtensionAPI) {
   // Provide architect tool definitions for subagent sessions (flow-workspace)
   pi.events.on("flow:get-architect-tools", (data: any) => {
     data.tools = architectToolDefs;
+  });
+
+  // Allow extensions to register custom tool definitions for use in flow agent sessions.
+  // Extensions emit: pi.events.emit("flow:register-tool", { tool: toolDefinition })
+  // Collected tools are passed as extraCustomTools to all spawnAgent() calls in flow-execution.ts,
+  // filtered to only agents that declare the tool name in their frontmatter tools: list.
+  pi.events.on("flow:register-tool", (data: any) => {
+    if (data?.tool) {
+      registeredExtensionTools.push(data.tool);
+    }
   });
 
   // Provide authStorage/modelRegistry for subagent sessions (flow-workspace)

@@ -45,6 +45,8 @@ export interface FlowRunOptions {
   authStorage?: any;
   modelRegistry?: any;
   extraGuardFactories?: any[];
+  /** Extension-registered custom tool definitions passed to spawned agent sessions. */
+  extraCustomTools?: any[];
   getModelRole?: (role: string) => string | undefined;
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
@@ -348,6 +350,16 @@ async function executeAgentStepWithRouting(step: AgentStep, ctx: FlowContext, op
   return { agentResult: result, nextStepId };
 }
 
+/**
+ * Filter extraCustomTools to only include tools declared in the agent's `tools` list.
+ * Built-in tools (read, write, bash, etc.) are handled by TOOL_FACTORIES in execution.ts
+ * and are never part of extraCustomTools, so this filter only affects extension tools.
+ */
+function filterExtensionTools(allTools: any[] | undefined, agentTools: string[]): any[] {
+  if (!allTools || allTools.length === 0) return [];
+  return allTools.filter(t => agentTools.includes(t.name));
+}
+
 async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: FlowRunOptions): Promise<AgentResult | null> {
   const agentConfig = options.getAgent(step.agent);
   if (!agentConfig) {
@@ -431,6 +443,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
     extraGuardFactories: options.extraGuardFactories,
+    extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
     onToolCall: (name, input) => options.onToolCall?.(step.agent, name, input),
     onToolResult: (name, output, err) => options.onToolResult?.(step.agent, name, output, err),
     onAssistantText: (text) => options.onAssistantText?.(step.agent, text),
@@ -480,6 +493,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
         authStorage: options.authStorage,
         modelRegistry: options.modelRegistry,
         extraGuardFactories: options.extraGuardFactories,
+        extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
         decisionBranches: branchNames,
         signal: options.signal,
       });
@@ -537,6 +551,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
         authStorage: options.authStorage,
         modelRegistry: options.modelRegistry,
         extraGuardFactories: options.extraGuardFactories,
+        extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
         decisionBranches: branchNames,
         signal: options.signal,
       });
@@ -666,6 +681,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
     extraGuardFactories: options.extraGuardFactories,
+    extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: branchNames,
     signal: options.signal,
   });
@@ -731,6 +747,7 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
     extraGuardFactories: options.extraGuardFactories,
+    extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: ["loop", "exit"],
     signal: options.signal,
   });

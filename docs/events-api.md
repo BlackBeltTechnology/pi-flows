@@ -17,8 +17,9 @@ pi-flows uses `pi.events` (the shared event bus from pi's extension API) for all
 │  │  flow:register-gate                 │  │  flow:loop-iteration         │
 │  │  flow:register-guard-extension      │  │  flow:auto-decision          │
 │  │  flow:register-footer-segment       │  │                              │
-│  │                                     │  └──────────────────────────────┘
-│  └─────────────────────────────────────┘                             │
+│  │  flow:register-tool                 │  └──────────────────────────────┘
+│  │                                     │
+│  └─────────────────────────────────────┘
 │                                                                     │
 │  ┌─── Query (synchronous read-back) ──┐                             │
 │  │                                     │                             │
@@ -34,8 +35,28 @@ pi-flows uses `pi.events` (the shared event bus from pi's extension API) for all
 ## Table of Contents
 
 - [Registration Events](#registration-events)
+  - [flow:register-agents-dir](#flowregister-agents-dir)
+  - [flow:register-flows-dir](#flowregister-flows-dir)
+  - [flow:register-skills-dir](#flowregister-skills-dir)
+  - [flow:register-card](#flowregister-card)
+  - [flow:register-workflow](#flowregister-workflow)
+  - [flow:register-gate](#flowregister-gate)
+  - [flow:register-guard-extension](#flowregister-guard-extension)
+  - [flow:register-footer-segment](#flowregister-footer-segment)
+  - [flow:register-tool](#flowregister-tool)
 - [Runtime Events](#runtime-events)
+  - [flow:run](#flowrun)
+  - [flow:complete](#flowcomplete)
+  - [flow:rediscover](#flowrediscover)
+  - [flow:subagent-tool-call](#flowsubagent-tool-call)
+  - [flow:subagent-tool-result](#flowsubagent-tool-result)
+  - [flow:loop-iteration](#flowloop-iteration)
+  - [flow:auto-decision](#flowauto-decision)
 - [Query Events](#query-events)
+  - [flow:get-agents](#flowget-agents)
+  - [flow:get-flows](#flowget-flows)
+  - [flow:get-architect-tools](#flowget-architect-tools)
+  - [flow:get-spawn-context](#flowget-spawn-context)
 - [Key Type Shapes](#key-type-shapes)
 
 ---
@@ -271,6 +292,46 @@ invalidateFn?.();  // Triggers footer re-render
 ```
 
 If you register a segment with a `name` that already exists, it replaces the existing segment.
+
+### flow:register-tool
+
+Register a custom tool definition that is injected into agent sessions during flow execution. Registered tools are passed as `extraCustomTools` to every agent session and are filtered to only agents that declare the tool name in their `tools:` frontmatter.
+
+| Property | Detail |
+|----------|--------|
+| **Direction** | You → pi-flows |
+| **Data shape** | `{ tool: ToolDefinition }` |
+| **Effect** | The tool becomes available to any agent that declares it in its `tools:` frontmatter field. Agents without the tool name listed receive nothing. |
+
+```typescript
+import { Type } from "@sinclair/typebox";
+
+pi.events?.emit("flow:register-tool", {
+  tool: {
+    name: "model_cli",
+    description: "Run a model CLI command",
+    parameters: Type.Object({
+      command: Type.String({ description: "The CLI command to run" }),
+    }),
+    execute: async ({ command }: { command: string }) => {
+      // Your tool implementation
+      return { result: "ok" };
+    },
+  },
+});
+```
+
+Then agents can declare and use the tool:
+
+```yaml
+# my-agent.md
+---
+name: my-agent
+tools: read, model_cli
+---
+```
+
+> **Note:** This mechanism lets extensions expose domain-specific CLI tools, query interfaces, or any callable function to agents in flows. The tool definition format matches the pi-coding-agent `ToolDefinition` interface (TypeBox schema + execute function). Tools registered via this event are **not** available in the main session — only inside agent subprocesses dispatched by the flow engine.
 
 ---
 
@@ -522,7 +583,8 @@ interface FlowResult {
   forks: Record<string, { answer: string; notes?: string }>;
   flowName: string;
   stepCount: number;
-  totalDuration: number;  // Wall-clock milliseconds for entire flow
+  totalDuration: number;              // Wall-clock milliseconds for entire flow
+  status?: "success" | "error" | "aborted"; // Overall flow outcome
 }
 ```
 

@@ -245,6 +245,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   setUpdateCallback(cb: () => void): void;
   onToolCall(toolName: string, input: any): void;
   onToolResult(toolName: string, output: any, isError: boolean): void;
+  setReady(): void;
   getFlowContent(): string | null;
   hasFlowContent(): boolean;
   getEventLog(): any[];
@@ -253,6 +254,10 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   const resolveAgentType = opts?.resolveAgentType;
   // Stash flow content for overlay — updated on flow_write/flow_preview
   let lastFlowContent: string | null = null;
+
+  // Catalog metadata — stored separately from state.agents to avoid cluttering the display
+  let catalogAgentTypes = new Map<string, "built-in" | "local">();
+  let catalogCount = 0;
 
   // Event log for detail overlay (same shape as AgentDashboard event log)
   const eventLog: Array<{ kind: string; toolName?: string; input?: any; output?: any; isError?: boolean; text?: string }> = [];
@@ -365,16 +370,16 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           if (parsed.maxConcurrent) state.maxConcurrent = parsed.maxConcurrent;
           state.dagSteps = parsed.steps;
 
-          // Register any agents mentioned in the flow that aren't already tracked
-          // and mark source type on steps
-          const agentTypeMap = new Map(state.agents.map((a) => [a.name, a.type]));
+          // Register agents from flow steps — resolve source type from catalog metadata
           for (const step of parsed.steps) {
-            step.sourceType = agentTypeMap.get(step.id) || "built-in";
+            step.sourceType = catalogAgentTypes.get(step.id)
+              || state.agents.find((a) => a.name === step.id)?.type
+              || "built-in";
             if (!state.agents.find((a) => a.name === step.id)) {
               state.agents.push({
                 name: step.id,
-                type: "built-in",
-                status: "pending",
+                type: step.sourceType as "built-in" | "local" | "custom",
+                status: "done",
               });
             }
           }
@@ -391,6 +396,20 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           if (parsed.name) state.flowName = parsed.name;
           if (parsed.description) state.flowDescription = parsed.description;
           state.dagSteps = parsed.steps;
+
+          // Register agents from flow steps — resolve source type from catalog metadata
+          for (const step of parsed.steps) {
+            step.sourceType = catalogAgentTypes.get(step.id)
+              || state.agents.find((a) => a.name === step.id)?.type
+              || "built-in";
+            if (!state.agents.find((a) => a.name === step.id)) {
+              state.agents.push({
+                name: step.id,
+                type: step.sourceType as "built-in" | "local" | "custom",
+                status: "done",
+              });
+            }
+          }
         }
         // Transition to preview mode
         state.mode = "preview";
@@ -423,25 +442,22 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     }
     switch (toolName) {
       case "agent_catalog": {
-        state.statusLeft = "";
-        // Populate agents from the catalog result, resolving source type
+        // Store catalog metadata for source type resolution — don't add to display list
         try {
           const catalog = typeof output === "string" ? JSON.parse(output) : output;
           if (Array.isArray(catalog)) {
+            catalogCount = catalog.length;
             for (const entry of catalog) {
-              if (entry.name && !state.agents.find((a) => a.name === entry.name)) {
+              if (entry.name) {
                 const agentType = resolveAgentType ? resolveAgentType(entry.name) : "built-in";
-                state.agents.push({
-                  name: entry.name,
-                  type: agentType,
-                  status: "done",
-                });
+                catalogAgentTypes.set(entry.name, agentType);
               }
             }
           }
         } catch {
           // Non-critical — catalog may be in unexpected format
         }
+        state.statusLeft = `Catalog: ${catalogCount} agents`;
         break;
       }
 
@@ -507,8 +523,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         if (isError) {
           state.previewApproval = "Preview failed";
         }
-        // Stop spinner since preview is now waiting for user action
-        stopSpinner();
+        // Keep spinner running — setReady() will stop it when the approval prompt is ready
         break;
 
       default:
@@ -709,12 +724,17 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
             bord("\u2500".repeat(Math.max(0, afterTitle)) + "\u2510"),
         );
 
-        // Header: flow name + description + metadata
+        // Header: flow name + description + metadata (spinner when still working)
         const flowLabel = state.flowName || "unnamed";
-        const nameStr = ` ${theme.fg("accent", flowLabel)}`;
-        const nameVis = 1 + flowLabel.length;
+        const spinnerActive = spinTimer !== null;
+        const namePrefix = spinnerActive
+          ? ` ${theme.fg("accent", SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length])} `
+          : " ";
+        const nameStr = `${namePrefix}${theme.fg("accent", flowLabel)}`;
+        // Visible length: space + (spinner + space if active) + flowLabel
+        const nameVisLen = spinnerActive ? (1 + 1 + 1 + flowLabel.length) : (1 + flowLabel.length);
         lines.push(
-          bord("\u2502") + nameStr + " ".repeat(Math.max(0, w - nameVis)) + bord("\u2502"),
+          bord("\u2502") + nameStr + " ".repeat(Math.max(0, w - nameVisLen)) + bord("\u2502"),
         );
 
         if (state.flowDescription) {
@@ -885,6 +905,12 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     onUpdate = null;
   }
 
+  function setReady(): void {
+    stopSpinner();
+    state.previewApproval = "";
+    invalidateFn?.();
+  }
+
   function getFlowContent(): string | null {
     return lastFlowContent;
   }
@@ -907,5 +933,5 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     return eventLog;
   }
 
-  return { factory, setUpdateCallback, onToolCall, onToolResult, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getEventLog, dispose };
+  return { factory, setUpdateCallback, onToolCall, onToolResult, setReady, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getEventLog, dispose };
 }

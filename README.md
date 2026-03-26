@@ -92,6 +92,7 @@ description: Run a research pass on the codebase
 ---
 
 ## researcher
+agent: researcher
 task: Investigate {task}
 ```
 
@@ -165,6 +166,7 @@ Steps communicate with each other through **template variables** — placeholder
 
 ```yaml
 ## developer
+agent: developer
 blockedBy: researcher
 task: Implement the changes. Research context: {result.researcher.summary}
 ```
@@ -240,13 +242,14 @@ Declare these in the `tools:` field:
 | `write` | Write or create files |
 | `edit` | Surgical text replacement in existing files |
 | `bash` | Execute shell commands |
-| `grep` | Search file contents with regex |
-| `glob` | Find files matching a glob pattern |
-| `find` | Find files in directory trees |
+| `grep` | Search file contents with regex (supports a `glob:` filter parameter) |
+| `find` | Find files in directory trees (supports glob patterns) |
 | `ls` | List directory contents |
 | `skill_read` | Read documentation files from a skill |
 
 > **`finish` is automatic.** Every agent automatically has the `finish` tool — do not declare it. Agents *must* call `finish` as their last action to submit structured results. Any tool calls after `finish` are blocked.
+
+> **Extension tools:** Domain packages can register additional tools (e.g., `model_cli`) via `flow:register-tool`. An agent can declare and use them by adding the tool name to its `tools:` field. See [Extending pi-flows](#extending-pi-flows) and [docs/events-api.md](docs/events-api.md#flowregister-tool).
 
 ### Model Roles
 
@@ -301,7 +304,7 @@ Custom metric renderers can be registered by extension packages via `flow:regist
 
 ## Writing Flows
 
-Flows are `.flow.md` files with YAML frontmatter and `##`-delimited step sections. Each `## heading` defines a **step** — the heading text is the step ID used for dependency wiring (`blockedBy`), result references (`{result.ID.*}`), and branching.
+Flows are `.flow.md` files with YAML frontmatter and `##`-delimited step sections. The step type is determined by the **`##` header prefix** — `## step-id` for agent steps, and `## type: id` for all other step types. The header text (after the prefix) is the **step ID**, used for dependency wiring (`blockedBy`), result references (`{result.ID.*}`), and branching.
 
 Save flows in `.pi/flows/flows/` to auto-register them as slash commands.
 
@@ -327,26 +330,33 @@ task_prompt: "What should I research and build?"
 
 ### Agent Steps
 
-The default step type. Dispatches a named agent with an optional task override.
+The default step type. Dispatches a named agent with a task. The `##` header text is the **step ID**. The `agent:` field is **always required** — it specifies which agent to dispatch.
 
 ```yaml
 ## researcher
-task: Investigate the codebase for {task}
-```
-
-When the step ID matches an agent name, the `agent:` field is optional. For a different agent:
-
-```yaml
-## my-investigation
 agent: researcher
 task: Investigate the codebase for {task}
 ```
+
+When the same agent needs to run multiple times in a flow with different tasks, give each step a unique ID:
+
+```yaml
+## create-draft
+agent: writer
+task: Write the initial draft
+
+## revise-draft
+agent: writer
+task: Revise the draft based on feedback
+```
+
+Wire dependencies and result references using the **step ID** (`blockedBy: create-draft`, `{result.create-draft.summary}`), not the agent name.
 
 **All agent step fields:**
 
 | Field | Description |
 |-------|-------------|
-| `agent` | Agent name to dispatch (defaults to step ID) |
+| `agent` | **Required.** Agent name to dispatch |
 | `task` | Task override (template string). If omitted, uses the flow's task |
 | `model` | Model override for this step only |
 | `blockedBy` | Step IDs (comma-separated) that must complete before this step starts |
@@ -358,15 +368,12 @@ task: Investigate the codebase for {task}
 
 ### Fork Steps
 
-Pause execution and ask the user a question, then branch based on their answer.
+Pause execution and ask the user a question, then branch based on their answer. Fork steps use the `## fork: id` header syntax.
 
-```yaml
-## choose-approach
-stepType: fork
-question: "Which approach do you prefer?"
-options:
-  - Quick fix
-  - Full refactor
+```
+## fork: choose-approach
+question: Which approach do you prefer?
+options: Quick fix, Full refactor
 branches:
   Quick fix: quick-fix-step
   Full refactor: refactor-step
@@ -385,13 +392,14 @@ branches:
 
 The user's answer is available in downstream steps as `{fork.choose-approach.answer}` and notes as `{fork.choose-approach.notes}`.
 
+> **`options:` format:** Options can be comma-separated inline (`options: fast, thorough`) or as a YAML list. Option text must exactly match the keys in `branches:`.
+
 ### Conditional Steps
 
-Branch based on whether a value exists in a previous step's artifacts.
+Branch based on whether a value exists in a previous step's artifacts. Conditional steps use the `## conditional: id` header syntax.
 
-```yaml
-## check-gaps
-stepType: conditional
+```
+## conditional: check-gaps
 check: researcher.artifacts.gaps
 present: fill-gaps-step
 absent: proceed-to-build
@@ -401,11 +409,10 @@ The `check` field is a dot-path checked against the accumulated result artifacts
 
 ### Agent Decision Steps
 
-Delegate a routing decision to an agent. The agent analyzes the situation and calls `finish` with a `branch` name.
+Delegate a routing decision to an agent. The agent analyzes the situation and calls `finish` with a `branch` name. Agent decision steps use the `## agent-decision: id` header syntax.
 
-```yaml
-## route-decision
-stepType: agent-decision
+```
+## agent-decision: route-decision
 agent: router-agent
 task: "Review the analysis and decide what to do next: {result.analyzer.summary}"
 branches:
@@ -417,11 +424,10 @@ The decision agent must call `finish` with `branch: "needs-work"` or `branch: "r
 
 ### Agent Loop Decision Steps
 
-Iterative verify/fix cycles. The agent decides on each iteration whether to loop back or exit forward.
+Iterative verify/fix cycles. The agent decides on each iteration whether to loop back or exit forward. Loop decision steps use the `## agent-loop-decision: id` header syntax.
 
-```yaml
-## verify-loop
-stepType: agent-loop-decision
+```
+## agent-loop-decision: verify-loop
 agent: verifier
 task: "Check if the implementation is correct: {result.developer.summary}"
 loop_target: developer
@@ -429,20 +435,18 @@ exit_target: finalize
 max_iterations: 3
 ```
 
-- **`loop_target`** — Step to jump back to when the agent decides more work is needed
-- **`exit_target`** — Step to continue to when the agent is satisfied
+- **`loop_target`** — Step ID to jump back to when the agent decides more work is needed
+- **`exit_target`** — Step ID to continue to when the agent is satisfied
 - **`max_iterations`** — Safety cap; forces an exit when exceeded
 
-The verifier calls `finish` with `branch: "developer"` to loop or `branch: "finalize"` to exit. If `max_iterations` is reached, the flow automatically exits to `exit_target`.
+The decision agent calls `finish` with `branch: "developer"` (the `loop_target` step ID) to loop back, or `branch: "finalize"` (the `exit_target` step ID) to exit forward. If `max_iterations` is exceeded, the flow automatically exits to `exit_target`.
 
 ### Flow Reference Steps
 
-Delegate execution to another flow file.
+Delegate execution to another flow file. The path to the sub-flow is encoded directly in the header using the `## flow-ref: path` syntax.
 
-```yaml
-## run-tests
-stepType: flow-ref
-path: .pi/flows/flows/test-suite.flow.md
+```
+## flow-ref: .pi/flows/flows/test-suite.flow.md
 on_complete: deploy-step
 on_error: fix-step
 ```
@@ -467,6 +471,7 @@ on_error: fix-step
 
    ```yaml
    ## developer
+   agent: developer
    blockedBy: researcher
    inputs:
      research_output: "{result.researcher.summary}"
@@ -490,9 +495,11 @@ description: Research the codebase then implement
 ---
 
 ## researcher
+agent: researcher
 task: Investigate the codebase for {task}
 
 ## developer
+agent: developer
 blockedBy: researcher
 inputs:
   research_output: "{result.researcher.summary}"
@@ -505,6 +512,7 @@ task: Implement based on research. Context is in {input.research_output}.
 
 ```yaml
 ## developer
+agent: developer
 task: "Implement this: {result.researcher.summary} {result.researcher.artifacts}"
 ```
 
@@ -512,6 +520,7 @@ task: "Implement this: {result.researcher.summary} {result.researcher.artifacts}
 
 ```yaml
 ## developer
+agent: developer
 inputs:
   context: "{result.researcher.summary}"
   files_changed: "{result.researcher.files}"
@@ -523,6 +532,7 @@ task: "Implement this feature. Context: {input.context}. Consider files: {input.
 ```yaml
 # Developer agent has no `inputs:` declaration
 ## developer-step
+agent: developer
 inputs:
   data: "some value"  # silently ignored in the system prompt
 ```
@@ -551,12 +561,15 @@ Use these placeholders in `task`, `inputs`, and `question` fields in your flow s
 
 ```yaml
 ## developer
+agent: developer
 task: "Implement feature: {task}. Research: {result.researcher.summary}"
 
 ## verifier
+agent: verifier
 task: "Check iteration {loop.verify-loop.iteration} of {loop.verify-loop.max}: {result.developer.summary}"
 
 ## post-fork
+agent: writer
 task: "User chose: {fork.choose-approach.answer}. Notes: {fork.choose-approach.notes}"
 ```
 
@@ -655,6 +668,7 @@ export default function activate(pi: ExtensionAPI) {
 | `flow:register-gate` | Add a prerequisite check that must pass before flows run |
 | `flow:register-guard-extension` | Register an additional sandboxing guard for spawned agents |
 | `flow:register-footer-segment` | Add a segment to the footer status bar |
+| `flow:register-tool` | Register a custom tool available to agents that declare it in `tools:` |
 
 ### Listening to Flow Events
 
@@ -692,7 +706,7 @@ For building packages on top of pi-flows, see the detailed reference documentati
 | Document | Description |
 |----------|-------------|
 | [Extending pi-flows](docs/extending-pi-flows.md) | Complete guide for building packages on pi-flows: package setup, registration patterns, custom cards, workflows, gates, guards, footer segments |
-| [Events API](docs/events-api.md) | All `flow:*` events with data shapes, direction (emit vs listen), and code examples |
+| [Events API](docs/events-api.md) | All `flow:*` events with data shapes, direction (emit vs listen), and code examples — including `flow:register-tool` for custom agent tools |
 | [Tools Reference](docs/tools-reference.md) | All tools by execution context — main session, agent session, architect session |
 | [Flow Authoring](docs/flow-authoring.md) | Detailed agent and flow file format reference with all fields and examples |
 | [Public API](docs/public-api.md) | Exported types and functions: `AgentConfig`, `FlowConfig`, `spawnAgent`, `runFlow`, `discoverAll`, etc. |

@@ -289,6 +289,10 @@ async function handleEditFlow(
     forks: {} as Record<string, any>,
   };
 
+  // Extract conversation context to give the architect awareness of what the user discussed
+  // before requesting this flow edit.
+  const editArchitectConvoContext = extractConversationContext(ctx.sessionManager?.getEntries?.() ?? []);
+
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";
   let flowPath = "";
@@ -318,6 +322,11 @@ async function handleEditFlow(
       modelRegistry: spawnCtx.modelRegistry,
       extraGuardFactories: spawnCtx.extraGuardFactories,
       extraCustomTools: spawnCtx.tools,
+      contextFileContents: editArchitectConvoContext.length > 50
+        ? [
+            `## Conversation Context\n\nThe following is the recent conversation from the user's main session that led to this flow edit request. Use it to understand what the user is trying to change and why:\n\n${editArchitectConvoContext}`,
+          ]
+        : undefined,
       signal: architectAbort.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
@@ -384,6 +393,9 @@ async function handleEditFlow(
     // Wait for any open preview overlay to close before prompting
     while (overlayOpen) await new Promise(r => setTimeout(r, 100));
 
+    // Signal widget that we're ready for user input (stops spinner)
+    architectWidget?.setReady?.();
+
     choice = await ctx.ui.select(
       "What would you like to do?",
       ["Save", "Replan", "Cancel"],
@@ -412,6 +424,8 @@ async function handleEditFlow(
   if (architectWidget) {
     architectWidget.dispose();
     setFlowWidget(ctx.ui, "flow-architect", undefined);
+    // Force full re-render to clear stale widget lines from differential rendering
+    widgetTuiRef?.requestRender(true);
   }
 
   if (choice === "Cancel" || !flowPath) {
@@ -652,6 +666,10 @@ async function handleNewFlow(
     forks: {} as Record<string, any>,
   };
 
+  // Extract conversation context to give the architect awareness of what led to this flow request.
+  // This is extracted here (after desc is resolved) so it's always fresh and in scope for the spawn loop.
+  const architectConvoContext = extractConversationContext(ctx.sessionManager?.getEntries?.() ?? []);
+
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";
   let flowPath = "";
@@ -682,6 +700,11 @@ async function handleNewFlow(
       modelRegistry: spawnCtx2.modelRegistry,
       extraGuardFactories: spawnCtx2.extraGuardFactories,
       extraCustomTools: spawnCtx2.tools,
+      contextFileContents: architectConvoContext.length > 50
+        ? [
+            `## Conversation Context\n\nThe following is the recent conversation from the user's main session that led to this flow request. Use it to understand what the user is trying to accomplish, what tools or patterns were discussed, and what they actually want the flow to do:\n\n${architectConvoContext}`,
+          ]
+        : undefined,
       signal: architectAbort2.signal,
       onToolCall: (toolName, input) => {
         if (architectWidget) {
@@ -749,6 +772,9 @@ async function handleNewFlow(
     // Wait for any open preview overlay to close before prompting
     while (overlayOpen2) await new Promise(r => setTimeout(r, 100));
 
+    // Signal widget that we're ready for user input (stops spinner)
+    architectWidget?.setReady?.();
+
     // Present choice to user — flow details are visible in the widget above
     choice = await ctx.ui.select(
       "What would you like to do?",
@@ -783,6 +809,8 @@ async function handleNewFlow(
   if (architectWidget) {
     architectWidget.dispose();
     setFlowWidget(ctx.ui, "flow-architect", undefined);
+    // Force full re-render to clear stale widget lines from differential rendering
+    widgetTuiRef2?.requestRender(true);
   }
 
   if (choice === "Cancel") {
@@ -827,6 +855,7 @@ async function handleNewFlow(
 
   // Step 6: Execute the designed flow via the flow manager (proper lifecycle)
   setFlowWidget(ctx.ui, "flow-architect", undefined);
+  widgetTuiRef2?.requestRender(true);
 
   try {
     // Re-discover to pick up custom agents written by architect

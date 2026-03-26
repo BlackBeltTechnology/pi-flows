@@ -15,6 +15,7 @@ Throughout this guide, [pi-judo](https://github.com/BlackBeltTechnology/pi-judo)
 - [Workflow Definitions](#workflow-definitions)
 - [Gates (Prerequisite Checks)](#gates-prerequisite-checks)
 - [Guard Extensions](#guard-extensions)
+- [Custom Agent Tools](#custom-agent-tools)
 - [Session Context](#session-context)
 - [Footer Segments](#footer-segments)
 - [Listening to Flow Events](#listening-to-flow-events)
@@ -359,6 +360,62 @@ pi.events?.emit("flow:register-guard-extension", {
 See [public-api.md — Guard Extension API](public-api.md#guard-extension-api) for the full `GuardOptions` reference.
 
 > **pi-judo reference:** pi-judo registers a model protection guard via `flow:register-guard-extension` with `factory` to prevent agents from directly modifying model artifacts.
+
+---
+
+## Custom Agent Tools
+
+Domain packages can expose custom tools to agents running inside flows. These tools are available to any agent that declares them in its `tools:` frontmatter field — they are not available in the main session.
+
+### Registering a Custom Tool
+
+Use the `flow:register-tool` event. The `tool` value is a pi-coding-agent `ToolDefinition` with a TypeBox parameter schema and an `execute` function:
+
+```typescript
+import { Type } from "@sinclair/typebox";
+
+pi.events?.emit("flow:register-tool", {
+  tool: {
+    name: "model_cli",
+    description: "Run a model CLI command and return the output",
+    parameters: Type.Object({
+      command: Type.String({ description: "CLI command to execute" }),
+      args: Type.Optional(Type.Array(Type.String(), { description: "Additional arguments" })),
+    }),
+    execute: async ({ command, args = [] }: { command: string; args?: string[] }) => {
+      // Your implementation here
+      const result = await runModelCommand(command, args);
+      return { output: result };
+    },
+  },
+});
+```
+
+### Using the Tool in an Agent
+
+Agents opt-in to the tool by listing its name in `tools:`:
+
+```yaml
+---
+name: model-modifier
+description: Modifies a Judo model using the CLI
+model: @coding
+tools: read, write, model_cli
+---
+
+You are a model modifier agent. Use `model_cli` to apply changes.
+
+Your task: {task}
+```
+
+### How It Works
+
+- **Registration time:** `flow:register-tool` collects tool definitions in a module-level array.
+- **Run time:** When a flow starts, the registered tools are passed as `extraCustomTools` to `runFlow()` → `spawnAgent()`.
+- **Filtering:** `spawnAgent` filters `extraCustomTools` to only tools the agent declared in its `tools:` frontmatter. Agents without the tool name do not receive it.
+- **Scope:** Custom tools are only available in agent subprocesses — not in the main pi session.
+
+> **pi-judo reference:** pi-judo registers a `model_cli` tool via `flow:register-tool` to let model-modifier agents run CLI commands against the Judo model compiler.
 
 ---
 

@@ -183,9 +183,11 @@ interface ForkStep {
   options: string[];
   branches: Record<string, string>;
   allowNotes?: boolean;
-  allowCustom?: boolean;
+  allowCustom?: boolean;    // @deprecated — use allowNotes instead
   multiSelect?: boolean;
-  decisionAgent?: string;
+  decisionAgent?: string;   // @deprecated — use agent field instead
+  agent?: string;           // Agent to use when auto-deciding (autonomous mode)
+  task?: string;            // Context/task for the agent when auto-deciding
 }
 
 interface ConditionalStep {
@@ -265,6 +267,7 @@ interface FlowResult {
   flowName: string;
   stepCount: number;
   totalDuration: number;        // Wall-clock ms for entire flow
+  status?: "success" | "error" | "aborted"; // Overall flow outcome
 }
 ```
 

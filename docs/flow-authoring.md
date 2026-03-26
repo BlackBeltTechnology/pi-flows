@@ -70,13 +70,14 @@ These tools can be declared in the agent `tools:` field:
 | `write` | Write/create files |
 | `edit` | Surgical text replacement |
 | `bash` | Execute shell commands |
-| `grep` | Search file contents |
-| `glob` | Find files by pattern |
-| `find` | Find files in directory trees |
+| `grep` | Search file contents (supports a `glob:` parameter for file filtering) |
+| `find` | Find files in directory trees (supports glob patterns) |
 | `ls` | List directory contents |
 | `skill_read` | Read skill documentation files |
 
 > **Note:** The `finish` tool is automatically available to every agent — do **not** declare it. Agents must call `finish` as their last action to submit structured results. See [tools-reference.md](tools-reference.md#finish) for the `finish` parameter schema.
+
+> **Extension tools:** Packages can register additional tools via `flow:register-tool`. These domain-specific tools (e.g., `model_cli`) are made available to any agent that declares them in `tools:`. See [events-api.md](events-api.md#flowregister-tool).
 
 ### Model Roles
 
@@ -179,7 +180,18 @@ Flows are `.flow.md` files with YAML frontmatter and `##`-delimited steps. Save 
 
 ### Step Types
 
-Each `## heading` defines a step. The heading text is the **step ID** — used for wiring (`blockedBy`, `{result.ID}`), branching, and result storage. The `agent:` field specifies which agent to dispatch.
+Each `## heading` defines a step. The step type is determined by the **header prefix**:
+
+| Header syntax | Step type |
+|---------------|-----------|
+| `## step-id` | Agent step (default — requires `agent:` in body) |
+| `## fork: id` | Fork step (user choice branching) |
+| `## conditional: id` | Conditional step (data-driven branching) |
+| `## agent-decision: id` | Agent decision step (AI-driven routing) |
+| `## agent-loop-decision: id` | Agent loop decision step (iterative cycles) |
+| `## flow-ref: path` | Flow reference step (delegate to sub-flow) |
+
+For agent steps, the heading text is the **step ID** — used for wiring (`blockedBy`, `{result.ID}`), branching, and result storage. The `agent:` field is **always required**.
 
 #### agent
 
@@ -208,25 +220,21 @@ task: Implement based on research: {input.research_output}
 
 #### fork
 
-Ask the user a question and branch based on their answer.
+Ask the user a question and branch based on their answer. Fork steps use the `## fork: id` header syntax — the step type is determined by the header prefix, not a body field.
 
 | Field | Required | Description |
 |-------|:---:|-------------|
-| `stepType` | yes | `fork` |
 | `question` | yes | Question to display |
-| `options` | yes | Answer choices |
-| `branches` | yes | Map of option → step ID |
+| `options` | yes | Answer choices (comma-separated or YAML list) |
+| `branches` | yes | Map of option text → step ID |
 | `allowNotes` | no | Prompt for optional freetext notes after selection. Access via `{fork.ID.notes}` — wire into downstream branch step tasks. |
 | `allowCustom` | no | Append "Other (describe)" option. Freetext answers are routed by a decision agent. |
 | `multiSelect` | no | Allow multiple selections. All selected branches execute sequentially. |
 
-```yaml
-## choose-approach
-stepType: fork
-question: "Which approach do you prefer?"
-options:
-  - Quick fix
-  - Full refactor
+```
+## fork: choose-approach
+question: Which approach do you prefer?
+options: Quick fix, Full refactor
 branches:
   Quick fix: quick-fix-step
   Full refactor: refactor-step
@@ -234,18 +242,16 @@ branches:
 
 #### conditional
 
-Branch based on the presence of data in a previous step's result.
+Branch based on the presence of data in a previous step's result. Conditional steps use the `## conditional: id` header syntax.
 
 | Field | Required | Description |
 |-------|:---:|-------------|
-| `stepType` | yes | `conditional` |
 | `check` | yes | Dot-path to check in artifacts (e.g., `"test-runner.status"`) |
-| `present` | yes | Step ID if the checked value exists |
-| `absent` | yes | Step ID if the checked value is missing |
+| `present` | yes | Step ID to route to if the checked value exists |
+| `absent` | yes | Step ID to route to if the checked value is missing |
 
-```yaml
-## check-gaps
-stepType: conditional
+```
+## conditional: check-gaps
 check: researcher.artifacts.gaps
 present: fix-gaps-step
 absent: proceed-step
@@ -253,18 +259,16 @@ absent: proceed-step
 
 #### agent-decision
 
-Let an agent analyze results and choose a branch.
+Let an agent analyze results and choose a branch. Agent decision steps use the `## agent-decision: id` header syntax.
 
 | Field | Required | Description |
 |-------|:---:|-------------|
-| `stepType` | yes | `agent-decision` |
 | `agent` | yes | Agent name for the decision |
 | `task` | yes | Task for the decision agent (template string) |
 | `branches` | yes | Map of branch name → step ID |
 
-```yaml
-## route-decision
-stepType: agent-decision
+```
+## agent-decision: route-decision
 agent: my-router
 task: "Analyze results and decide: {result.analyzer.summary}"
 branches:
@@ -276,20 +280,18 @@ The decision agent must call `finish` with a `branch` parameter matching one of 
 
 #### agent-loop-decision
 
-Iterative verify/fix cycles. An agent decides whether to loop back or exit forward.
+Iterative verify/fix cycles. An agent decides whether to loop back or exit forward. Loop decision steps use the `## agent-loop-decision: id` header syntax.
 
 | Field | Required | Description |
 |-------|:---:|-------------|
-| `stepType` | yes | `agent-loop-decision` |
 | `agent` | yes | Agent name for the loop decision |
 | `task` | yes | Task for the decision agent (template string) |
-| `loop_target` | yes | Step ID to jump back to |
-| `exit_target` | yes | Step ID to continue to |
-| `max_iterations` | yes | Safety cap (forces exit when exceeded) |
+| `loop_target` | yes | Step ID to jump back to (must be defined earlier in the flow) |
+| `exit_target` | yes | Step ID to continue to when exiting the loop |
+| `max_iterations` | yes | Safety cap — forces exit when exceeded (positive integer) |
 
-```yaml
-## verify-loop
-stepType: agent-loop-decision
+```
+## agent-loop-decision: verify-loop
 agent: verifier
 task: "Check implementation: {result.developer.summary}"
 loop_target: developer
@@ -297,23 +299,21 @@ exit_target: finalize
 max_iterations: 3
 ```
 
-The verifier agent calls `finish` with `branch: "<loop_target>"` to loop back, or `branch: "<exit_target>"` to proceed.
+The decision agent calls `finish` with `branch: "developer"` (the `loop_target` step ID) to loop back, or `branch: "finalize"` (the `exit_target` step ID) to exit forward. When `max_iterations` is exceeded, the flow forces exit to `exit_target`.
 
 #### flow-ref
 
-Delegate execution to a sub-flow.
+Delegate execution to a sub-flow. The path to the sub-flow is encoded directly in the header: `## flow-ref: <path>`.
 
 | Field | Required | Description |
 |-------|:---:|-------------|
-| `stepType` | yes | `flow-ref` |
-| `path` | yes | Path or glob to flow file(s) |
 | `on_complete` | no | Step ID to route to on success |
 | `on_error` | no | Step ID to route to on error |
 
-```yaml
-## run-tests
-stepType: flow-ref
-path: .pi/flows/flows/test-suite.flow.md
+```
+## flow-ref: .pi/flows/flows/test-suite.flow.md
+on_complete: deploy-step
+on_error: fix-step
 ```
 
 ### Template Variables
@@ -354,8 +354,7 @@ inputs:
   context: "{result.researcher.summary}"
 task: Implement based on research context: {input.context}
 
-## verify-loop
-stepType: agent-loop-decision
+## agent-loop-decision: verify-loop
 agent: verifier
 task: "Check if implementation is correct: {result.developer.summary}"
 loop_target: developer
