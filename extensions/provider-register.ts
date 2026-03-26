@@ -8,23 +8,24 @@
  * Commands:
  *   /provider  - add, list, or remove providers
  *   /roles     - assign models to roles
+ *   /catalog   - manage model catalog (browse, add, edit, remove)
  */
 
 import type {
   ExtensionAPI,
 } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import {
-  Container,
   type SelectItem,
   type SettingItem,
-  SettingsList,
-  type SettingsListTheme,
-  Spacer,
-  Text,
 } from "@mariozechner/pi-tui";
-import { SearchableSelectList } from "./shared/searchable-select-list.js";
-import { selectOverlay } from "./shared/select-overlay.js";
+import {
+  selectOverlay,
+  searchableOverlay,
+  settingsOverlay,
+  checkboxOverlay,
+  textInputSubmenu,
+  type CheckboxResult,
+} from "./shared/overlays.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +36,7 @@ interface ProviderEntry {
   baseUrl: string;
   apiKey: string;
   api?: string;
+  modelIds?: string[];
 }
 
 interface ModelEntry {
@@ -182,15 +184,89 @@ function loadAutonomousMode(): void {
 // -- Helpers --------------------------------------------------------------
 
 function registerEntry(pi: ExtensionAPI, name: string, entry: ProviderEntry, models: ModelEntry[]) {
+  const filtered = entry.modelIds
+    ? models.filter((m) => entry.modelIds!.includes(m.id))
+    : models;
   pi.registerProvider(name, {
     baseUrl: entry.baseUrl,
     apiKey: resolveApiKeyEnvName(name, entry.apiKey),
     api: (entry.api ?? "openai-completions") as any,
-    models: models.map((m) => ({
+    models: filtered.map((m) => ({
       ...m,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     })),
   });
+}
+
+// -- Multi-select overlay helper ------------------------------------------
+
+interface MultiSelectResult {
+  /** Selected model IDs, or null if all models / cancelled */
+  selectedIds: string[] | null;
+  /** Whether any new models were added to the catalog */
+  catalogChanged: boolean;
+}
+
+/**
+ * Show a multi-select overlay for choosing models from the catalog.
+ * Returns selected model IDs, or null for "all models".
+ * Includes inline quick-add support via checkboxOverlay actionItems.
+ */
+async function showModelMultiSelect(
+  ctx: any,
+  config: Config,
+  preSelected?: string[],
+): Promise<MultiSelectResult> {
+  let catalogChanged = false;
+  let currentPreSelected = preSelected ?? config.models.map((m) => m.id);
+
+  // Loop to support inline quick-add (re-renders overlay after adding)
+  while (true) {
+    const modelItems: SelectItem[] = config.models.map((m) => ({
+      value: m.id,
+      label: m.id,
+      description: m.name,
+    }));
+
+    const result: CheckboxResult = await checkboxOverlay(ctx, "Select Models", modelItems, {
+      preSelected: currentPreSelected,
+      allToggle: true,
+      actionItems: [{ value: "__add__", label: "+ Add new model", description: "Quick-add to catalog and select" }],
+      hints: ["Space/Enter: toggle  Enter on confirm  Esc: cancel"],
+    });
+
+    if (result.type === "action" && result.value === "__add__") {
+      const newId = await ctx.ui.input("Model ID", "provider/model-name");
+      if (newId && !config.models.some((m: ModelEntry) => m.id === newId)) {
+        config.models.push({
+          id: newId,
+          name: newId,
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 128000,
+          maxTokens: 16384,
+        });
+        saveConfig(config);
+        catalogChanged = true;
+        currentPreSelected = [...currentPreSelected, newId];
+        ctx.ui.notify(`Added "${newId}" to catalog`, "info");
+      } else if (newId) {
+        ctx.ui.notify(`Model "${newId}" already exists`, "warning");
+      }
+      continue; // re-show multi-select
+    }
+
+    if (result.type === "selected") {
+      const ids = result.ids;
+      if (ids.length === 0 || ids.length === config.models.length) {
+        return { selectedIds: null, catalogChanged };
+      }
+      return { selectedIds: ids, catalogChanged };
+    }
+
+    // cancelled
+    return { selectedIds: null, catalogChanged };
+  }
 }
 
 // -- Extension ------------------------------------------------------------
@@ -316,76 +392,130 @@ export function activate(pi: ExtensionAPI) {
           return;
         }
 
-        await ctx.ui.custom((tui: any, t: any, _kb: any, done: () => void) => {
-          const settingsTheme: SettingsListTheme = {
-            label: (text, selected) => selected ? t.fg("accent", text) : text,
-            value: (text, selected) => selected ? t.fg("accent", text) : t.fg("muted", text),
-            description: (text) => t.fg("dim", text),
-            cursor: t.fg("accent", "→ "),
-            hint: (text) => t.fg("dim", text),
-          };
-
-          const items: SettingItem[] = Object.keys(config.roles).map((role) => ({
-            id: role,
-            label: `@${role}`,
-            description: `Assign a model to the ${role} role`,
-            currentValue: config.roles[role] || "(not set)",
-            submenu: (_currentValue: string, submenuDone: (val?: string) => void) => {
-              const searchable = new SearchableSelectList(modelItems, 10, {
-                selectedPrefix: (text: string) => t.fg("accent", text),
-                selectedText: (text: string) => t.fg("accent", text),
-                description: (text: string) => t.fg("muted", text),
-                scrollInfo: (text: string) => t.fg("dim", text),
-                noMatch: (text: string) => t.fg("warning", text),
-              });
-              searchable.onSelect = (item: SelectItem) => submenuDone(item.value);
-              searchable.onCancel = () => submenuDone(undefined);
-              return {
-                render: (w: number) => searchable.render(w),
-                invalidate: () => searchable.invalidate(),
-                handleInput: (data: string) => {
-                  searchable.handleInput(data);
-                  tui.requestRender();
-                },
-              };
-            },
-          }));
-
-          const settingsList = new SettingsList(
-            items,
-            Math.min(items.length + 2, 12),
-            settingsTheme,
-            (id: string, newValue: string) => {
-              config.roles[id] = newValue;
-              currentRoles = { ...config.roles };
-              saveConfig(config);
-            },
-            () => done(),
-          );
-
-          const container = new Container();
-          container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
-          container.addChild(new Text(t.fg("accent", t.bold(" Model Roles")), 0, 0));
-          container.addChild(new Spacer(1));
-          container.addChild(settingsList);
-          container.addChild(new Spacer(1));
-          container.addChild(new Text(t.fg("dim", " Enter: change model  Esc: close"), 0, 0));
-          container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
-
-          return {
-            render: (w: number) => container.render(w),
-            invalidate: () => container.invalidate(),
-            handleInput: (data: string) => {
-              // Backspace at top level closes the overlay (same as Esc)
-              if ((data === "\x7f" || data === "\b") && !(settingsList as any).submenuComponent) {
-                done();
-                return;
-              }
-              settingsList.handleInput(data);
-              tui.requestRender();
-            },
-          };
+        await settingsOverlay(ctx, "Model Roles", [], (id: string, newValue: string) => {
+          config.roles[id] = newValue;
+          currentRoles = { ...config.roles };
+          saveConfig(config);
+        }, {
+          hints: ["Enter: change model  Esc: close"],
+          createItems: (t, theme) => {
+            const { SearchableSelectList } = require("./shared/searchable-select-list.js");
+            return Object.keys(config.roles).map((role) => ({
+              id: role,
+              label: `@${role}`,
+              description: `Assign a model to the ${role} role`,
+              currentValue: config.roles[role] || "(not set)",
+              submenu: (_currentValue: string, submenuDone: (val?: string) => void) => {
+                const searchable = new SearchableSelectList(modelItems, 10, theme);
+                searchable.onSelect = (item: SelectItem) => submenuDone(item.value);
+                searchable.onCancel = () => submenuDone(undefined);
+                return {
+                  render: (w: number) => searchable.render(w),
+                  invalidate: () => searchable.invalidate(),
+                  handleInput: (data: string) => {
+                    searchable.handleInput(data);
+                  },
+                };
+              },
+            }));
+          },
         });
+    },
+  });
+
+  // -- /catalog: manage model catalog ---------------------------------------
+
+  pi.registerCommand("catalog", {
+    description: "Manage model catalog",
+    handler: async (_args, ctx) => {
+      // Catalog browse loop — re-enters after add/edit/delete
+      while (true) {
+        // Build items: "+ Add new model" at top, then all catalog models
+        const catalogItems: SelectItem[] = [
+          { value: "__add__", label: "+ Add new model", description: "Quick-add a model by ID" },
+        ];
+        for (const m of config.models) {
+          const tags: string[] = [];
+          if (m.reasoning) tags.push("reasoning");
+          if (m.input.includes("image")) tags.push("vision");
+          tags.push(`${(m.contextWindow / 1000).toFixed(0)}K ctx`);
+          catalogItems.push({ value: m.id, label: m.id, description: `${m.name} • ${tags.join(" • ")}` });
+        }
+
+        const choice = await searchableOverlay(ctx, "Model Catalog", catalogItems, {
+          hints: ["Enter: edit  Esc: close", `Config: ${CONFIG_PATH}`],
+        });
+
+        if (!choice) return; // Esc → close
+
+        // -- Quick-add flow ---
+        if (choice === "__add__") {
+          const newId = await ctx.ui.input("Model ID", "provider/model-name");
+          if (!newId) continue; // cancelled, back to catalog
+
+          // Duplicate check
+          if (config.models.some((m) => m.id === newId)) {
+            ctx.ui.notify(`Model "${newId}" already exists in catalog`, "warning");
+            continue;
+          }
+
+          const newModel: ModelEntry = {
+            id: newId,
+            name: newId,
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 128000,
+            maxTokens: 16384,
+          };
+          config.models.push(newModel);
+          saveConfig(config);
+          ctx.ui.notify(`Added "${newId}" to catalog`, "info");
+          continue; // back to catalog browse with new model visible
+        }
+
+        // -- Edit model flow ---
+        const modelIndex = config.models.findIndex((m) => m.id === choice);
+        if (modelIndex < 0) continue;
+        const model = config.models[modelIndex];
+
+        let editResult: "deleted" | "back" = "back";
+
+        const editItems: SettingItem[] = [
+          { id: "name", label: "Name", currentValue: model.name, description: "Display name", submenu: textInputSubmenu("Enter display name") },
+          { id: "reasoning", label: "Reasoning", currentValue: String(model.reasoning), values: ["true", "false"], description: "Supports extended thinking" },
+          { id: "vision", label: "Vision", currentValue: model.input.includes("image") ? "true" : "false", values: ["true", "false"], description: "Supports image input" },
+          { id: "contextWindow", label: "Context Window", currentValue: String(model.contextWindow), description: "Context window size in tokens", submenu: textInputSubmenu("Enter token count") },
+          { id: "maxTokens", label: "Max Tokens", currentValue: String(model.maxTokens), description: "Maximum output tokens", submenu: textInputSubmenu("Enter max output tokens") },
+          { id: "__delete__", label: "Delete", currentValue: "", values: ["confirm"], description: "Remove from catalog" },
+        ];
+
+        await settingsOverlay(ctx, `Edit: ${model.id}`, editItems, (id: string, newValue: string) => {
+          if (id === "name") {
+            model.name = newValue;
+          } else if (id === "reasoning") {
+            model.reasoning = newValue === "true";
+          } else if (id === "vision") {
+            model.input = newValue === "true" ? ["text", "image"] : ["text"];
+          } else if (id === "contextWindow") {
+            const num = parseInt(newValue, 10);
+            if (!isNaN(num) && num > 0) model.contextWindow = num;
+          } else if (id === "maxTokens") {
+            const num = parseInt(newValue, 10);
+            if (!isNaN(num) && num > 0) model.maxTokens = num;
+          } else if (id === "__delete__") {
+            config.models.splice(modelIndex, 1);
+            saveConfig(config);
+            editResult = "deleted";
+            return;
+          }
+          saveConfig(config);
+        }, { hints: ["Enter: change  Esc: back"], maxVisible: 10 });
+
+        if (editResult === "deleted") {
+          ctx.ui.notify(`Deleted "${choice}" from catalog`, "info");
+        }
+        continue; // back to catalog browse
+      }
     },
   });
 
@@ -424,71 +554,22 @@ export function activate(pi: ExtensionAPI) {
         if (!baseUrl) return;
         const apiKey = await ctx.ui.input("API key ($ENV_VAR or literal)", "$MY_PROXY_KEY");
         if (!apiKey) return;
-        const api = await ctx.ui.select("API protocol", [
-          "openai-completions",
-          "anthropic-messages",
+        const api = await selectOverlay(ctx, "API Protocol", [
+          { value: "openai-completions", label: "openai-completions", description: "OpenAI Chat Completions" },
+          { value: "anthropic-messages", label: "anthropic-messages", description: "Anthropic Messages" },
         ]);
         if (!api) return;
 
-        // Select models via SearchableSelectList overlay
-        const allModelsItem: SelectItem = { value: "__all__", label: "All models", description: "Register all catalog models" };
-        const modelSelectItems: SelectItem[] = [
-          allModelsItem,
-          ...config.models.map((m) => ({ value: m.id, label: m.id, description: m.name })),
-        ];
-
-        const selectedModelId = await new Promise<string | null>((resolve) => {
-          ctx.ui.custom((tui: any, t: any, _kb: any, done: (val: string | null) => void) => {
-            const searchable = new SearchableSelectList(modelSelectItems, 10, {
-              selectedPrefix: (text: string) => t.fg("accent", text),
-              selectedText: (text: string) => t.fg("accent", text),
-              description: (text: string) => t.fg("muted", text),
-              scrollInfo: (text: string) => t.fg("dim", text),
-              noMatch: (text: string) => t.fg("warning", text),
-            });
-            searchable.onSelect = (item: SelectItem) => done(item.value);
-            searchable.onCancel = () => done(null);
-
-            const container = new Container();
-            container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
-            container.addChild(new Text(t.fg("accent", t.bold(" Select models to register")), 0, 0));
-            container.addChild(new Spacer(1));
-            container.addChild(searchable as any);
-            container.addChild(new Spacer(1));
-            container.addChild(new Text(t.fg("dim", " Type to search  Enter: select  Esc: all models"), 0, 0));
-            container.addChild(new DynamicBorder((s: string) => t.fg("accent", s)));
-
-            return {
-              render: (w: number) => container.render(w),
-              invalidate: () => container.invalidate(),
-              handleInput: (data: string) => {
-                searchable.handleInput(data);
-                tui.requestRender();
-              },
-            };
-          }).then(resolve);
-        });
+        // Multi-select models for this provider
+        const { selectedIds } = await showModelMultiSelect(ctx, config);
 
         const entry: ProviderEntry = { baseUrl, apiKey, api };
+        if (selectedIds) {
+          entry.modelIds = selectedIds;
+        }
         config.providers[name] = entry;
         saveConfig(config);
-
-        if (!selectedModelId || selectedModelId === "__all__") {
-          registerEntry(pi, name, entry, config.models);
-        } else {
-          const selectedModel = config.models.find((m) => m.id === selectedModelId);
-          if (selectedModel) {
-            pi.registerProvider(name, {
-              baseUrl: entry.baseUrl,
-              apiKey: resolveApiKeyEnvName(name, entry.apiKey),
-              api: (entry.api ?? "openai-completions") as any,
-              models: [{
-                ...selectedModel,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              }],
-            });
-          }
-        }
+        registerEntry(pi, name, entry, config.models);
 
         if (!hasApiKey(name, entry)) {
           ctx.ui.notify(`Added "${name}". Set ${apiKey} before use.`, "warning");
@@ -500,10 +581,15 @@ export function activate(pi: ExtensionAPI) {
         const name = choice;
         const existing = config.providers[name];
 
+        const modelsDesc = existing.modelIds
+          ? `${existing.modelIds.length} model${existing.modelIds.length !== 1 ? "s" : ""}`
+          : "All models";
+
         const editItems: SelectItem[] = [
           { value: "baseUrl", label: "Base URL", description: existing.baseUrl },
           { value: "apiKey", label: "API Key", description: existing.apiKey.startsWith("$") ? existing.apiKey : "••••••" },
           { value: "api", label: "API Protocol", description: existing.api ?? "openai-completions" },
+          { value: "models", label: "Models", description: modelsDesc },
         ];
 
         const field = await selectOverlay(ctx, `Edit "${name}"`, editItems);
@@ -518,12 +604,19 @@ export function activate(pi: ExtensionAPI) {
           if (!apiKey) continue;
           existing.apiKey = apiKey;
         } else if (field === "api") {
-          const api = await ctx.ui.select("API protocol", [
-            "openai-completions",
-            "anthropic-messages",
+          const api = await selectOverlay(ctx, "API Protocol", [
+            { value: "openai-completions", label: "openai-completions", description: "OpenAI Chat Completions" },
+            { value: "anthropic-messages", label: "anthropic-messages", description: "Anthropic Messages" },
           ]);
           if (!api) continue;
           existing.api = api;
+        } else if (field === "models") {
+          const { selectedIds } = await showModelMultiSelect(ctx, config, existing.modelIds ?? undefined);
+          if (selectedIds) {
+            existing.modelIds = selectedIds;
+          } else {
+            delete existing.modelIds;
+          }
         }
 
         saveConfig(config);
