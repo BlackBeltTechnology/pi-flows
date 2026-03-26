@@ -275,13 +275,34 @@ export function validateAgentContent(
 
   // ---- 8. task placeholder in body -----------------------------------------
 
-  if (!bodyStr.includes("{task}")) {
+  if (!bodyStr.includes("${{task}}") && !bodyStr.includes("{task}")) {
     diagnostics.push({
       line: lines.length,
       severity: "warning",
-      message: "Agent body does not contain {task} placeholder",
-      suggestion: "Include {task} in the system prompt body so the task can be injected at runtime",
+      message: "Agent body does not contain ${{task}} placeholder",
+      suggestion: "Include ${{task}} in the system prompt body so the task can be injected at runtime",
     });
+  }
+
+  // ---- 8b. Deprecated single-brace template syntax in body ----------------
+
+  const knownPrefixes = ["task", "result", "input", "fork", "loop"];
+  const bodyLines = bodyStr.split("\n");
+  const bodyStartLine = lines.indexOf(bodyLines[0]) + 1 || (endIndex > 0 ? lines.length - bodyLines.length + 1 : 1);
+  for (let i = 0; i < bodyLines.length; i++) {
+    const singleBraceMatches = bodyLines[i].matchAll(/(?<!\$\{)\{([\w][\w.]*)\}(?!\})/g);
+    for (const m of singleBraceMatches) {
+      const varPath = m[1];
+      const root = varPath.split(".")[0];
+      if (knownPrefixes.includes(root)) {
+        diagnostics.push({
+          line: bodyStartLine + i,
+          severity: "warning",
+          message: `Deprecated single-brace syntax "{${varPath}}" — use \${{${varPath}}} instead`,
+          suggestion: `Replace {${varPath}} with \${{${varPath}}}`,
+        });
+      }
+    }
   }
 
   // ---- Result -------------------------------------------------------------
