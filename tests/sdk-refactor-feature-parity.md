@@ -71,11 +71,11 @@ Run: /judo:plan "Add a new user profile feature"
 - [ ] **3.5** Select "Yes, discuss design first"
 - [ ] **3.6** `design-discuss` agent starts and the fork answer is autowired (check detail view — should see "## User Decision" in context)
 - [ ] **3.7** After design-discuss completes, `create-proposal` starts
-- [ ] **3.8** `resolve-gaps` fork appears with `allowNotes: true`
+- [ ] **3.8** `resolve-gaps` fork appears (notes always prompted)
 - [ ] **3.9** Select "Resolve gaps now" → notes prompt appears → enter some notes
 - [ ] **3.10** `gap-filler` agent starts and receives the fork notes in context (check detail view)
 
-**What this validates:** Fork UI, allowNotes, fork context autowiring, conditional steps, template variable expansion, task_required/task_prompt.
+**What this validates:** Fork UI, always-on notes, fork context autowiring, conditional steps, template variable expansion, task_required/task_prompt.
 
 ---
 
@@ -178,7 +178,7 @@ Describe a simple flow when prompted
 - [ ] **9.1** Conversation context extracted, slug generated
 - [ ] **9.2** Architect widget appears above editor (design mode)
 - [ ] **9.3** Widget shows: agent list (built-in/custom), DAG tree, tool call status
-- [ ] **9.4** Architect calls `agent_catalog`, `agent_validate`, `agent_write`, `flow_validate`, `flow_write`, `flow_preview` — tracked in widget
+- [ ] **9.4** Architect calls `agent_catalog`, `agent_write`, `flow_write`, `flow_preview` — tracked in widget
 - [ ] **9.5** After design: choice overlay (Run / Save & Run / Replan / Cancel)
 - [ ] **9.6** Press Ctrl+O during design → flow preview overlay opens (scrollable)
 - [ ] **9.7** Choose "Replan" → replan notes prompt → architect re-runs with notes

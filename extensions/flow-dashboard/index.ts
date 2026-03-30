@@ -1,12 +1,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { registerWorkflow, resolveWorkflow, getActiveWorkflow } from "./workflow-registry.js";
+import { registerWorkflow, resolveWorkflow } from "./workflow-registry.js";
 import { getCardRenderer, initCardTypes, registerMetric } from "./card-registry.js";
 
-export { registerWorkflow, resolveWorkflow, getActiveWorkflow } from "./workflow-registry.js";
+export { registerWorkflow, resolveWorkflow } from "./workflow-registry.js";
 export { getCardRenderer, initCardTypes, registerMetric } from "./card-registry.js";
 export type { WorkflowDefinition, WorkflowStage, AgentCardRenderer, CardStatus, CardData } from "./types.js";
 export { AgentDashboard } from "./agent-dashboard.js";
-export type { ToolHistoryEntry, DetailEntry } from "./agent-dashboard.js";
+export type { DetailEntry } from "./agent-dashboard.js";
 export { renderBreadcrumb } from "./breadcrumb.js";
 export { renderDetailView, createDetailScrollState, moveUp, moveDown, toggleExpand, computeExpandedContentLines } from "./detail-view.js";
 export type { DetailScrollState, DetailViewData } from "./detail-view.js";

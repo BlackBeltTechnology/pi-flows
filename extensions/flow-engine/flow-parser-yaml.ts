@@ -152,10 +152,8 @@ function parseForkStep(raw: any, source: string): ForkStep {
     }
   }
 
-  if (raw.allowNotes === true || raw.allowNotes === "true") step.allowNotes = true;
   if (raw.allowCustom === true || raw.allowCustom === "true") step.allowCustom = true;
   if (raw.multiSelect === true || raw.multiSelect === "true") step.multiSelect = true;
-  if (raw.decisionAgent) step.decisionAgent = String(raw.decisionAgent);
   if (raw.agent) step.agent = String(raw.agent);
   if (raw.task) step.task = String(raw.task);
 

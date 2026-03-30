@@ -57,6 +57,7 @@ interface Config {
   providers: Record<string, ProviderEntry>;
   roles: Record<string, string>;
   rolePresets?: RolePreset[];
+  activePreset?: string | null;
   models: ModelEntry[];
   autonomousMode?: boolean;
 }
@@ -108,6 +109,7 @@ function loadConfig(): Config {
         providers,
         roles: { ...DEFAULT_CONFIG.roles, ...raw.roles },
         rolePresets: Array.isArray(raw.rolePresets) ? raw.rolePresets : [],
+        activePreset: raw.activePreset ?? null,
         models: Array.isArray(raw.models) ? raw.models : DEFAULT_MODELS,
       };
     } catch {
@@ -300,7 +302,9 @@ export function activate(pi: ExtensionAPI) {
         if (presets.length > 0) {
           for (const preset of presets) {
             const summary = Object.values(preset.roles).slice(0, 2).join(", ") + (Object.keys(preset.roles).length > 2 ? "…" : "");
-            topItems.push({ value: `__preset__${preset.name}`, label: `▶ ${preset.name}`, description: summary });
+            const isActive = config.activePreset === preset.name;
+            const label = isActive ? `✓ ▶ ${preset.name}` : `▶ ${preset.name}`;
+            topItems.push({ value: `__preset__${preset.name}`, label, description: summary });
           }
           topItems.push({ value: "__delete_preset__", label: "Delete preset", description: "Remove a saved preset" });
         }
@@ -335,6 +339,7 @@ export function activate(pi: ExtensionAPI) {
               config.roles[role] = model;
             }
             currentRoles = { ...config.roles };
+            config.activePreset = presetName;
             saveConfig(config);
             ctx.ui.notify(`Loaded preset "${presetName}"`, "info");
           }
@@ -396,6 +401,7 @@ export function activate(pi: ExtensionAPI) {
         await settingsOverlay(ctx, "Model Roles", [], (id: string, newValue: string) => {
           config.roles[id] = newValue;
           currentRoles = { ...config.roles };
+          config.activePreset = null; // Manual edit clears active preset
           saveConfig(config);
         }, {
           hints: ["Enter: change model  Esc: close"],

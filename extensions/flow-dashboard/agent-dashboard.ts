@@ -7,14 +7,6 @@ import { getCardRenderer } from "./card-registry.js";
 
 export type DashboardMode = "passive" | "navigate";
 
-// Legacy type kept for backward compatibility with external consumers
-export interface ToolHistoryEntry {
-  toolName: string;
-  input: any;
-  output: any;
-  isError: boolean;
-}
-
 export type DetailEntry =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string }
@@ -44,6 +36,7 @@ export class AgentDashboard {
   constructor(
     private workflow: WorkflowDefinition | null,
     stageIndex: number,
+    private flowName: string,
     private theme?: any
   ) {
     this.currentStageIndex = stageIndex;
@@ -53,6 +46,7 @@ export class AgentDashboard {
   setUpdateCallback(cb: () => void): void {
     this.onUpdate = cb;
   }
+
 
   preloadAgents(agents: AgentConfig[], agentDeps?: Map<string, string[]>): void {
     for (const config of agents) {
@@ -175,12 +169,6 @@ export class AgentDashboard {
     return this.eventLog.get(agentName) || [];
   }
 
-  /** Legacy alias — returns tool entries only (for backward compat). */
-  getToolHistory(agentName: string): ToolHistoryEntry[] {
-    const log = this.eventLog.get(agentName) || [];
-    return log.filter((e): e is DetailEntry & { kind: "tool" } => e.kind === "tool");
-  }
-
   /** Return the full event log map (for snapshotting before dispose). */
   getAllToolHistory(): Map<string, DetailEntry[]> {
     return this.eventLog;
@@ -236,11 +224,13 @@ export class AgentDashboard {
     const lines: string[] = [];
 
     // Header: flow name + finished/total agents
-    if (this.workflow) {
-      const stage = this.workflow.stages[this.currentStageIndex];
+    {
       const total = this.cards.size;
       const finished = Array.from(this.cards.values()).filter(c => c.status === "complete" || c.status === "error").length;
-      const title = t?.fg?.("accent", `  π ${stage?.name || this.workflow.id}`) ?? `  π ${stage?.name || this.workflow.id}`;
+      const label = this.workflow
+        ? (this.workflow.stages[this.currentStageIndex]?.name || this.workflow.id)
+        : this.flowName;
+      const title = t?.fg?.("accent", `  π ${label}`) ?? `  π ${label}`;
       const counts = t?.fg?.("dim", `  ${finished}/${total} agents`) ?? `  ${finished}/${total} agents`;
       lines.push(title + counts);
     }
@@ -269,9 +259,9 @@ export class AgentDashboard {
       }
       this.lastRenderWidth = width;
       const expectedGridLines = 1 + this.expectedGridRows * CARD_HEIGHT + 1; // padding + rows + padding
-      while (lines.length < (this.workflow ? 1 : 0) +
-             (this.workflow && this.workflow.stages.length > 1 ? 1 : 0) +
-             expectedGridLines) {
+      const headerLines = 1; // always 1 header line (flow name or stage name)
+      const breadcrumbLines = (this.workflow && this.workflow.stages.length > 1) ? 1 : 0;
+      while (lines.length < headerLines + breadcrumbLines + expectedGridLines) {
         lines.push("");
       }
     }
@@ -280,7 +270,8 @@ export class AgentDashboard {
     if (this.mode === "navigate") {
       lines.push(t?.fg?.("dim", "  ← → ↑ ↓ navigate · Enter open · Ctrl+X stop · ESC close") ?? "  ← → ↑ ↓ navigate · Enter open · Ctrl+X stop · ESC close");
     } else {
-      lines.push(t?.fg?.("dim", "  Ctrl+O inspect · Ctrl+A auto-decide · Ctrl+X stop flow") ?? "  Ctrl+O inspect · Ctrl+A auto-decide · Ctrl+X stop flow");
+      const hint = `  Ctrl+O inspect · Ctrl+X stop flow`;
+      lines.push(t?.fg?.("dim", hint) ?? hint);
     }
 
     return lines;

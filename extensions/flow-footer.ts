@@ -15,7 +15,7 @@ import { execSync } from "node:child_process";
 
 interface FooterSegment {
   name: string;
-  render: () => string | null;
+  render: (theme?: any) => string | null;
 }
 
 const segments: FooterSegment[] = [];
@@ -128,7 +128,7 @@ export function activate(pi: ExtensionAPI) {
 
           // Domain segments
           for (const segment of segments) {
-            const rendered = segment.render();
+            const rendered = segment.render(theme);
             if (rendered) parts.push(rendered);
           }
 

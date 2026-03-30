@@ -59,9 +59,10 @@ export interface FlowRunOptions {
   onAssistantText?: (agentName: string, text: string) => void;
   onThinkingText?: (agentName: string, text: string) => void;
   onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void) => void;
-  onLoopIteration?: (stepId: string, iteration: number, maxIterations: number) => void;
+  onLoopIteration?: (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => void;
   isAutonomous?: () => boolean;
   onAutoDecision?: (forkId: string, agentName: string, chosenBranch: string, targetStepId: string) => void;
+  onNotify?: (message: string) => void;
   signal?: AbortSignal;
 }
 
@@ -458,6 +459,78 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   return result;
 }
 
+/** Fallback agent config when flow-decision is not in the agent catalog. */
+const FALLBACK_DECISION_AGENT: AgentConfig = {
+  name: "flow-decision",
+  description: "Makes autonomous decisions at fork and loop-decision points",
+  model: "@fast",
+  tools: [],
+  systemPrompt: "You are a flow decision agent. Analyze the question and options, then choose the best option. Call finish with your chosen branch and a brief summary.",
+  source: "<fallback>",
+};
+
+/**
+ * Spawn the fork's decision agent to choose a branch.
+ * Used by autonomous mode, __auto_decide__, and __custom_decide__ paths.
+ * When the fork has no agent: field, uses the built-in `flow-decision` agent
+ * (or a minimal fallback if not found in the catalog).
+ */
+async function spawnForkDecisionAgent(
+  step: ForkStep,
+  ctx: FlowContext,
+  options: FlowRunOptions,
+  customText?: string,
+): Promise<StepResult> {
+  const agentConfig = step.agent
+    ? options.getAgent(step.agent)
+    : (options.getAgent("flow-decision") ?? FALLBACK_DECISION_AGENT);
+  if (!agentConfig) return {};
+
+  const branchNames = Object.keys(step.branches);
+  const templateCtx: TemplateContext = {
+    task: ctx.task, inputs: {},
+    results: ctx.results, forks: ctx.forks,
+    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+  };
+
+  let decisionTask = step.task
+    ? expandTemplateVariables(step.task, templateCtx)
+    : `The user was asked: "${step.question}"\nOptions: ${step.options.join(", ")}\nChoose the best option.`;
+
+  // Enhance task with custom freetext context when provided
+  if (customText) {
+    decisionTask += `\n\nThe user typed a custom answer instead of picking an option: "${customText}"\nBased on their intent, choose the closest matching branch.`;
+  }
+
+  const result = await spawnAgent({
+    agent: agentConfig,
+    task: decisionTask,
+    templateContext: templateCtx,
+    getModelRole: options.getModelRole,
+    cwd: options.cwd,
+    authStorage: options.authStorage,
+    modelRegistry: options.modelRegistry,
+    extraGuardFactories: options.extraGuardFactories,
+    extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
+    decisionBranches: branchNames,
+    signal: options.signal,
+  });
+
+  const branch = result.finishParams?.branch;
+  if (branch && step.branches[branch]) {
+    ctx.forks[step.id] = { answer: branch, notes: customText };
+    storeForkContext(ctx, step, step.branches[branch], branch, customText, step.agent);
+    options.onAutoDecision?.(step.id, step.agent || agentConfig.name, branch, step.branches[branch]);
+    return { nextStepId: step.branches[branch], agentResult: result };
+  }
+
+  // Fallback: first branch if agent fails
+  const firstKey = Object.keys(step.branches)[0];
+  ctx.forks[step.id] = { answer: firstKey, notes: customText };
+  storeForkContext(ctx, step, step.branches[firstKey], firstKey, customText, step.agent);
+  return { nextStepId: step.branches[firstKey], agentResult: result };
+}
+
 async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   const expandedQuestion = expandTemplateVariables(step.question, {
     task: ctx.task, inputs: {},
@@ -465,57 +538,13 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 
-  // ── Autonomous mode: auto-decide via agent if fork has agent: field ──
-  if (step.agent && options.isAutonomous?.()) {
-    const agentConfig = options.getAgent(step.agent);
-    if (agentConfig) {
-      const branchNames = Object.keys(step.branches);
-      const decisionTask = step.task
-        ? expandTemplateVariables(step.task, {
-            task: ctx.task, inputs: {},
-            results: ctx.results, forks: ctx.forks,
-            loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-          })
-        : `The user was asked: "${step.question}"\nOptions: ${step.options.join(", ")}\nChoose the best option.`;
-
-      const templateCtx: TemplateContext = {
-        task: ctx.task, inputs: {},
-        results: ctx.results, forks: ctx.forks,
-        loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-      };
-
-      const result = await spawnAgent({
-        agent: agentConfig,
-        task: decisionTask,
-        templateContext: templateCtx,
-        getModelRole: options.getModelRole,
-        cwd: options.cwd,
-        authStorage: options.authStorage,
-        modelRegistry: options.modelRegistry,
-        extraGuardFactories: options.extraGuardFactories,
-        extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
-        decisionBranches: branchNames,
-        signal: options.signal,
-      });
-
-      const branch = result.finishParams?.branch;
-      if (branch && step.branches[branch]) {
-        ctx.forks[step.id] = { answer: branch };
-        storeForkContext(ctx, step, step.branches[branch], branch, undefined, step.agent);
-        options.onAutoDecision?.(step.id, step.agent, branch, step.branches[branch]);
-        return { nextStepId: step.branches[branch], agentResult: result };
-      }
-      // Fallback: first branch if agent fails
-      const firstKey = Object.keys(step.branches)[0];
-      ctx.forks[step.id] = { answer: firstKey };
-      storeForkContext(ctx, step, step.branches[firstKey], firstKey, undefined, step.agent);
-      return { nextStepId: step.branches[firstKey], agentResult: result };
-    }
+  // ── Autonomous mode: auto-decide via agent (named agent, or built-in flow-decision) ──
+  if (options.isAutonomous?.()) {
+    return spawnForkDecisionAgent(step, ctx, options);
   }
 
   const extra: Record<string, boolean | Record<string, string>> = {};
   if (step.multiSelect) extra.multiSelect = true;
-  if (step.allowNotes) extra.allowNotes = true;
   if (step.allowCustom) extra.allowCustom = true;
   // Pass branch mapping and agent info for UI enhancement
   if (step.branches) extra.branches = step.branches;
@@ -525,49 +554,12 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
 
   // Handle auto-decide: user chose to let the agent decide this fork
   if (response.answer === "__auto_decide__" && step.agent) {
-    const agentConfig = options.getAgent(step.agent);
-    if (agentConfig) {
-      const branchNames = Object.keys(step.branches);
-      const decisionTask = step.task
-        ? expandTemplateVariables(step.task, {
-            task: ctx.task, inputs: {},
-            results: ctx.results, forks: ctx.forks,
-            loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-          })
-        : `The user was asked: "${step.question}"\nOptions: ${step.options.join(", ")}\nChoose the best option.`;
+    return spawnForkDecisionAgent(step, ctx, options);
+  }
 
-      const templateCtx: TemplateContext = {
-        task: ctx.task, inputs: {},
-        results: ctx.results, forks: ctx.forks,
-        loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-      };
-
-      const result = await spawnAgent({
-        agent: agentConfig,
-        task: decisionTask,
-        templateContext: templateCtx,
-        getModelRole: options.getModelRole,
-        cwd: options.cwd,
-        authStorage: options.authStorage,
-        modelRegistry: options.modelRegistry,
-        extraGuardFactories: options.extraGuardFactories,
-        extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
-        decisionBranches: branchNames,
-        signal: options.signal,
-      });
-
-      const branch = result.finishParams?.branch;
-      if (branch && step.branches[branch]) {
-        ctx.forks[step.id] = { answer: branch };
-        storeForkContext(ctx, step, step.branches[branch], branch, undefined, step.agent);
-        options.onAutoDecision?.(step.id, step.agent, branch, step.branches[branch]);
-        return { nextStepId: step.branches[branch], agentResult: result };
-      }
-      const firstKey = Object.keys(step.branches)[0];
-      ctx.forks[step.id] = { answer: firstKey };
-      storeForkContext(ctx, step, step.branches[firstKey], firstKey, undefined, step.agent);
-      return { nextStepId: step.branches[firstKey], agentResult: result };
-    }
+  // Handle custom-decide: user typed freetext via "Other (describe)"
+  if (response.answer === "__custom_decide__" && step.agent) {
+    return spawnForkDecisionAgent(step, ctx, options, response.notes);
   }
 
   ctx.forks[step.id] = response;
@@ -702,8 +694,11 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
   const iteration = (ctx.loopCounters[step.id] ?? 0) + 1;
   ctx.loopCounters[step.id] = iteration;
 
-  // Emit loop iteration event
-  options.onLoopIteration?.(step.id, iteration, step.max_iterations);
+  // Emit loop iteration event — resolve loop_target step ID to agent name
+  // (dashboard cards are keyed by agent name, not step ID)
+  const loopTargetStep = ctx.steps.find(s => s.id === step.loop_target);
+  const loopTargetAgent = loopTargetStep?.stepType === "agent" ? (loopTargetStep as AgentStep).agent : step.loop_target;
+  options.onLoopIteration?.(step.id, iteration, step.max_iterations, loopTargetAgent);
 
   // Safety cap: force exit when max_iterations exceeded
   if (iteration > step.max_iterations) {

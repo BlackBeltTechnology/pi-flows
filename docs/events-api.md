@@ -71,7 +71,7 @@ pi.events?.emit("flow:register-flows-dir", { dir: string });
 | File path | Registered command |
 |-----------|-------------------|
 | `flows/research.yaml` | `/research` |
-| `flows/judo/research.yaml` | `/judo:research` |
+| `flows/my-domain/research.yaml` | `/my-domain:research` |
 
 Nesting deeper than one subfolder is skipped with a warning. Later registrations with the same flow name win (project-local files have the highest priority).
 
@@ -164,7 +164,7 @@ interface AgentCardRenderer {
 
 **Behavior:** A fresh renderer instance is created for each agent card via `factory()`. The renderer receives tool call/result events as the agent runs, and `renderMetric` is called on each dashboard frame to produce the metric line shown below the agent name.
 
-**Example — pi-judo's model card:**
+**Example — custom model card:**
 
 ```typescript
 // cards/model-card.ts
@@ -234,16 +234,16 @@ interface WorkflowStage {
 
 ```typescript
 pi.events?.emit("flow:register-workflow", {
-  id: "research",
+  id: "my-pipeline",
   stages: [
-    { name: "research-all", flows: ["judo:research-all"] },
-    { name: "apply",        flows: ["judo:apply"] },
-    { name: "verify",       flows: ["judo:verify"] },
+    { name: "research", flows: ["my-domain:research"] },
+    { name: "apply",    flows: ["my-domain:apply"] },
+    { name: "verify",   flows: ["my-domain:verify"] },
   ],
 });
 ```
 
-When `/judo:apply` runs, the breadcrumb shows:
+When `/my-domain:apply` runs, the breadcrumb shows:
 ```
 research-all → [apply] → verify
 ```
@@ -280,22 +280,22 @@ pi.events?.emit("flow:register-gate", {
 
 | Pattern | Matches |
 |---------|---------|
-| `"judo:*"` | All flows starting with `judo:` |
-| `"judo:research"` | Exactly `/judo:research` |
+| `"my-domain:*"` | All flows starting with `my-domain:` |
+| `"my-domain:research"` | Exactly `/my-domain:research` |
 
-**Example — pi-judo's project gate:**
+**Example — project gate:**
 
 ```typescript
 import { globSync } from "node:fs";
 import { join } from "node:path";
 
-const judoEnabled = globSync(join(cwd, "model", "*.model")).length > 0;
+const projectReady = globSync(join(cwd, "config", "*.config")).length > 0;
 
 pi.events?.emit("flow:register-gate", {
-  name: "judo-project",
-  check: () => judoEnabled,
-  flows: ["judo:*"],
-  message: "No JUDO model files found (model/*.model). JUDO flows require a JUDO project.",
+  name: "my-domain-project",
+  check: () => projectReady,
+  flows: ["my-domain:*"],
+  message: "No config files found. Domain flows require a configured project.",
 });
 ```
 
@@ -321,14 +321,14 @@ pi.events?.emit("flow:register-guard-extension", {
 
 **Behavior:** The factory is called once per spawned agent session. It receives a scoped `ExtensionAPI` for that session. Typically registers a `tool_call` listener to intercept and optionally block tool execution.
 
-**Example — pi-judo's model file protection:**
+**Example — protected file guard:**
 
 ```typescript
 // guards.ts
-export function createModelProtectionGuard() {
+export function createProtectionGuard() {
   return (event: any, ctx: any, next: () => void) => {
-    if (event.name === "write" && event.params.path?.endsWith(".model")) {
-      ctx.block("Direct .model file modification is forbidden. Use model_cli.");
+    if (event.name === "write" && event.params.path?.endsWith(".config")) {
+      ctx.block("Direct .config file modification is forbidden. Use the domain_cli tool.");
       return;
     }
     next();
@@ -338,7 +338,7 @@ export function createModelProtectionGuard() {
 // In activate():
 pi.events?.emit("flow:register-guard-extension", {
   factory: (piApi: ExtensionAPI) => {
-    piApi.on("tool_call", createModelProtectionGuard());
+    piApi.on("tool_call", createProtectionGuard());
   },
 });
 ```
@@ -369,13 +369,13 @@ pi.events?.emit("flow:register-footer-segment", {
 
 **Behavior:** Segments are rendered in registration order. If `render()` returns `null`, the segment is omitted. Segments are separated by ` │ ` in the footer.
 
-**Example — pi-judo's server status segment:**
+**Example — server status segment:**
 
 ```typescript
 let invalidateFn: (() => void) | null = null;
 
 pi.events?.emit("flow:register-footer-segment", {
-  name: "judo-server",
+  name: "domain-server",
   render: () => {
     const state = serverManager.getState();
     if (state === "running") return "● server";
@@ -395,33 +395,29 @@ pi-flows itself registers the `autonomous-mode` segment:
 ```typescript
 pi.events?.emit("flow:register-footer-segment", {
   name: "autonomous-mode",
-  render: () => isAutonomousMode() ? "🤖 auto" : null,
+  render: () => isAutonomousMode() ? "AUTO" : null,
 });
 ```
 
 ---
 
-### `flow:register-tool` *(deprecated)*
+### `flow:register-tool`
 
-> **Deprecated**: Tools registered via `pi.registerTool()` are now automatically discovered by the flow engine at session start. This event is no longer needed but remains functional for backward compatibility.
+> **Deprecated.** Tools registered via `pi.registerTool()` are now automatically discovered by the flow engine and available to subagent sessions. This event still works for backward compatibility but is no longer needed in new packages. Just use `pi.registerTool()` instead.
 
-Register a custom tool that can be used by agents in flow sessions. The tool becomes available to any agent that declares its name in the `tools:` frontmatter field.
+Register a custom tool for use by agents in flow sessions.
 
-**Preferred approach** — just use `pi.registerTool()`:
+**Usage** — `pi.registerTool()` is now sufficient (no event needed):
 
 ```typescript
-pi.registerTool({
+const myTool = {
   name: "my_tool",
   description: "My custom tool",
   parameters: Type.Object({ /* ... */ }),
   execute: async (_id, params, _signal, _onUpdate, _ctx) => { /* ... */ },
-});
-```
-
-**Legacy approach** (still works):
-
-```typescript
-pi.events?.emit("flow:register-tool", { tool: ToolDefinition });
+};
+pi.registerTool(myTool);
+// pi.events.emit("flow:register-tool", { tool: myTool }); // no longer needed
 ```
 
 **Data shape:**
@@ -490,7 +486,7 @@ pi.events?.on("flow:complete", (data: FlowResult) => { ... });
 
 ```typescript
 interface FlowResult {
-  flowName: string;      // The flow that ran (e.g., "judo:apply")
+  flowName: string;      // The flow that ran (e.g., "my-domain:apply")
   status?: "success" | "error" | "aborted";
   stepCount: number;     // Number of steps that ran
   totalDuration: number; // Wall-clock time in milliseconds
@@ -631,8 +627,7 @@ These events coordinate between pi-flows' own sub-extensions. **Do not emit or l
 | `flow:rediscover` | emit → pi-flows | Trigger re-scanning of agent and flow directories |
 | `flow:get-agents` | emit with data object → pi-flows mutates | Query the current agent registry |
 | `flow:get-flows` | emit with data object → pi-flows mutates | Query the current flow registry |
-| `flow:get-architect-tools` | emit with data object → pi-flows mutates | Query architect tool definitions |
-| `flow:get-spawn-context` | emit with data object → pi-flows mutates | Query auth/model context for subagent spawning |
+| `flow:get-spawn-context` | emit with data object → pi-flows mutates | Query spawn context (auth, model registry, extension tools) for subagent sessions |
 | `flow:wire-dashboard` | internal | Mount a dashboard widget |
 | `flow:unwire-dashboard` | internal | Unmount a dashboard widget |
 | `flow:set-summary-context` | internal | Pass tool history to summary widget |

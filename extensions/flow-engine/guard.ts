@@ -10,7 +10,7 @@
 
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { readFileSync } from "node:fs";
+
 
 interface AccessRules {
   read?: string[];
@@ -214,40 +214,4 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
       return undefined;
     });
   };
-}
-
-/**
- * Guard extension injected into spawned agent processes.
- * Thin wrapper that reads env vars and delegates to createGuardExtension().
- * Kept for backward compat with any direct `--extension guard.ts` usage.
- */
-export default function guardExtension(pi: ExtensionAPI) {
-  // Read config from env vars (legacy path)
-  const allowedToolsJson = process.env.AGENT_ALLOWED_TOOLS;
-  let allowedTools: string[] | undefined;
-  if (allowedToolsJson) {
-    try { allowedTools = JSON.parse(allowedToolsJson); } catch { allowedTools = ["finish"]; }
-  }
-
-  const branchesJson = process.env.AGENT_DECISION_BRANCHES;
-  let decisionBranches: string[] | undefined;
-  if (branchesJson) {
-    try { decisionBranches = JSON.parse(branchesJson); } catch { /* ignore */ }
-  }
-
-  let accessRules: AccessRules | undefined;
-  const rulesPath = process.env.AGENT_ACCESS_RULES;
-  if (rulesPath) {
-    try { accessRules = JSON.parse(readFileSync(rulesPath, "utf-8")); } catch { /* ignore */ }
-  }
-
-  const factory = createGuardExtension({
-    allowedTools,
-    requireFinish: process.env.AGENT_REQUIRE_FINISH === "1",
-    accessRules,
-    decisionBranches,
-    allowAskUser: process.env.AGENT_SPAWN_MODE === "rpc",
-  });
-
-  factory(pi);
 }

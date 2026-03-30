@@ -15,7 +15,7 @@ export function registerAgentWriteTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "agent_write",
     description:
-      "Validate and write an agent .md file. Runs agent_validate internally first. If validation passes, writes the file and triggers agent re-discovery. Returns errors if invalid.",
+      "Validate and write an agent .md file. Validates internally first. If validation passes, writes the file and triggers agent re-discovery. Returns errors if invalid.",
     parameters: Type.Object({
       path: Type.String({ description: "Absolute or relative path to write the agent .md file" }),
       content: Type.String({ description: "The agent .md content to validate and write" }),

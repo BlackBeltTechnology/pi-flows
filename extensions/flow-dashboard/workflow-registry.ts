@@ -22,6 +22,3 @@ export function resolveWorkflow(flowName: string): { workflow: WorkflowDefinitio
   return best;
 }
 
-export function getActiveWorkflow(): WorkflowDefinition | undefined {
-  return workflows[0];
-}

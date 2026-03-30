@@ -20,9 +20,6 @@ model: @coding
 thinking: high
 tools: read, write, edit, bash, grep, skill_read
 skills: my-backend-docs
-context:
-  - docs/architecture.md
-  - config/api-spec.json
 inputs:
   - research_output
   - ticket_id
@@ -70,8 +67,8 @@ Focus on clean, tested implementations. Run the existing test suite after change
 | `thinking` | | string | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Activates extended reasoning on supported models. |
 | `tools` | ✓ | csv or list | Tools the agent can call. See [Available Tools](#available-tools). `finish` is auto-injected — do not declare it. |
 | `skills` | | csv or list | Skill names to inject into this agent's system prompt. Each skill must exist in a registered skills directory. |
-| `context` | | yaml list | File paths (relative to project root) injected as read-only context before the agent's first turn. |
 | `inputs` | | yaml list | Declared input names. These become `${{input.NAME}}` variables in the system prompt. Must be wired in the flow step's `inputs:` block. |
+| `outputs` | | yaml list | Declared output names. Values matching these names are extracted from `finish` params and accessible as `${{result.STEP.outputName}}`. Supports simple array (`[a, b]`) or expanded objects (`- name: a\n  description: ...`). |
 | `output` | | string | Default output filename (written by the agent). Overridable per step. |
 | `interactive` | | boolean | If `true`, the agent can call `ask_user` to prompt the user mid-execution. Default: `false`. |
 | `access` | | block | Sandboxing rules. Restricts `read`, `write`, and `bash`. See [Access Control](#access-control). |
@@ -107,7 +104,7 @@ Declare these in the `tools:` field. Tools not listed are unavailable to the age
 
 > **Extension tools** (e.g., `model_cli`) registered by packages via `flow:register-tool` can also be declared here.
 
-> **Do not declare** `subagent`, `ask_user` (unless `interactive: true`), or any architect tools (`agent_catalog`, `flow_validate`, etc.) — they are blocked in agent subprocesses.
+> **Do not declare** `subagent` or `ask_user` (unless `interactive: true`) — they are blocked in agent subprocesses. Extension tools like `flow_write`, `agent_catalog`, etc. are available to any agent that declares them.
 
 ### Access control
 
@@ -200,7 +197,7 @@ task_prompt: "What feature should I research and implement?"
 |-------|:--------:|-------------|
 | `name` | ✓ | Used for documentation. The actual slash command derives from the file path, not this field. |
 | `description` | ✓ | Shown in the command list and dashboard header. |
-| `max_concurrent` | | Maximum agents running in parallel. Default: `4`. Use `1` to force sequential execution. |
+| `max_concurrent` | | Maximum agents running in parallel. Default: `4`. Use `1` to force strictly sequential execution. |
 | `task_required` | | When `true`, pi-flows prompts the user for a task if they invoke the command without arguments. |
 | `task_prompt` | | Custom prompt text shown when asking for a task. Default: `"Describe what you want <name> to do:"`. |
 
@@ -209,7 +206,7 @@ task_prompt: "What feature should I research and implement?"
 > | File path | Command |
 > |-----------|---------|
 > | `.pi/flows/flows/research.yaml` | `/research` |
-> | `.pi/flows/flows/judo/apply.yaml` | `/judo:apply` |
+> | `.pi/flows/flows/my-domain/apply.yaml` | `/my-domain:apply` |
 >
 > Keep `name:` in sync with the file path for clarity, but pi-flows always uses the filesystem-derived name.
 
@@ -245,8 +242,6 @@ blockedBy: other-step, another   # comma-separated step IDs
 inputs:
   input_name: "${{result.other-step.summary}}"
 output: result-file.md           # optional output filename override
-reads:                           # files to inject as context before execution
-  - docs/spec.md
 on_complete: next-step           # route to this step on success
 on_error: error-handler          # route to this step on failure
 ```
@@ -261,7 +256,6 @@ on_error: error-handler          # route to this step on failure
 | `blockedBy` | Comma-separated step IDs that must complete before this step starts. |
 | `inputs` | Named input values wired from template expressions. See [Input Wiring](#input-wiring). |
 | `output` | Override the agent's default output filename. |
-| `reads` | File paths injected as read-only context before the agent's first turn. |
 | `on_complete` | Step ID to route to after this step succeeds. |
 | `on_error` | Step ID to route to if this step errors. |
 
@@ -327,12 +321,12 @@ options: Quick fix, Full refactor
 branches:
   Quick fix: quick-fix-step
   Full refactor: refactor-step
-allowNotes: true
-allowCustom: false
-multiSelect: false
+allowCustom: true
 agent: router-agent
 task: Choose the approach based on the technical context
 ```
+
+After the user picks an option, they are always prompted for optional notes (Enter to skip). Notes are accessible via `${{fork.ID.notes}}`.
 
 **Field reference:**
 
@@ -341,11 +335,10 @@ task: Choose the approach based on the technical context
 | `question` | ✓ | Question displayed to the user |
 | `options` | ✓ | Comma-separated or YAML list of choices |
 | `branches` | ✓ | Map of option text → step ID. Must cover all options. |
-| `allowNotes` | | If `true`, prompts for optional freetext notes after selection. Notes accessible via `${{fork.ID.notes}}`. |
-| `allowCustom` | | Deprecated — use `allowNotes`. Adds "Other (describe)" option. |
+| `allowCustom` | | Appends "Other (describe)" option. Custom freetext is routed through the fork's `agent` to pick the closest branch. Requires `agent`. |
 | `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
-| `agent` | | Agent to use when autonomous mode is active (Ctrl+A). If absent, always prompts. |
-| `task` | | Context passed to the autonomous agent. Defaults to the question + options. |
+| `agent` | | Agent for autonomous decisions (Ctrl+A) and custom freetext routing. Required when `allowCustom` is set. |
+| `task` | | Context passed to the decision agent. Defaults to the question + options. |
 
 **Template variable access:**
 
@@ -355,7 +348,7 @@ task: "User chose: ${{fork.choose-approach.answer}}"
 task: "Notes: ${{fork.choose-approach.notes}}"
 ```
 
-**Autonomous mode:** When the user presses Ctrl+A (enabling `🤖 auto` in the footer), fork steps that have an `agent:` field skip the user prompt and let the named agent decide the branch automatically. Fork steps without `agent:` always prompt the user, even in autonomous mode.
+**Autonomous mode:** When the user presses Ctrl+A (enabling `AUTO` in the footer), fork steps that have an `agent:` field skip the user prompt and let the named agent decide the branch automatically. Fork steps without `agent:` always prompt the user, even in autonomous mode.
 
 ---
 
@@ -548,6 +541,7 @@ Template variables are placeholders in `task`, `inputs`, `question`, and system 
 | `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |
 | `${{result.STEP-ID.artifacts}}` | The `<artifacts>` XML block from `finish` |
 | `${{result.STEP-ID.files}}` | Human-readable file list (e.g., `src/auth.ts (created)`) |
+| `${{result.STEP-ID.<outputName>}}` | A typed output from the agent's `outputs:` declaration |
 | `${{fork.STEP-ID.answer}}` | User's answer from a fork step |
 | `${{fork.STEP-ID.notes}}` | Optional notes the user added to a fork answer |
 | `${{loop.STEP-ID.iteration}}` | Current iteration number (1-based) in a loop step |
@@ -652,6 +646,7 @@ finish(summary="Tests passing.", branch="finalize")
 | `files` | list | Files the agent touched. Each entry: `{ path, action }` where action is `created`, `modified`, or `read`. |
 | `artifacts` | string | Arbitrary XML data. Accessible via `${{result.STEP.artifacts}}` and `conditional` step checks. |
 | `branch` | string | For decision steps only. Must match a key in the step's `branches:` map or one of `loop_target`/`exit_target`. |
+| `<outputName>` | string | Any custom parameter matching a declared `outputs:` entry on the agent. Extracted as a typed output, accessible via `${{result.STEP.outputName}}`. |
 
 ### System prompt guidance for agents
 

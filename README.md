@@ -1,9 +1,59 @@
 # pi-flows
 
-A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workflow orchestration to pi. Design flows as markdown files, run them with automatic parallel scheduling, and watch everything in a live dashboard — while the main session stays fully interactive.
+A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workflow orchestration to pi. Design flows as YAML files, run them with automatic parallel scheduling, and watch everything in a live dashboard — while the main session stays fully interactive.
+
+---
+
+## What It Solves
+
+Flows are **workflow templates** that can be reused and created project-wise. Each user can create their own dedicated workflows that are tailored for the project.
+
+Flows can have **multiple agents communicating with each other** through structured I/Os. These agents can be reused across multiple flows, and new agents can be created to suit their own specific tasks. Loops and forks are also available for when automatic validation and user-driven decision points are needed.
+
+### The Goal
+
+This tool lets each user turn their style of work into **subagent workflows** that suit their needs and their workstyle. It has a TUI for terminal use with custom metrics in cards, but can be wired into any dashboard frontend.
+
+### Best Practice Usage
+
+Flows should be used for **big, reusable tasks** that are commonly used in the project's development cycle. Think of them as your team's playbooks:
+
+- **Research → Plan → Implement → Verify** cycles that you run on every feature
+- **Code review** pipelines with automated checks and human decision points
+- **Documentation generation** workflows that analyze code and produce docs
+- **Refactoring** workflows with verification loops to ensure nothing breaks
+- **Onboarding** flows that explore a codebase and produce summaries
+
+**When to create a flow:**
+- You find yourself repeating the same multi-step process regularly
+- A task naturally decomposes into independent subtasks that can run in parallel
+- You need a verify → fix → re-verify loop with a safety cap
+- You want a user decision point (fork) to choose between approaches mid-workflow
+
+**When NOT to use a flow:**
+- Simple one-shot tasks — just use the main session directly
+- Tasks that require constant back-and-forth conversation — flows are for structured pipelines
+
+### Sub-extensions
+
+pi-flows is composed of several tightly integrated sub-extensions, all loaded through a single entry point:
+
+| Extension | Description |
+|-----------|-------------|
+| **provider-register** | Provider management, model catalog, role assignment, autonomous mode state |
+| **file-tracker** | Tracks file modifications (edit/write) in the main session for footer stats |
+| **flow-engine** | Core orchestration: agent parsing, flow parsing, DAG execution, template expansion, tool registration |
+| **flow-dashboard** | Live TUI dashboard with agent cards, grid layout, detail overlays, card registry |
+| **flow-summary** | Post-flow summary widget with LLM-generated insights, result persistence |
+| **flow-context** | Flow result management, `flow_results` tool, `/flows` action menu, delete/edit commands |
+| **flow-workspace** | Flow creation and editing: Flow Architect spawning, staging directories, replan loop |
+| **flow-footer** | Composable footer bar with provider/model, git branch, file stats, context usage, and extension segments |
+
+---
 
 ## Table of Contents
 
+- [What It Solves](#what-it-solves)
 - [Install](#install)
 - [Quick Start](#quick-start)
 - [Commands](#commands)
@@ -16,6 +66,7 @@ A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workfl
   - [Frontmatter Fields](#frontmatter-fields)
   - [Available Tools](#available-tools)
   - [Model Roles](#model-roles)
+  - [Role Presets](#role-presets)
   - [Model Catalog](#model-catalog)
   - [Access Control](#access-control)
   - [Skills Directory Format](#skills-directory-format)
@@ -31,8 +82,12 @@ A [pi-package](https://github.com/badlogic/pi-mono) that adds multi-agent workfl
 - [Input Wiring](#input-wiring)
 - [Template Variable Reference](#template-variable-reference)
 - [Dashboard](#dashboard)
+- [Flow Architect](#flow-architect)
 - [Flow Context](#flow-context)
+- [Built-in Agents](#built-in-agents)
+- [Footer Bar](#footer-bar)
 - [Extending pi-flows](#extending-pi-flows)
+- [Provider Management](#provider-management)
 - [Requirements](#requirements)
 - [Developer Docs](#developer-docs)
 - [License](#license)
@@ -230,6 +285,7 @@ Focus on clean, tested implementations. Run the existing test suite after making
 | `skills` | | Skill name(s) whose docs are injected into the system prompt |
 | `context` | | File paths (relative to project root) injected as read-only context |
 | `inputs` | | Named inputs this agent expects — declared as a contract for flow wiring |
+| `outputs` | | Named output values extracted from `finish` params — accessible downstream as `${{result.STEP.name}}` |
 | `output` | | Default output filename |
 | `interactive` | | Set to `true` if the agent should prompt the user mid-execution |
 | `access` | | Sandboxing rules (see [Access Control](#access-control)) |
@@ -271,6 +327,31 @@ Assign models to roles with `/roles`, then reference them with an `@` prefix:
 
 **Setup:** Run `/provider` to add a provider, then `/roles` to assign models to roles.
 
+### Role Presets
+
+Role assignments can be saved and loaded as **presets** — useful when switching between different model configurations (e.g., fast/cheap vs. high-quality, or different providers).
+
+From `/roles`, select:
+
+| Action | Description |
+|--------|-------------|
+| **Edit roles** | Change individual role → model assignments |
+| **Save as preset** | Snapshot current roles under a named preset |
+| **▶ preset-name** | Load a saved preset (overwrites current roles) |
+| **Delete preset** | Remove a saved preset |
+
+The active preset is shown with a `✓` prefix. Manually editing any role clears the active preset marker.
+
+```
+/roles
+→ Save as preset → "fast-and-cheap"
+→ (switch models)
+→ Save as preset → "high-quality"
+→ ▶ fast-and-cheap    ← load it back
+```
+
+> Presets are stored in `~/.pi/agent/providers.json` alongside provider credentials and role assignments.
+
 ### Model Catalog
 
 The **model catalog** is the library of models available for role assignment. It is stored globally at `~/.pi/agent/providers.json` and pre-populated with common models. Use `/catalog` to manage it:
@@ -287,6 +368,21 @@ The catalog overlay opens with a searchable list of all known models. From here 
 | **Add** | Select `+ Add new model`, enter the provider-prefixed model ID (e.g., `openai/gpt-5`) |
 | **Edit** | Select any model to open its settings — change display name, toggle reasoning/vision support, adjust context window and max tokens |
 | **Delete** | Open a model's edit screen and choose `Delete → confirm` |
+
+**Default catalog models:**
+
+The catalog ships with these pre-populated models:
+
+| Model ID | Display Name |
+|----------|-------------|
+| `cc/claude-opus-4-6` | Opus 4.6 |
+| `cc/claude-sonnet-4-6` | Sonnet 4.6 |
+| `cc/claude-haiku-4-5-20251001` | Haiku 4.5 |
+| `glm/glm-5` | GLM 5 |
+| `gemini/gemini-3.1-pro-preview` | Gemini 3.1 Pro |
+| `openrouter/inception/mercury-2` | Mercury 2 |
+| `minimax/MiniMax-M2.5` | MiniMax M2.5 |
+| `minimax/MiniMax-M2.1` | MiniMax M2.1 |
 
 New models added via `/catalog` immediately appear in the `/roles` model selector. This is useful when your LLM provider offers models not yet in the default catalog.
 
@@ -306,7 +402,7 @@ New models added via `/catalog` immediately appear in the `/roles` model selecto
 
 ### Access Control
 
-The `access` block restricts what an agent can read, write, and run. This sandboxes agents to prevent accidental damage:
+The `access` block restricts what an agent can read, write, and run. This sandboxes agents to prevent accidental damage. Enforcement is handled by the **guard extension**, which is automatically injected into every spawned agent session.
 
 ```yaml
 access:
@@ -325,6 +421,12 @@ access:
 - **`read`** — Glob patterns for allowed read paths. Reads outside these are blocked.
 - **`write`** — Glob patterns for allowed write paths. Writes outside are blocked.
 - **`bash.deny`** — Command patterns to block. Matched against the full `command` argument.
+
+The guard also enforces:
+- **Tool whitelist** — only tools declared in the agent's `tools:` field are allowed
+- **`finish` requirement** — agents must call `finish` as their final action; post-finish tool calls are blocked
+- **`ask_user` blocking** — blocked by default unless the agent has `interactive: true`
+- **Decision branch validation** — for decision agents, `finish` must include a valid `branch` name
 
 ### Skills Directory Format
 
@@ -404,7 +506,7 @@ task_prompt: "What should I research and build?"
 |-------|:--------:|-------------|
 | `name` | ✓ | Flow identifier — for documentation; the actual slash command is derived from the file path (see note below) |
 | `description` | ✓ | What the flow does (shown in command list and dashboard) |
-| `max_concurrent` | | Maximum agents running in parallel (default: unlimited) |
+| `max_concurrent` | | Maximum agents running in parallel (default: `4`) |
 | `task_required` | | When `true`, prompts the user for a task if none was provided with the command |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
 
@@ -413,7 +515,7 @@ task_prompt: "What should I research and build?"
 > | File path | Registered command |
 > |-----------|-------------------|
 > | `.pi/flows/flows/research.yaml` | `/research` |
-> | `.pi/flows/flows/judo/research.yaml` | `/judo:research` |
+> | `.pi/flows/flows/my-domain/research.yaml` | `/my-domain:research` |
 >
 > Subdirectories add a colon-separated prefix (max one level deep). Keep the frontmatter `name:` in sync for clarity, but know that pi-flows always uses the filesystem-derived name.
 
@@ -475,13 +577,12 @@ branches:
 | `question` | Question to display to the user |
 | `options` | Answer choices |
 | `branches` | Map of option text → step ID to run |
-| `allowNotes` | Prompt for optional freetext notes after selection. Access via `${{fork.ID.notes}}` |
-| `allowCustom` | Add an "Other (describe)" option. Freetext answers are handled by a decision agent |
+| `allowCustom` | Appends "Other (describe)" option. Custom freetext routes through the fork's `agent` to pick the closest branch. Requires `agent`. |
 | `multiSelect` | Allow selecting multiple options. All selected branches execute sequentially |
-| `agent` | Agent name for autonomous mode. When `🤖 auto` is active (Ctrl+A), this agent decides the branch automatically instead of prompting the user |
-| `task` | Task description for the autonomous agent. Defaults to a prompt containing the question and options if omitted |
+| `agent` | Agent for autonomous decisions (Ctrl+A) and custom freetext routing. Required when `allowCustom` is set. |
+| `task` | Task description for the decision agent. Defaults to a prompt containing the question and options if omitted |
 
-The user's answer is available in downstream steps as `${{fork.choose-approach.answer}}` and notes as `${{fork.choose-approach.notes}}`.
+After the user picks an option, they are always prompted for optional notes (Enter to skip). The user's answer is available as `${{fork.choose-approach.answer}}` and notes as `${{fork.choose-approach.notes}}`.
 
 > **`options:` format:** Options can be comma-separated inline (`options: fast, thorough`) or as a YAML list. Option text must exactly match the keys in `branches:`.
 
@@ -603,6 +704,36 @@ inputs:
 task: Implement based on research. Context is in ${{input.research_output}}.
 ```
 
+### Typed Outputs
+
+Agents can declare `outputs:` in their frontmatter to expose named values from their `finish` call to downstream steps:
+
+```yaml
+# agents/analyzer.md
+outputs:
+  - name: verdict
+    description: Pass or fail determination
+  - name: issues
+    description: List of found issues
+```
+
+The agent calls `finish` with matching param names:
+
+```
+finish(summary="Done.", verdict="fail", issues="3 type errors found")
+```
+
+Downstream steps reference them as `${{result.STEP-ID.verdict}}`:
+
+```yaml
+## fixer
+agent: fixer
+blockedBy: analyzer
+task: "Fix these issues (verdict: ${{result.analyzer.verdict}}): ${{result.analyzer.issues}}"
+```
+
+A simpler shorthand (without descriptions): `outputs: [verdict, issues]`
+
 ### Anti-Patterns
 
 **❌ Inline everything into task** — This works but makes the task unwieldy for large outputs:
@@ -648,6 +779,7 @@ Use these placeholders in `task`, `inputs`, `question` fields in flow steps, and
 | `${{result.<step-id>.status}}` | Status: `complete`, `error`, or `blocked` |
 | `${{result.<step-id>.artifacts}}` | Structured data (XML) from a step's `finish` `artifacts` field |
 | `${{result.<step-id>.files}}` | Files touched by a step, e.g. `src/auth.ts (created), ...` |
+| `${{result.<step-id>.<outputName>}}` | A typed output value (from the agent's `outputs:` declaration) |
 | `${{input.<name>}}` | A wired input value for this step (set in the `inputs:` block) |
 | `${{fork.<step-id>.answer}}` | The user's answer from a fork step |
 | `${{fork.<step-id>.notes}}` | Optional notes the user added to a fork answer |
@@ -678,7 +810,7 @@ task: "User chose: ${{fork.choose-approach.answer}}. Notes: ${{fork.choose-appro
 
 ## Dashboard
 
-When a flow runs, a live dashboard appears above the editor showing all agents in a responsive grid.
+When a flow runs, a live dashboard appears above the editor showing all agents in a responsive grid. The grid layout auto-adjusts columns based on terminal width.
 
 ### Dashboard Controls
 
@@ -686,11 +818,11 @@ When a flow runs, a live dashboard appears above the editor showing all agents i
 |-----|--------|
 | **Ctrl+O** | Toggle navigation mode — use arrow keys to select cards |
 | **Enter** | Open detail view for the selected card |
-| **Ctrl+X** | Abort the running flow |
-| **Ctrl+A** | Toggle autonomous mode — fork steps auto-decide via their declared agent (see [Fork Steps](#fork-steps)) |
+| **Ctrl+X** | Abort the running flow (global — works from any mode) |
+| **Ctrl+A** | Toggle autonomous mode (global — works anytime, persisted across sessions) |
 | **Esc** | Exit detail view or navigation mode |
 
-When autonomous mode is active, `🤖 auto` appears in the footer bar. In this mode, fork steps that have an `agent:` field automatically select a branch without pausing to prompt the user — the named agent reads the flow context and calls `finish` with its choice. Fork steps without an `agent:` field continue to prompt the user even in autonomous mode.
+When autonomous mode is active, `AUTO` appears in the footer bar. In this mode, fork steps that have an `agent:` field automatically select a branch without pausing to prompt the user — the named agent reads the flow context and calls `finish` with its choice. Fork steps without an `agent:` field continue to prompt the user even in autonomous mode.
 
 ### Agent Cards
 
@@ -709,7 +841,30 @@ Press Enter on a card to open the detail view:
 
 ### Summary Widget
 
-After a flow completes, a summary widget appears below the dashboard showing final results per step. Press Enter on any step to expand its full output. If a workflow pipeline is registered (via `flow:register-workflow`), breadcrumb navigation shows which stage just completed.
+After a flow completes, a summary widget appears above the editor showing final results per step. The summary is generated in two phases:
+
+1. **Spinner** — a brief "Summarizing..." animation while the `@compact` model generates insight lines
+2. **Summary box** — shows flow status, duration, agent count, and LLM-generated bullet points (falls back to per-agent status if no `@compact` model is available)
+
+Summary controls:
+
+| Key | Action |
+|-----|--------|
+| **Ctrl+O** | Enter navigate mode — browse agents with arrow keys |
+| **Enter** | Open full detail view for the selected agent |
+| **Backspace** | Return from navigate to summary mode |
+| **Ctrl+X** | Dismiss the summary widget |
+
+If a workflow pipeline is registered (via `flow:register-workflow`), the summary shows a "Next: /step-name" hint.
+
+### Result Persistence
+
+Flow results are automatically saved to `.pi/flows/results/`:
+
+- **`<flow-name>.md`** — Human-readable markdown summary with insights, per-agent status, and files modified
+- **`<flow-name>.json`** — Full structured `FlowResult` with all step outputs, tool calls, durations, and token counts
+
+These files are overwritten on each run of the same flow name.
 
 ### The Main Session Stays Active
 
@@ -717,13 +872,65 @@ The main session remains fully interactive while the dashboard is active. You ca
 
 ---
 
+## Flow Architect
+
+The Flow Architect is an AI agent (`@planning` model with extended thinking) that designs flows interactively. It is spawned by `/flows:new` and `/flows:edit`.
+
+### How It Works
+
+1. **Context gathering** — The architect receives a structured summary of your main session conversation (generated by the `@compact` model), so it understands what you discussed before requesting the flow
+2. **Staging** — All files are written to a staging directory (`.pi/flows/.staging/`) during design, not directly to the final location
+3. **Replan loop** — After the architect produces a flow, you can choose:
+   - **Save** — Promote staged files to `.pi/flows/` and register the flow as a command
+   - **Replan** — Provide feedback and the architect redesigns from scratch
+   - **Cancel** — Discard everything
+4. **Run** — After save (or even without saving), you can execute the flow immediately
+
+### Architect Widget
+
+While the architect is working, a TUI widget shows progress:
+
+| Key | Action |
+|-----|--------|
+| **Ctrl+O** | Preview the designed flow (DAG visualization) or view tool call history |
+| **Ctrl+X** | Abort the architect agent |
+| **↑↓ / Enter** | Navigate and inspect individual flows when multiple are produced |
+
+### Architect Tools
+
+The architect has access to specialized tools not available in the main session:
+
+| Tool | Description |
+|------|-------------|
+| `agent_catalog` | Browse discovered agents with their descriptions, tools, and metadata |
+| `agent_write` | Create or update agent `.md` files in the staging directory |
+| `flow_write` | Create flow `.yaml` files with validation in the staging directory |
+| `flow_preview` | Render a DAG preview of a flow for visual verification |
+| `skill_read` | Read skill documentation files |
+
+---
+
 ## Flow Context
 
 Results from completed flows are persisted and accessible in the main session.
 
-### Inline Reference (`#flows:<name>`)
+### `/flows` Action Menu
 
-Type `#flows:` in the editor to see a list of flows with saved results. Selecting one inlines the result summary into your message, so the main session LLM can reason about it.
+The `/flows` command provides a central management hub:
+
+| Action | Description |
+|--------|-------------|
+| **New flow** | Describe what to build → spawns the Flow Architect |
+| **List flows** | Show all saved flows and results |
+| `/flows <name>` | Action menu for a specific flow: inject context, edit, or delete |
+
+When you select a flow by name, you get:
+
+| Action | Description |
+|--------|-------------|
+| **Inject context** | Send the flow result into the main session conversation |
+| **Edit** | Open in the Flow Architect for modification |
+| **Delete** | Remove the flow file, associated custom agents, and result files |
 
 ### `flow_results` Tool
 
@@ -736,6 +943,37 @@ The main session LLM can query past results programmatically:
 | `agent` | Full detail output for a specific step within a flow |
 
 This is automatically available — you don't need to configure anything. The LLM calls it when it needs to reference previous flow work.
+
+---
+
+## Built-in Agents
+
+pi-flows ships with three built-in agents:
+
+| Agent | Model | Description |
+|-------|-------|-------------|
+| `flow-architect` | `@planning` (high thinking) | Designs custom execution flows from conversation context. Uses `agent_catalog`, `agent_write`, `flow_write`, `flow_preview`, `skill_read` tools. Only used internally by `/flows:new` and `/flows:edit`. |
+| `flow-decision` | `@fast` | Makes autonomous decisions at fork and loop-decision points. Used when autonomous mode is active (Ctrl+A). Has no tools — purely a reasoning agent. |
+| `project-context-reader` | `@coding` | Discovers and reads project planning files, documentation, and configuration. Available as a reusable agent in custom flows. |
+
+Project-local agents in `.pi/flows/agents/` override built-in agents with the same name.
+
+---
+
+## Footer Bar
+
+pi-flows replaces the default footer with a composable status bar showing:
+
+| Segment | Description |
+|---------|-------------|
+| **Provider · Model** | Current session provider and model display name |
+| **⎇ branch** | Current git branch (refreshed after flow completion) |
+| **File stats** | Files modified in the session with `+insertions` / `-deletions` |
+| **Context bar** | Visual bar showing context window usage percentage (green → yellow → red) |
+| **AUTO** | Shown when autonomous mode is active (toggles with Ctrl+A) |
+| **Extension segments** | Custom segments registered by domain packages via `flow:register-footer-segment` |
+
+Segments are separated by `│` dividers. The footer updates after each LLM turn and file modification.
 
 ---
 
@@ -781,8 +1019,17 @@ export default function activate(pi: ExtensionAPI) {
 | `flow:complete` | A flow finishes — receives the full `FlowResult` with all step results |
 | `flow:subagent-tool-call` | An agent calls a tool — `{ agentName, toolName, input }` |
 | `flow:subagent-tool-result` | A tool returns — `{ agentName, toolName, output, isError }` |
-| `flow:auto-decision` | A fork step auto-decides in autonomous mode |
-| `flow:loop-iteration` | A loop step advances — `{ stepId, iteration, maxIterations }` |
+| `flow:auto-decision` | A fork step auto-decides in autonomous mode — `{ forkId, agentName, chosenBranch, targetStepId }` |
+| `flow:loop-iteration` | A loop step advances — `{ stepId, iteration, maxIterations, loopTarget }` |
+
+### Programmatic Events
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `flow:run` | Emit | Trigger a flow by name: `{ flowName: string }` |
+| `flow:rediscover` | Emit | Re-scan all agent and flow directories, register new commands |
+| `flow:get-agents` | Emit | Query discovered agents: emitter sets `data.agents` to the agent `Map` |
+| `flow:get-spawn-context` | Emit | Get auth, model registry, guard factories, and extension tools for spawning agents |
 
 ### Discovery Priority
 
@@ -793,6 +1040,43 @@ When multiple sources define an agent or flow with the same name, later registra
 3. Project-local agents (`.pi/flows/agents/`) — **highest priority**
 
 This allows project-local files to override any package defaults.
+
+---
+
+## Provider Management
+
+The `/provider` command manages LLM provider connections. Providers are OpenAI-compatible or Anthropic-compatible API endpoints.
+
+### Adding a Provider
+
+```
+/provider
+→ + Add new provider
+  Name: my-proxy
+  Base URL: https://my-proxy.example.com/v1
+  API Key: $MY_PROXY_KEY  (or literal key)
+  Protocol: openai-completions | anthropic-messages
+  Models: (multi-select from catalog)
+```
+
+API keys can be:
+- **Environment variable reference** — `$ENV_VAR_NAME` (resolved at runtime)
+- **Literal value** — stored directly (automatically set as a synthetic env var)
+
+### Editing a Provider
+
+Select an existing provider from the list to edit its base URL, API key, protocol, or model selection.
+
+### Model Selection
+
+When adding or editing a provider, you can restrict which catalog models are available through it. The multi-select overlay supports:
+- **Toggle individual models** with Space/Enter
+- **Toggle all** for quick select/deselect
+- **Quick-add** (`+ Add new model`) to add a model to the catalog inline
+
+If no models are selected (or all are), the provider exposes all catalog models.
+
+> **Config location:** All provider, role, preset, catalog, and autonomous mode settings are stored in `~/.pi/agent/providers.json`.
 
 ---
 
@@ -807,10 +1091,22 @@ This allows project-local files to override any package defaults.
 
 For building packages on top of pi-flows, see the detailed reference documentation:
 
+### Guides
+
 | Document | Description |
 |----------|-------------|
-| [Extending pi-flows](docs/extending-pi-flows.md) | Complete guide for building packages on pi-flows: package setup, registration patterns, custom cards, workflows, gates, guards, footer segments |
-| [Events API](docs/events-api.md) | All `flow:*` events with data shapes, direction (emit vs listen), and code examples — including `flow:register-tool` for custom agent tools |
+| [Architecture](docs/architecture.md) | System overview, component stack, package discovery, agent isolation model, flow execution model |
+| [Creating Packages](docs/creating-packages.md) | Step-by-step guide to building a custom pi-flows package from scratch |
+| [Extending pi-flows](docs/extending-pi-flows.md) | Complete guide for building packages on pi-flows: registration patterns, custom cards, workflows, gates, guards, footer segments |
+
+### References
+
+| Document | Description |
+|----------|-------------|
+| [Agent Reference](docs/agents.md) | Agent definition format, frontmatter schema, model tiers, card types, design principles, and examples |
+| [Flow Reference](docs/flows.md) | All flow step types (agent, fork, conditional, loop, flow-ref), result interpolation, and common patterns |
+| [Skills & Extensions](docs/skills-and-extensions.md) | Skill directory format, SKILL.md authoring, extension API, guard patterns |
+| [Events API](docs/events-api.md) | All `flow:*` events with data shapes, direction (emit vs listen), and code examples |
 | [Tools Reference](docs/tools-reference.md) | All tools by execution context — main session, agent session, architect session |
 | [Flow Authoring](docs/flow-authoring.md) | Detailed agent and flow file format reference with all fields and examples |
 | [Public API](docs/public-api.md) | Exported types and functions: `AgentConfig`, `FlowConfig`, `spawnAgent`, `runFlow`, `discoverAll`, etc. |

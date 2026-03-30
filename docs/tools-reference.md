@@ -99,20 +99,20 @@ Read flow execution results. The main session LLM uses this to access results fr
 ```
 Available flow results:
 
-• judo:apply    (2025-03-15 14:22:01)
-• judo:research (2025-03-14 09:10:45)
+• my-domain:apply    (2025-03-15 14:22:01)
+• my-domain:research (2025-03-14 09:10:45)
 ```
 
 **`summary` example:**
 
 ```json
-{ "action": "summary", "flow": "judo:apply" }
+{ "action": "summary", "flow": "my-domain:apply" }
 ```
 
 **`agent` example:**
 
 ```json
-{ "action": "agent", "flow": "judo:apply", "agent": "developer" }
+{ "action": "agent", "flow": "my-domain:apply", "agent": "developer" }
 ```
 
 > **Auto-availability:** `flow_results` is always registered by pi-flows. There is nothing to configure. The main session LLM calls it automatically when users ask about previous flow work.
@@ -151,7 +151,7 @@ Read a detail file from a skill. Skills are documentation packages injected into
 
 ```typescript
 {
-  skill: string;  // Skill name (e.g., "judo-backend-docs")
+  skill: string;  // Skill name (e.g., "my-backend-docs")
   file: string;   // Detail file name listed in SKILL.md (e.g., "api-reference.md")
 }
 ```
@@ -168,14 +168,14 @@ Read a detail file from a skill. Skills are documentation packages injected into
 **Example agent frontmatter:**
 
 ```yaml
-skills: judo-backend-docs
+skills: my-backend-docs
 tools: read, write, skill_read
 ```
 
 **Example call:**
 
 ```json
-{ "skill": "judo-backend-docs", "file": "api-reference.md" }
+{ "skill": "my-backend-docs", "file": "api-reference.md" }
 ```
 
 ---
@@ -239,7 +239,6 @@ Prompt the user for input mid-execution. Only works for agents declared as `inte
   type: "select" | "confirm" | "input";
   options?: string[];       // For "select" type
   multiSelect?: boolean;    // Allow multiple selections
-  allowNotes?: boolean;     // Prompt for optional notes after selection
   allowCustom?: boolean;    // Append "Other (describe)" option
   defaultValue?: string;    // For "input" type
 }
@@ -262,24 +261,24 @@ options: "auth", "payments", "notifications".
 
 ### Extension Tools
 
-Registered by dependent packages via [`flow:register-tool`](events-api.md#flowregister-tool). These tools are declared in agent frontmatter like any built-in tool and become available to all spawned agent sessions.
+Registered by dependent packages via `pi.registerTool()` in their extension's `activate` function. Tools registered this way are **automatically discovered** by pi-flows and made available to any agent that declares them in its `tools:` frontmatter field.
 
-**Example:** `model_cli` registered by pi-judo:
+> **Note:** The `flow:register-tool` event is deprecated. Tools registered via `pi.registerTool()` are automatically available to subagent sessions. The event still works for backward compatibility but is no longer needed.
+
+**Example:** `model_cli` registered by a domain package:
 
 ```yaml
 # Agent frontmatter
 tools: read, write, model_cli
 ```
 
-The agent can then call `model_cli` to interact with the domain model.
+The agent can then call `model_cli` to interact with the domain model. The guard enforces per-agent whitelisting — only tools listed in the agent's `tools:` field are allowed through.
 
 ---
 
-## Architect Session Tools
+## Flow & Agent Management Tools
 
-Available exclusively to the Flow Architect agent during `/flows:new` and `/flows:edit` sessions. These tools help the architect understand the available agents, validate flow designs, and write files.
-
-> **Not for agent frontmatter:** These tools are main-session-only and should not appear in agent `tools:` declarations. The guard will block them in agent subprocesses.
+Tools for managing agents and flows. Available to any agent that declares them in its `tools:` frontmatter field. Commonly used by the Flow Architect during `/flows:new` and `/flows:edit` sessions, and by agents that generate flows dynamically (e.g., flow writers, backpropagators).
 
 ### `agent_catalog`
 
@@ -314,37 +313,9 @@ Array<{
 
 ---
 
-### `agent_validate`
-
-Validate agent `.md` content without writing to disk. Returns LSP-style diagnostics.
-
-**Parameters:**
-
-```typescript
-{
-  content: string;  // The agent .md content to validate
-}
-```
-
-**Returns:**
-
-```typescript
-{
-  valid: boolean;
-  diagnostics: Array<{
-    line: number;
-    severity: "error" | "warning";
-    message: string;
-    suggestion?: string;
-  }>;
-}
-```
-
----
-
 ### `agent_write`
 
-Validate and write an agent `.md` file. Runs `agent_validate` first. On success, writes the file and triggers agent re-discovery. On failure, returns validation errors without writing.
+Validate and write an agent `.md` file. Validates internally first. On success, writes the file and triggers agent re-discovery. On failure, returns validation errors without writing.
 
 **Parameters:**
 
@@ -367,25 +338,9 @@ Validate and write an agent `.md` file. Runs `agent_validate` first. On success,
 
 ---
 
-### `flow_validate`
-
-Validate flow YAML content without writing to disk. Checks top-level fields, step syntax, agent references, and template variable usage.
-
-**Parameters:**
-
-```typescript
-{
-  content: string;  // The flow YAML content to validate
-}
-```
-
-**Returns:** Same shape as `agent_validate` — `{ valid, diagnostics }`.
-
----
-
 ### `flow_write`
 
-Validate and write a flow `.yaml` file. Runs `flow_validate` first. On success, writes the file and triggers flow re-discovery (registering a new slash command). On failure, returns validation errors.
+Validate and write a flow `.yaml` file. Validates internally first. On success, writes the file and triggers flow re-discovery (registering a new slash command). On failure, returns validation errors.
 
 **Parameters:**
 

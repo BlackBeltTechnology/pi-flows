@@ -3,7 +3,7 @@
 //
 // Full-width TUI component rendered above the editor during the Flow
 // Architect's design phase.  Tracks tool calls (agent_catalog, agent_write,
-// flow_validate, flow_write, flow_preview) and renders a live-updating
+// flow_write, flow_preview) and renders a live-updating
 // box showing:
 //   - Spinner + flow name header
 //   - Agent list (built-in vs custom, with creation progress)
@@ -14,6 +14,8 @@
 
 import { Text, visibleWidth } from "@mariozechner/pi-tui";
 import { renderBox } from "./box-renderer.js";
+import { parseFlowYamlString } from "../flow-engine/flow-parser-yaml.js";
+import type { FlowConfig, AgentStep } from "../flow-engine/types.js";
 
 // ---- Spinner frames --------------------------------------------------------
 
@@ -53,6 +55,7 @@ function extractInputPreview(toolName: string, input: any): string {
 
 interface DagStep {
   id: string;
+  agentName?: string;  // Agent name (may differ from step id); used for agent list matching
   blockedBy: string[];
   task: string;
   sourceType: "built-in" | "local" | "custom";
@@ -88,77 +91,53 @@ interface ArchitectState {
   statusLeft: string;
   statusRight: string;
   spinFrame: number;
-  validationErrors: number;
   flowWritten: boolean;
   previewApproval: string; // e.g., "Awaiting approval..."
   lastToolCall: { toolName: string; inputPreview: string } | null;
 }
 
-// ---- Flow content parser (lightweight — extracts steps + blockedBy) --------
+// ---- Flow content parser (uses canonical YAML parser) ---------------------
 
-function parseFlowSteps(content: string): { name: string; description: string; maxConcurrent: number; steps: DagStep[] } {
-  const lines = content.split("\n");
-  let name = "";
-  let description = "";
-  let maxConcurrent = 0;
-  const steps: DagStep[] = [];
-
-  // Extract frontmatter fields
-  const nameMatch = content.match(/^name:\s*(.+)$/m);
-  if (nameMatch) name = nameMatch[1].trim();
-  const descMatch = content.match(/^description:\s*(.+)$/m);
-  if (descMatch) description = descMatch[1].trim();
-  const concMatch = content.match(/^max_concurrent:\s*(\d+)$/m);
-  if (concMatch) maxConcurrent = parseInt(concMatch[1], 10);
-
-  // Extract step headers, blockedBy, and task
-  let currentStepId: string | null = null;
-
-  const validPrefixes = ["fork:", "conditional:", "agent-decision:", "agent-loop-decision:", "flow-ref:"];
-
-  for (const line of lines) {
-    const headerMatch = line.match(/^##\s+(.+)$/);
-    if (headerMatch) {
-      const header = headerMatch[1].trim();
-      const isSpecial = validPrefixes.some((p) => header.startsWith(p));
-      if (isSpecial) {
-        const colonIdx = header.indexOf(":");
-        currentStepId = header.slice(colonIdx + 1).trim();
-      } else {
-        currentStepId = header;
+function parseFlowForWidget(content: string): { name: string; description: string; maxConcurrent: number; steps: DagStep[] } {
+  try {
+    const flow: FlowConfig = parseFlowYamlString(content, "<widget>");
+    const steps: DagStep[] = flow.steps.map((step) => {
+      if (step.stepType === "agent") {
+        const agentStep = step as AgentStep;
+        return {
+          id: agentStep.id,
+          agentName: agentStep.agent,  // Actual agent name (may differ from step id)
+          blockedBy: agentStep.blockedBy || [],
+          task: agentStep.task || "",
+          sourceType: "built-in" as const,
+        };
       }
-      steps.push({ id: currentStepId, blockedBy: [], task: "", sourceType: "built-in" });
-      continue;
-    }
-
-    if (currentStepId) {
-      const last = steps[steps.length - 1];
-      if (last) {
-        const blockedByMatch = line.match(/^blockedBy:\s*(.+)$/);
-        if (blockedByMatch) {
-          last.blockedBy = blockedByMatch[1]
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean);
-        }
-        const taskMatch = line.match(/^task:\s*(.+)$/);
-        if (taskMatch) {
-          const taskValue = taskMatch[1].trim();
-          if (taskValue === ">" || taskValue === "|") {
-            // YAML multi-line: collect subsequent indented lines
-            last.task = "";
-          } else {
-            last.task = taskValue;
-          }
-        } else if (last.task !== undefined && /^\s{2,}/.test(line) && !line.match(/^\w+:/)) {
-          // Continuation of a multi-line task value
-          last.task = last.task ? last.task + " " + line.trim() : line.trim();
-        }
-      }
-    }
+      // Non-agent step types (fork, conditional, agent-decision, etc.)
+      return {
+        id: step.id,
+        blockedBy: [],
+        task: "",
+        sourceType: "built-in" as const,
+      };
+    });
+    return {
+      name: flow.name,
+      description: flow.description,
+      maxConcurrent: flow.max_concurrent || 0,
+      steps,
+    };
+  } catch {
+    // Graceful degradation: extract name/description via regex, return empty steps
+    const nameMatch = content.match(/^name:\s*(.+)$/m);
+    const descMatch = content.match(/^description:\s*(.+)$/m);
+    const concMatch = content.match(/^max_concurrent:\s*(\d+)$/m);
+    return {
+      name: nameMatch ? nameMatch[1].trim() : "",
+      description: descMatch ? descMatch[1].trim() : "",
+      maxConcurrent: concMatch ? parseInt(concMatch[1], 10) : 0,
+      steps: [],
+    };
   }
-
-  return { name, description, maxConcurrent, steps };
 }
 
 // ---- Extract agent name from agent_write path or content -------------------
@@ -296,7 +275,6 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     statusLeft: "",
     statusRight: "",
     spinFrame: 0,
-    validationErrors: 0,
     flowWritten: false,
     previewApproval: "Awaiting approval...",
     lastToolCall: null,
@@ -378,17 +356,13 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         break;
       }
 
-      case "flow_validate":
-        state.statusRight = "Validating\u2026";
-        break;
-
       case "flow_write": {
         state.statusRight = "Writing flow\u2026";
         // Store the flow path
         if (input?.path) state.flowPath = input.path;
         // Parse and accumulate flow content
         if (input?.content) {
-          const parsed = parseFlowSteps(input.content);
+          const parsed = parseFlowForWidget(input.content);
           const flowName = parsed.name || "unnamed";
 
           // Upsert into flowContents
@@ -419,14 +393,16 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           if (parsed.maxConcurrent) state.maxConcurrent = parsed.maxConcurrent;
           state.dagSteps = parsed.steps;
 
-          // Register agents from flow steps — resolve source type from catalog metadata
+          // Register agents from flow steps — use agent name (not step id)
+          // to match agent_write entries. Also resolve source type.
           for (const step of parsed.steps) {
-            step.sourceType = catalogAgentTypes.get(step.id)
-              || state.agents.find((a) => a.name === step.id)?.type
+            const agentName = step.agentName || step.id;
+            step.sourceType = catalogAgentTypes.get(agentName)
+              || state.agents.find((a) => a.name === agentName)?.type
               || "built-in";
-            if (!state.agents.find((a) => a.name === step.id)) {
+            if (!state.agents.find((a) => a.name === agentName)) {
               state.agents.push({
-                name: step.id,
+                name: agentName,
                 type: step.sourceType as "built-in" | "local" | "custom",
                 status: "done",
               });
@@ -439,7 +415,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
       case "flow_preview":
         // Parse and accumulate flow content
         if (input?.content) {
-          const parsed = parseFlowSteps(input.content);
+          const parsed = parseFlowForWidget(input.content);
           const flowName = parsed.name || "unnamed";
 
           // Upsert into flowContents
@@ -466,19 +442,20 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         }
         // Parse preview content to update DAG if available
         if (input?.content) {
-          const parsed = parseFlowSteps(input.content);
+          const parsed = parseFlowForWidget(input.content);
           if (parsed.name) state.flowName = parsed.name;
           if (parsed.description) state.flowDescription = parsed.description;
           state.dagSteps = parsed.steps;
 
-          // Register agents from flow steps — resolve source type from catalog metadata
+          // Register agents from flow steps — use agent name (not step id)
           for (const step of parsed.steps) {
-            step.sourceType = catalogAgentTypes.get(step.id)
-              || state.agents.find((a) => a.name === step.id)?.type
+            const agentName = step.agentName || step.id;
+            step.sourceType = catalogAgentTypes.get(agentName)
+              || state.agents.find((a) => a.name === agentName)?.type
               || "built-in";
-            if (!state.agents.find((a) => a.name === step.id)) {
+            if (!state.agents.find((a) => a.name === agentName)) {
               state.agents.push({
-                name: step.id,
+                name: agentName,
                 type: step.sourceType as "built-in" | "local" | "custom",
                 status: "done",
               });
@@ -567,27 +544,6 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           state.statusLeft = "";
         } else {
           state.statusLeft = `Creating custom agent ${doneCount + 1}/${customCount}`;
-        }
-        break;
-      }
-
-      case "flow_validate": {
-        if (isError) {
-          state.statusRight = "Validation failed";
-        } else {
-          try {
-            const result = typeof output === "string" ? JSON.parse(output) : output;
-            const errors = (result?.diagnostics || []).filter(
-              (d: any) => d.severity === "error",
-            ).length;
-            state.validationErrors = errors;
-            state.statusRight =
-              errors > 0
-                ? `${errors} error${errors > 1 ? "s" : ""}`
-                : "\u2713 Valid";
-          } catch {
-            state.statusRight = "\u2713 Valid";
-          }
         }
         break;
       }

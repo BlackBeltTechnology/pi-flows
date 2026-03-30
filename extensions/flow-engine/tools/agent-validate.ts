@@ -1,12 +1,11 @@
 // ---------------------------------------------------------------------------
-// Agent Validate Tool
+// Agent Validation
 //
-// Validates agent .md content without writing to disk. Returns LSP-style
-// diagnostics: { line, severity, message, suggestion? }
+// Validates agent .md content and returns LSP-style diagnostics:
+// { line, severity, message, suggestion? }
+//
+// Used internally by agent-write.ts. Not registered as a standalone tool.
 // ---------------------------------------------------------------------------
-
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 // ---- Diagnostic type (same as flow-validate) ------------------------------
 
@@ -23,9 +22,10 @@ export interface Diagnostic {
 // These are the pi-core built-in tools. Extension-registered tools (e.g.,
 // model_cli from pi-judo) are discovered dynamically via pi.getAllTools().
 // `finish` is auto-injected by the guard and must NOT be declared.
-// `ask_user`, `subagent`, and architect tools (agent_catalog, agent_validate,
-// agent_write, flow_validate, flow_write, flow_preview) are main-session-only
-// or guard-blocked — they must NOT be declared in agent frontmatter.
+// `ask_user` and `subagent` are main-session-only or guard-blocked —
+// they must NOT be declared in agent frontmatter.
+// Extension tools (agent_catalog, agent_write, flow_write, flow_preview)
+// are available to any agent that declares them in its tools: field.
 const BASE_TOOLS = new Set([
   "read",
   "write",
@@ -330,23 +330,3 @@ export function validateAgentContent(
   return { valid: !hasErrors, diagnostics };
 }
 
-// ---- Tool registration ----------------------------------------------------
-
-export function registerAgentValidateTool(pi: ExtensionAPI): void {
-  pi.registerTool({
-    name: "agent_validate",
-    description:
-      "Validate agent .md content without writing to disk. Returns LSP-style diagnostics with line numbers, severity, messages, and suggestions.",
-    parameters: Type.Object({
-      content: Type.String({ description: "The agent .md content to validate" }),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const dynamicTools = new Set(pi.getAllTools().map(t => t.name));
-      const result = validateAgentContent(params.content, dynamicTools);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        details: {},
-      };
-    },
-  });
-}

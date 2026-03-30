@@ -44,9 +44,10 @@ interface AgentConfig {
   model: string;           // "@coding", "@planning", or explicit model ID
   thinking?: string;       // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
   tools: string[];         // e.g., ["read", "write", "edit", "bash"]
-  skills?: string[];       // e.g., ["judo-backend-docs"]
+  skills?: string[];       // e.g., ["my-backend-docs"]
   context?: string[];      // File paths injected as read-only context
   inputs?: string[];       // Declared input names (contract for flow wiring)
+  outputs?: Array<{name: string, description?: string}>; // Declared output names (typed finish params)
   systemPrompt: string;    // The body of the .md file (prompt template)
   output?: string;         // Default output filename
   interactive?: boolean;
@@ -157,8 +158,7 @@ interface ForkStep {
   question: string;
   options: string[];
   branches: Record<string, string>;  // option → step ID
-  allowNotes?: boolean;
-  allowCustom?: boolean;
+  allowCustom?: boolean;             // "Other (describe)" option, routes through agent
   multiSelect?: boolean;
   agent?: string;                    // Agent for autonomous mode
   task?: string;                     // Task for autonomous agent
@@ -262,6 +262,7 @@ interface AgentResult {
   duration: number;        // Milliseconds
   tokens: { input: number; output: number };
   finishParams?: Record<string, any>;  // Raw finish tool call arguments
+  typedOutputs?: Record<string, string>; // Extracted typed output values from declared agent outputs
 }
 ```
 
@@ -516,6 +517,7 @@ function discoverAll(
 interface DiscoveryResult {
   agents: Map<string, AgentConfig>;
   flows: Map<string, FlowConfig>;
+  warnings: string[];
 }
 ```
 

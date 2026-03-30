@@ -1,7 +1,5 @@
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { SelectItem } from "@mariozechner/pi-tui";
-import { checkboxOverlay, type CheckboxResult } from "../../shared/overlays.js";
 
 export function registerAskUserTool(pi: ExtensionAPI): void {
   pi.registerTool({
@@ -16,13 +14,11 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
       ], { description: "Question type: select (pick from options), confirm (yes/no), input (freetext)" }),
       options: Type.Optional(Type.Array(Type.String(), { description: "Options for select type" })),
       multiSelect: Type.Optional(Type.Boolean({ description: "Allow multiple selections" })),
-      allowNotes: Type.Optional(Type.Boolean({ description: "Prompt for optional notes after selection" })),
       allowCustom: Type.Optional(Type.Boolean({ description: "Append 'Other (describe)' option" })),
       defaultValue: Type.Optional(Type.String({ description: "Default value for input type" })),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       let answer: any;
-      let notes: string | undefined;
 
       if (params.type === "confirm") {
         answer = await ctx.ui.confirm(params.question);
@@ -33,13 +29,14 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
         if (params.allowCustom) options.push("Other (describe)");
 
         if (params.multiSelect) {
-          // Multi-select via shared checkbox overlay
-          const checkboxItems: SelectItem[] = options.map((opt) => ({
+          // Multi-select via shared checkbox overlay (dynamic import to avoid static pi-tui dep)
+          const { checkboxOverlay } = await import("../../shared/overlays.js");
+          const checkboxItems = options.map((opt: string) => ({
             value: opt,
             label: opt,
           }));
 
-          const result: CheckboxResult = await checkboxOverlay(ctx, params.question, checkboxItems, {
+          const result: any = await checkboxOverlay(ctx, params.question, checkboxItems, {
             overlayMode: true,
             hints: ["Space: toggle  Enter: confirm  Esc: cancel"],
           });
@@ -53,17 +50,10 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
         if (answer === "Other (describe)") {
           answer = await ctx.ui.input("Describe:", "");
         }
-
-        // Prompt for notes if allowed
-        if (params.allowNotes) {
-          const notesInput = await ctx.ui.input("Optional notes (press Enter to skip):", "");
-          if (notesInput && notesInput.trim()) notes = notesInput.trim();
-        }
       }
 
-      const result = notes !== undefined ? { answer, notes } : { answer };
       return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
+        content: [{ type: "text", text: JSON.stringify({ answer }) }],
         details: {},
       };
     },

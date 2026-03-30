@@ -31,7 +31,7 @@ export interface AgentConfig {
   thinking?: string; // off, minimal, low, medium, high, xhigh
   tools: string[]; // e.g., ["read", "write", "edit", "grep", "bash"]
   skills?: string[]; // e.g., ["judo-backend-docs"]
-  context?: string[]; // Files to inject at dispatch (bare paths resolved relative to change dir)
+  context?: string[]; // PARSED BUT NOT WIRED — getContextFiles callback is never provided in index.ts
   inputs?: string[]; // Declared input names (contract for flow wiring)
   outputs?: Array<{name: string, description?: string}>; // Declared output names (contract for result wiring)
   systemPrompt: string; // The body of the .md file (prompt template with {task}, {input.*}, etc.)
@@ -82,7 +82,7 @@ export interface AgentStep {
   task?: string; // Optional task override (template string)
   model?: string; // Optional model override
   output?: string; // Output file
-  reads?: string[]; // Files to read before execution
+  reads?: string[]; // PARSED BUT NOT WIRED — parsed in flow-parser-yaml but never consumed in execution
   inputs?: Record<string, string>; // Named inputs wired from template expressions
   blockedBy?: string[]; // Step IDs that must complete before this step runs
   on_complete?: string; // Route to step ID on success
@@ -95,10 +95,8 @@ export interface ForkStep {
   question: string;
   options: string[];
   branches: Record<string, string>; // option -> step ID mapping
-  allowNotes?: boolean;
-  allowCustom?: boolean;  // @deprecated — use allowNotes instead
+  allowCustom?: boolean;  // Appends "Other (describe)" option. Custom freetext routes through the fork's agent. Requires agent: field.
   multiSelect?: boolean;
-  decisionAgent?: string; // @deprecated — use agent field instead
   agent?: string;         // Agent to use when auto-deciding (autonomous mode)
   task?: string;          // Context/task for the agent when auto-deciding
 }

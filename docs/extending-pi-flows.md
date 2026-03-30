@@ -1,6 +1,6 @@
 # Extending pi-flows
 
-A complete guide for building packages that depend on pi-flows. Covers package setup, all registration hooks, and a step-by-step walkthrough using pi-judo as the reference implementation.
+A complete guide for building packages that depend on pi-flows. Covers package setup, all registration hooks, and a step-by-step walkthrough.
 
 ---
 
@@ -256,7 +256,7 @@ Use `onRegistered` to receive the `invalidate` function — call it whenever you
 
 ### Registering Custom Agent Tools
 
-Extension tools registered via `pi.registerTool()` are **automatically discovered** and made available to any agent that lists the tool in its `tools:` frontmatter field. No additional registration step is needed — the flow engine collects all tools from `pi.getAllTools()` at session start.
+Extension tools registered via `pi.registerTool()` are **automatically discovered** by the flow engine and made available to any agent that lists the tool name in its `tools:` frontmatter field. No additional registration step is needed.
 
 ```typescript
 import { Type } from "@sinclair/typebox";
@@ -286,7 +286,7 @@ tools: read, write, my_tool
 
 The guard still enforces per-agent whitelisting — only tools declared in the agent's `tools:` frontmatter are allowed through. Auto-discovery just makes them **available** to be allowed.
 
-> **Note:** The `flow:register-tool` event is deprecated. Tools registered via `pi.registerTool()` are automatically available to subagent sessions. The event still works for backward compatibility but is no longer needed.
+> **Note:** The `flow:register-tool` event is deprecated but still functional. Tools registered via `pi.registerTool()` are automatically available to subagent sessions. Use `pi.registerTool()` exclusively in new packages.
 
 ### Listening to Flow Completion
 
@@ -309,54 +309,54 @@ pi.events?.on("flow:complete", (data: unknown) => {
 
 ---
 
-## Complete Example: pi-judo
+## Complete Example: Domain Package
 
-pi-judo is the canonical reference implementation. It uses every registration hook.
+This example shows a domain package that uses every registration hook. Replace the domain-specific parts with your own.
 
 ### Package layout
 
 ```
-pi-judo/
+my-domain-pkg/
 ├── package.json
 ├── extensions/
-│   └── judospec/
+│   └── my-domain/
 │       ├── index.ts          # activate()
 │       ├── footer.ts         # Footer segment helpers
-│       ├── guards.ts         # Model file protection guard
+│       ├── guards.ts         # File protection guard
 │       ├── cards/            # Custom card metric renderers
 │       │   ├── model-card.ts
 │       │   ├── developer-card.ts
 │       │   └── ...
 │       ├── tools/
-│       │   └── model-cli.ts  # Custom model_cli tool
+│       │   └── domain-cli.ts # Custom domain tool
 │       └── ...
-├── agents/                   # Judo-specific agents
-├── flows/                    # Judo flows (registered as /judo:* commands)
-└── skills/                   # Judo skill documentation
+├── agents/                   # Domain-specific agents
+├── flows/                    # Domain flows (registered as /my-domain:* commands)
+└── skills/                   # Domain skill documentation
 ```
 
 ### activate function walkthrough
 
 ```typescript
-// extensions/judospec/index.ts
+// extensions/my-domain/index.ts
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { globSync, existsSync } from "node:fs";
 import { ModelCard } from "./cards/model-card.js";
-import { createModelProtectionGuard } from "./guards.js";
-import { createModelCliTool } from "./tools/model-cli.js";
+import { createProtectionGuard } from "./guards.js";
+import { createDomainCliTool } from "./tools/domain-cli.js";
 import { setupFooter } from "./footer.js";
 
 export default function activate(pi: ExtensionAPI) {
   const cwd = process.cwd();
   const __filename = fileURLToPath(import.meta.url);
-  const judoPkgRoot = join(dirname(__filename), "..", "..");
+  const pkgRoot = join(dirname(__filename), "..", "..");
 
   // 1. Register content directories
-  pi.events?.emit("flow:register-agents-dir", { dir: join(judoPkgRoot, "agents") });
-  pi.events?.emit("flow:register-flows-dir", { dir: join(judoPkgRoot, "flows") });
-  pi.events?.emit("flow:register-skills-dir", { dir: join(judoPkgRoot, "skills") });
+  pi.events?.emit("flow:register-agents-dir", { dir: join(pkgRoot, "agents") });
+  pi.events?.emit("flow:register-flows-dir", { dir: join(pkgRoot, "flows") });
+  pi.events?.emit("flow:register-skills-dir", { dir: join(pkgRoot, "skills") });
 
   // 2. Register custom card metric renderers
   pi.events?.emit("flow:register-card", { name: "model",      factory: () => new ModelCard() });
@@ -366,54 +366,54 @@ export default function activate(pi: ExtensionAPI) {
 
   // 3. Register workflow pipeline for breadcrumb
   pi.events?.emit("flow:register-workflow", {
-    id: "sdd",
+    id: "my-pipeline",
     stages: [
-      { name: "research", flows: ["judo:research-all"] },
-      { name: "apply",    flows: ["judo:apply"] },
-      { name: "verify",   flows: ["judo:verify"] },
+      { name: "research", flows: ["my-domain:research"] },
+      { name: "apply",    flows: ["my-domain:apply"] },
+      { name: "verify",   flows: ["my-domain:verify"] },
     ],
   });
 
   // 4. Register prerequisite gates
-  const models = globSync(join(cwd, "model", "*.model"));
-  const judoEnabled = models.length > 0;
+  const projectFiles = globSync(join(cwd, "config", "*.config"));
+  const domainEnabled = projectFiles.length > 0;
 
   pi.events?.emit("flow:register-gate", {
-    name: "judo-project",
-    check: () => judoEnabled,
-    flows: ["judo:*"],
-    message: "No JUDO model files found. JUDO flows require a JUDO project.",
+    name: "my-domain-project",
+    check: () => domainEnabled,
+    flows: ["my-domain:*"],
+    message: "No config files found. Domain flows require a configured project.",
   });
 
   pi.events?.emit("flow:register-gate", {
-    name: "judo-research",
-    check: () => existsSync(join(cwd, "judospec", "research")),
-    flows: ["judo:apply"],
-    message: "No research directory found. Run /judo:research-all first.",
+    name: "my-domain-research",
+    check: () => existsSync(join(cwd, "research")),
+    flows: ["my-domain:apply"],
+    message: "No research directory found. Run /my-domain:research first.",
   });
 
-  // 5. Register guard and custom tool (only for JUDO projects)
-  if (judoEnabled) {
-    // Guard: blocks direct .model file access in agent subprocesses
+  // 5. Register guard and custom tool (only when domain is active)
+  if (domainEnabled) {
+    // Guard: blocks direct config file access in agent subprocesses
     pi.events?.emit("flow:register-guard-extension", {
       factory: (piApi: ExtensionAPI) => {
-        piApi.on("tool_call", createModelProtectionGuard());
+        piApi.on("tool_call", createProtectionGuard());
       },
     });
 
-    // Custom tool: auto-discovered by flow engine, available to agents that declare "model_cli" in tools:
-    const modelCliTool = createModelCliTool(cwd);
-    pi.registerTool(modelCliTool);
+    // Custom tool: register on pi — automatically available to flow agents
+    const domainCliTool = createDomainCliTool(cwd);
+    pi.registerTool(domainCliTool);
   }
 
   // 6. Register footer segments
-  setupFooter(pi, serverManager, getMutationCount);
+  setupFooter(pi, serverManager, getMetrics);
 
   // 7. React to flow completion
   pi.events?.on("flow:complete", (data: unknown) => {
     const result = data as any;
-    if (result.flowName === "judo:apply" && result.status === "success") {
-      // Refresh registry after apply
+    if (result.flowName === "my-domain:apply" && result.status === "success") {
+      // Refresh state after apply
       registry.reload();
     }
   });
@@ -436,7 +436,7 @@ export default function activate(pi: ExtensionAPI) {
 | Prerequisite check | `flow:register-gate` | `{ name, check, flows, message }` |
 | Sandbox guard | `flow:register-guard-extension` | `{ factory }` |
 | Footer segment | `flow:register-footer-segment` | `{ name, render, onRegistered? }` |
-| Agent tool | `pi.registerTool()` (auto-discovered) | Tool definition |
+| Agent tool | `pi.registerTool()` | Tool definition (auto-discovered by flow engine) |
 | Flow lifecycle | `flow:complete` (listen) | `FlowResult` |
 | Tool observation | `flow:subagent-tool-call` (listen) | `{ agentName, toolName, input }` |
 

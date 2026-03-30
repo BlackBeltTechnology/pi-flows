@@ -118,7 +118,10 @@ function deleteFlow(
     if (existsSync(jsonPath)) rmSync(jsonPath);
   } catch { /* ignore */ }
 
-  // Re-discover to unregister the deleted flow's command
+  // Tombstone the deleted flow's command so it disappears from autocomplete
+  pi.registerCommand(flowName, { handler: async () => {} });
+
+  // Re-discover to update flow state
   pi.events.emit("flow:rediscover", {});
 
   ctx.ui.notify(`Flow "${flowName}" deleted.`, "info");

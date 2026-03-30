@@ -19,6 +19,7 @@ import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS
 import { join } from "node:path";
 import { getModelRole } from "../provider-register.js";
 import { setFlowWidget } from "../shared/flow-widget.js";
+import { unregisterSummaryInputHandler } from "../flow-engine/flow-tui.js";
 
 // Module-scoped flag: true when a flow is running from staging (non-saved "Run" path)
 let runningFromStaging = false;
@@ -150,14 +151,12 @@ Rules:
 - slug: max 50 chars, lowercase, kebab-case, no special chars
 - desc: max 120 chars, imperative mood ("Add X", "Fix Y", "Implement Z")`;
 
-/** Get architect tool definitions and spawn context from flow-engine via events */
-function getArchitectSpawnContext(pi: ExtensionAPI): { tools: any[]; authStorage: any; modelRegistry: any; extraGuardFactories: any[] } {
-  const toolsQuery: any = {};
-  pi.events.emit("flow:get-architect-tools", toolsQuery);
+/** Get spawn context (tools, auth, model registry) from flow-engine via events */
+function getSpawnContext(pi: ExtensionAPI): { tools: any[]; authStorage: any; modelRegistry: any; extraGuardFactories: any[] } {
   const spawnCtx: any = {};
   pi.events.emit("flow:get-spawn-context", spawnCtx);
   return {
-    tools: toolsQuery.tools ?? [],
+    tools: spawnCtx.extensionTools ?? [],
     authStorage: spawnCtx.authStorage,
     modelRegistry: spawnCtx.modelRegistry,
     extraGuardFactories: spawnCtx.extraGuardFactories ?? [],
@@ -300,97 +299,98 @@ async function handleEditFlow(
     );
   }
 
-  const unregisterInput = ctx.ui.onTerminalInput(async (data: string) => {
+  const unregisterInput = ctx.ui.onTerminalInput((data: string) => {
     // Ctrl+X: abort the architect agent
     if (data === KEY_CTRL_X && architectAbort) {
       architectAbort.abort();
-      return { consume: true } as const;
+      return { consume: true };
     }
 
-    // Handle navigate mode keyboard input (when selector is visible)
+    // Handle navigate mode keyboard input (when flow selector is visible).
+    // Must be a synchronous handler — TerminalInputHandler returns { consume } | undefined,
+    // NOT a Promise. An async handler wraps the return in a Promise, so { consume: true }
+    // is lost and keys pass through to the editor (e.g., up arrow shows history).
+    // Navigate mode consumes ALL input to prevent keys reaching the editor.
     if (architectWidget && architectWidget.getPreviewSubMode?.() === "navigate" && !overlayOpen) {
       if (data === KEY_UP) {
         const idx = architectWidget.getSelectedFlowIndex();
         if (idx > 0) architectWidget.setSelectedFlowIndex(idx - 1);
-        return { consume: true } as const;
-      }
-      if (data === KEY_DOWN) {
+      } else if (data === KEY_DOWN) {
         const idx = architectWidget.getSelectedFlowIndex();
         architectWidget.setSelectedFlowIndex(idx + 1);
-        return { consume: true } as const;
-      }
-      if (data === KEY_BACKSPACE_1 || data === KEY_BACKSPACE_2) {
+      } else if (data === KEY_BACKSPACE_1 || data === KEY_BACKSPACE_2) {
         architectWidget.setPreviewSubMode("preview");
-        return { consume: true } as const;
-      }
-      if (data === KEY_ENTER) {
+      } else if (data === KEY_ENTER) {
         const flows = architectWidget.getFlowContents();
         const idx = architectWidget.getSelectedFlowIndex();
         const selected = flows[idx];
         if (selected) {
-          overlayOpen = true;
-          try {
-            await openFlowDetailOverlay(selected.content);
-          } catch { /* overlay not available */ }
-          finally { overlayOpen = false; }
-          // Stay in navigate mode after closing detail overlay
+          // Fire-and-forget: overlay is async but consume must be synchronous
+          (async () => {
+            overlayOpen = true;
+            try { await openFlowDetailOverlay(selected.content); }
+            catch { /* overlay not available */ }
+            finally { overlayOpen = false; }
+          })();
         }
-        return { consume: true } as const;
       }
+      return { consume: true };
     }
 
-    // Ctrl+O: open detail overlay (tool calls) or flow preview overlay
+    // Ctrl+O: open detail overlay (tool calls) or flow preview overlay.
+    // This returns { consume: true } synchronously, then does async work.
     if (data === KEY_CTRL_O && architectWidget && !overlayOpen) {
-      overlayOpen = true;
-      try {
-        if (architectWidget.hasFlowContent()) {
-          const flows = architectWidget.getFlowContents();
-          if (flows.length === 1) {
-            // Single flow — open detail overlay directly
-            await openFlowDetailOverlay(flows[0].content);
-          } else if (flows.length > 1) {
-            // Multiple flows — switch to navigate mode (selector)
-            architectWidget.setPreviewSubMode("navigate");
-            overlayOpen = false;
-            return { consume: true } as const;
-          }
-        } else {
-          // No flow yet — show architect detail (tool calls, messages)
-          const entries = architectWidget.getEventLog?.() || [];
-          if (entries.length > 0) {
-            const { createAgentDetailOverlay } = await import("../flow-dashboard/agent-detail-overlay.js");
-            await ctx.ui.custom(
-              (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
-                return createAgentDetailOverlay({
-                  agentName: "flow-architect",
-                  status: "running",
-                  summary: undefined,
-                  entries,
-                  theme,
-                  tui: tuiInstance,
-                  done,
-                });
-              },
-              {
-                overlay: true,
-                overlayOptions: {
-                  width: "90%",
-                  maxHeight: "85%",
-                  anchor: "center",
+      (async () => {
+        overlayOpen = true;
+        try {
+          if (architectWidget.hasFlowContent()) {
+            const flows = architectWidget.getFlowContents();
+            if (flows.length === 1) {
+              await openFlowDetailOverlay(flows[0].content);
+            } else if (flows.length > 1) {
+              architectWidget.setPreviewSubMode("navigate");
+              overlayOpen = false;
+              return;
+            }
+          } else {
+            const entries = architectWidget.getEventLog?.() || [];
+            if (entries.length > 0) {
+              const { createAgentDetailOverlay } = await import("../flow-dashboard/agent-detail-overlay.js");
+              await ctx.ui.custom(
+                (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+                  return createAgentDetailOverlay({
+                    agentName: "flow-architect",
+                    status: "running",
+                    summary: undefined,
+                    entries,
+                    theme,
+                    tui: tuiInstance,
+                    done,
+                  });
                 },
-              },
-            );
+                {
+                  overlay: true,
+                  overlayOptions: {
+                    width: "90%",
+                    maxHeight: "85%",
+                    anchor: "center",
+                  },
+                },
+              );
+            }
           }
-        }
-      } catch { /* overlay not available */ }
-      finally { overlayOpen = false; }
-      return { consume: true } as const;
+        } catch { /* overlay not available */ }
+        finally { overlayOpen = false; }
+      })();
+      return { consume: true };
     }
     return undefined;
   });
 
   let widgetTuiRef: any = null;
   const mountWidget = async () => {
+    // Clear stale summary input handler so it doesn't steal keybinds from architect
+    unregisterSummaryInputHandler();
     try {
       const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
       architectWidget = createArchitectWidget({ resolveAgentType });
@@ -442,7 +442,7 @@ async function handleEditFlow(
     );
 
     architectAbort = new AbortController();
-    const spawnCtx = getArchitectSpawnContext(pi);
+    const spawnCtx = getSpawnContext(pi);
     const result = await spawnAgent({
       agent: architectConfig,
       task: currentTask,
@@ -730,94 +730,91 @@ async function handleNewFlow(
     );
   }
 
-  const unregisterInput2 = ctx.ui.onTerminalInput(async (data: string) => {
+  const unregisterInput2 = ctx.ui.onTerminalInput((data: string) => {
     if (data === KEY_CTRL_X_2 && architectAbort2) {
       architectAbort2.abort();
-      return { consume: true } as const;
+      return { consume: true };
     }
 
-    // Handle navigate mode keyboard input (when selector is visible)
+    // Handle navigate mode keyboard input (when flow selector is visible).
+    // Must be synchronous — see comment in handleEditFlow's handler above.
     if (architectWidget && architectWidget.getPreviewSubMode?.() === "navigate" && !overlayOpen2) {
       if (data === KEY_UP_2) {
         const idx = architectWidget.getSelectedFlowIndex();
         if (idx > 0) architectWidget.setSelectedFlowIndex(idx - 1);
-        return { consume: true } as const;
-      }
-      if (data === KEY_DOWN_2) {
+      } else if (data === KEY_DOWN_2) {
         const idx = architectWidget.getSelectedFlowIndex();
         architectWidget.setSelectedFlowIndex(idx + 1);
-        return { consume: true } as const;
-      }
-      if (data === KEY_BACKSPACE_1_2 || data === KEY_BACKSPACE_2_2) {
+      } else if (data === KEY_BACKSPACE_1_2 || data === KEY_BACKSPACE_2_2) {
         architectWidget.setPreviewSubMode("preview");
-        return { consume: true } as const;
-      }
-      if (data === KEY_ENTER_2) {
+      } else if (data === KEY_ENTER_2) {
         const flows = architectWidget.getFlowContents();
         const idx = architectWidget.getSelectedFlowIndex();
         const selected = flows[idx];
         if (selected) {
-          overlayOpen2 = true;
-          try {
-            await openFlowDetailOverlay2(selected.content);
-          } catch { /* overlay not available */ }
-          finally { overlayOpen2 = false; }
-          // Stay in navigate mode after closing detail overlay
+          (async () => {
+            overlayOpen2 = true;
+            try { await openFlowDetailOverlay2(selected.content); }
+            catch { /* overlay not available */ }
+            finally { overlayOpen2 = false; }
+          })();
         }
-        return { consume: true } as const;
       }
+      return { consume: true };
     }
 
     if (data === KEY_CTRL_O_2 && architectWidget && !overlayOpen2) {
-      overlayOpen2 = true;
-      try {
-        if (architectWidget.hasFlowContent()) {
-          const flows = architectWidget.getFlowContents();
-          if (flows.length === 1) {
-            // Single flow — open detail overlay directly
-            await openFlowDetailOverlay2(flows[0].content);
-          } else if (flows.length > 1) {
-            // Multiple flows — switch to navigate mode (selector)
-            architectWidget.setPreviewSubMode("navigate");
-            overlayOpen2 = false;
-            return { consume: true } as const;
-          }
-        } else {
-          const entries = architectWidget.getEventLog?.() || [];
-          if (entries.length > 0) {
-            const { createAgentDetailOverlay } = await import("../flow-dashboard/agent-detail-overlay.js");
-            await ctx.ui.custom(
-              (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
-                return createAgentDetailOverlay({
-                  agentName: "flow-architect",
-                  status: "running",
-                  summary: undefined,
-                  entries,
-                  theme,
-                  tui: tuiInstance,
-                  done,
-                });
-              },
-              {
-                overlay: true,
-                overlayOptions: {
-                  width: "90%",
-                  maxHeight: "85%",
-                  anchor: "center",
+      (async () => {
+        overlayOpen2 = true;
+        try {
+          if (architectWidget.hasFlowContent()) {
+            const flows = architectWidget.getFlowContents();
+            if (flows.length === 1) {
+              await openFlowDetailOverlay2(flows[0].content);
+            } else if (flows.length > 1) {
+              architectWidget.setPreviewSubMode("navigate");
+              overlayOpen2 = false;
+              return;
+            }
+          } else {
+            const entries = architectWidget.getEventLog?.() || [];
+            if (entries.length > 0) {
+              const { createAgentDetailOverlay } = await import("../flow-dashboard/agent-detail-overlay.js");
+              await ctx.ui.custom(
+                (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+                  return createAgentDetailOverlay({
+                    agentName: "flow-architect",
+                    status: "running",
+                    summary: undefined,
+                    entries,
+                    theme,
+                    tui: tuiInstance,
+                    done,
+                  });
                 },
-              },
-            );
+                {
+                  overlay: true,
+                  overlayOptions: {
+                    width: "90%",
+                    maxHeight: "85%",
+                    anchor: "center",
+                  },
+                },
+              );
+            }
           }
-        }
-      } catch { /* overlay not available */ }
-      finally { overlayOpen2 = false; }
-      return { consume: true } as const;
+        } catch { /* overlay not available */ }
+        finally { overlayOpen2 = false; }
+      })();
+      return { consume: true };
     }
     return undefined;
   });
 
   let widgetTuiRef2: any = null;
   const mountWidget = async () => {
+    // Clear stale summary input handler so it doesn't steal keybinds from architect
+    unregisterSummaryInputHandler();
     try {
       const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
       architectWidget = createArchitectWidget({ resolveAgentType: resolveAgentType2 });
@@ -870,7 +867,7 @@ async function handleNewFlow(
     );
 
     architectAbort2 = new AbortController();
-    const spawnCtx2 = getArchitectSpawnContext(pi);
+    const spawnCtx2 = getSpawnContext(pi);
     const result = await spawnAgent({
       agent: architectConfig,
       task,
@@ -956,10 +953,10 @@ async function handleNewFlow(
     // Signal widget that we're ready for user input (stops spinner)
     architectWidget?.setReady?.();
 
-    // Present choice to user — flow details are visible in the widget above
+    // Step 1: Save decision
     choice = await ctx.ui.select(
-      "What would you like to do?",
-      ["Run", "Save & Run", "Replan", "Cancel"],
+      "Save this flow?",
+      ["Save", "Don't save", "Replan", "Cancel"],
     ) || "Cancel";
 
     if (choice === "Replan") {
@@ -982,7 +979,7 @@ async function handleNewFlow(
       continue;
     }
 
-    break; // Run, Save & Run, or Cancel
+    break; // Save, Don't save, or Cancel
   }
 
   // Dispose architect widget and unregister input handler
@@ -1005,11 +1002,11 @@ async function handleNewFlow(
     return;
   }
 
-  // Step 5: Handle "Save & Run" — promote staging to final locations
-  // safeName is hoisted so Step 6 can build the discovery-derived name "custom:<safeName>"
+  // Step 5: Handle save decision
   let safeName = "";
+  let didSave = false;
 
-  if (choice === "Save & Run") {
+  if (choice === "Save") {
     const defaultName = slugify(desc);
     const flowName = await ctx.ui.input(
       "Name this flow (available as /custom:<name>):",
@@ -1028,10 +1025,25 @@ async function handleNewFlow(
         `Flow saved as "${safeName}" — available as /custom:${safeName}`,
         "info",
       );
+      didSave = true;
     } else {
-      // User cancelled naming — fall back to "Run" behavior (no persist, cleanup after)
-      choice = "Run";
+      // User cancelled naming — treat as "Don't save"
+      choice = "Don't save";
     }
+  }
+
+  // Step 2: Run decision
+  const runChoice = await ctx.ui.select(
+    "Run now?",
+    ["Yes", "No"],
+  ) || "No";
+
+  if (runChoice === "No") {
+    // No run — clean up staging if we didn't save
+    if (!didSave) {
+      wipeStagingDir(projectRoot);
+    }
+    return;
   }
 
   // Step 6: Execute the designed flow via the flow manager (proper lifecycle)
@@ -1047,7 +1059,7 @@ async function handleNewFlow(
 
     let runFlowName: string;
 
-    if (choice === "Save & Run") {
+    if (didSave) {
       // After promotion the flow lives at custom/<safeName>.yaml.
       // Discovery derives the name as "custom:<safeName>" — that is the Map key.
       // flowConfig.name is the frontmatter name and does NOT match the Map key,
@@ -1055,7 +1067,7 @@ async function handleNewFlow(
       runFlowName = `custom:${safeName}`;
       runningFromStaging = false;
     } else {
-      // "Run" path: flow is still in the flat staging dir.
+      // "Don't save" + run: flow is still in the flat staging dir.
       // Register staging flows dir temporarily so the flow can be discovered.
       pi.events.emit("flow:register-flows-dir", { dir: join(projectRoot, STAGING_FLOWS) });
       // Re-discover again to pick up the staged flow

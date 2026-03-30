@@ -36,21 +36,7 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     .replace(/\$\{\{result\.([\w-]+)\.([\w]+)\}\}/g, (_, id, field) => ctx.results[id]?.[field] ?? "")
     .replace(/\$\{\{result\.([\w-]+)\}\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
     .replace(/\$\{\{loop\.([\w-]+)\.iteration\}\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 0))
-    .replace(/\$\{\{loop\.([\w-]+)\.max\}\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0))
-    // Deprecated fallback: {...}
-    .replace(/\{task\}/g, ctx.task)
-    .replace(/\{input\.([\w-]+)\}/g, (_, name) => ctx.inputs[name] ?? "")
-    .replace(/\{fork\.(\w[\w-]*)\.answer\}/g, (_, id) => ctx.forks[id]?.answer ?? "")
-    .replace(/\{fork\.(\w[\w-]*)\.notes\}/g, (_, id) => ctx.forks[id]?.notes ?? "")
-    .replace(/\{result\.([\w-]+)\.status\}/g, (_, id) => ctx.results[id]?.status ?? "")
-    .replace(/\{result\.([\w-]+)\.summary\}/g, (_, id) => ctx.results[id]?.summary ?? "")
-    .replace(/\{result\.([\w-]+)\.artifacts\}/g, (_, id) => ctx.results[id]?.artifacts ?? "")
-    .replace(/\{result\.([\w-]+)\.files\}/g, (_, id) => ctx.results[id]?.files ?? "")
-    // Catch-all for typed outputs: {result.STEP.anyField}
-    .replace(/\{result\.([\w-]+)\.([\w]+)\}/g, (_, id, field) => ctx.results[id]?.[field] ?? "")
-    .replace(/\{result\.([\w-]+)\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
-    .replace(/\{loop\.([\w-]+)\.iteration\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 0))
-    .replace(/\{loop\.([\w-]+)\.max\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0));
+    .replace(/\$\{\{loop\.([\w-]+)\.max\}\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0));
 }
 
 // Tool factory map: agent tool name -> SDK tool factory
@@ -331,6 +317,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Wire event capture
   let finishParams: any = undefined;
   let finishToolCallId: string | undefined;
+  let finishValidationRetries = 0;
   let lastAssistantText = "";
   let lastApiError: string | undefined;
   let accumulatedTokens = { input: 0, output: 0 };
@@ -366,9 +353,26 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
         }
         options.onToolResult?.(event.toolName || last?.toolName || "", output, !!event.isError);
 
-        // Abort session immediately after finish tool completes — no more LLM turns needed
+        // Handle finish tool completion
         if (finishToolCallId && event.toolCallId === finishToolCallId) {
-          session.abort();
+          if (event.isError) {
+            // Finish validation failed — clear state so agent can retry
+            finishParams = undefined;
+            finishToolCallId = undefined;
+
+            // Queue a followUp to force the agent to retry with valid args
+            if (finishValidationRetries < MAX_FINISH_RETRIES) {
+              finishValidationRetries++;
+              session.followUp(
+                "Your `finish` tool call failed schema validation. " +
+                "Review the validation error above and call `finish` again with all required fields. " +
+                "Make sure to include every required parameter."
+              );
+            }
+          } else {
+            // Abort session immediately after finish tool completes — no more LLM turns needed
+            session.abort();
+          }
         }
         break;
       }

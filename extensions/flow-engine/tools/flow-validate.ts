@@ -1,15 +1,15 @@
 // ---------------------------------------------------------------------------
-// Flow Validate Tool
+// Flow Validation
 //
-// Validates flow YAML content without writing to disk. Returns LSP-style
-// diagnostics: { line, severity, message, suggestion? }
+// Validates flow YAML content and returns LSP-style diagnostics:
+// { line, severity, message, suggestion? }
 //
 // Uses parseFlowYamlString() as the parser. A lightweight line index provides
 // line-number attribution for diagnostics without duplicating parsing logic.
+//
+// Used internally by flow-write.ts. Not registered as a standalone tool.
 // ---------------------------------------------------------------------------
 
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type {
   AgentConfig,
   FlowConfig,
@@ -305,6 +305,15 @@ export function validateFlowContent(
               suggestion: "Ensure the agent exists or will be created before the flow runs",
             });
           }
+          // allowCustom requires agent: field for custom answer routing
+          if (s.allowCustom && !s.agent) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "allowCustom"),
+              severity: "error",
+              message: `Fork "${s.id}" has allowCustom: true but no agent: field. An agent is required to route custom freetext answers to branches.`,
+              suggestion: "Add agent: <agent-name> to this fork step",
+            });
+          }
           break;
         }
       }
@@ -586,26 +595,7 @@ export function validateFlowContent(
     }
   }
 
-  // 5d. Deprecation warnings for allowCustom / decisionAgent
-  for (let i = 0; i < lines.length; i++) {
-    const trimmedLine = lines[i].trim();
-    if (trimmedLine === "allowCustom: true") {
-      diagnostics.push({
-        line: i + 1,
-        severity: "warning",
-        message: "allowCustom is deprecated — use allowNotes instead. Custom answers are no longer delegated to a decision agent.",
-        suggestion: "Replace allowCustom: true with allowNotes: true",
-      });
-    }
-    if (trimmedLine.startsWith("decisionAgent:")) {
-      diagnostics.push({
-        line: i + 1,
-        severity: "warning",
-        message: "decisionAgent is deprecated — use the agent: field on fork steps for autonomous decisions instead.",
-        suggestion: "Replace decisionAgent with agent: <agent-name> and task: <context>",
-      });
-    }
-  }
+  // 5d. (Reserved — former allowNotes/decisionAgent deprecation checks removed)
 
   // ---- Result -------------------------------------------------------------
 
@@ -658,25 +648,3 @@ function detectCycle(adjacency: Map<string, string[]>): string[] | null {
   return null;
 }
 
-// ---- Tool registration ----------------------------------------------------
-
-export function registerFlowValidateTool(
-  pi: ExtensionAPI,
-  getDiscoveredAgents: () => Map<string, AgentConfig>,
-): void {
-  pi.registerTool({
-    name: "flow_validate",
-    description:
-      "Validate flow YAML content without writing to disk. Returns LSP-style diagnostics with line numbers, severity, messages, and suggestions.",
-    parameters: Type.Object({
-      content: Type.String({ description: "The flow YAML content to validate" }),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const result = validateFlowContent(params.content, getDiscoveredAgents);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-        details: {},
-      };
-    },
-  });
-}

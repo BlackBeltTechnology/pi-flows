@@ -239,8 +239,8 @@ export function activate(pi: ExtensionAPI) {
       spinnerTimer = null;
     }
 
-    const allComplete = stats.perAgent.every(a => a.status === "complete");
-    const statusIcon = allComplete ? "✓" : "⚠";
+    const hasError = stats.perAgent.some(a => a.status === "error");
+    const statusIcon = hasError ? "⚠" : "✓";
     const agentNames = Object.keys(fr.results);
 
     // Set summary state (accessible via direct import from flow-engine)
@@ -367,10 +367,6 @@ export function activate(pi: ExtensionAPI) {
     lastCardsRef = data?.cards || null;
   });
 
-  // Legacy event name support
-  pi.events.on("flow:set-summary-tool-history", (data: any) => {
-    lastEventLogRef = data?.toolHistory || null;
-  });
 }
 
 // Module-scoped refs for tool history and preserved cards
