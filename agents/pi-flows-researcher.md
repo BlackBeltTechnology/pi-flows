@@ -37,7 +37,7 @@ The pi-flows package is at `pi-packages/pi-flows/`. Key directories:
 - `extensions/flow-dashboard/` — Dashboard UI components
 - `extensions/shared/` — Shared UI utilities
 - `agents/` — Built-in agent definitions (`.md` files)
-- `flows/` — Built-in flow definitions (`.flow.md` files)
+- `flows/` — Built-in flow definitions (`.yaml` files)
 - `features.md` — Feature documentation
 
 Use `glob` to discover files, `grep` to find relevant patterns, and `read` to examine source code.

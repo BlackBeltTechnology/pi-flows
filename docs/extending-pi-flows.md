@@ -1,677 +1,489 @@
 # Extending pi-flows
 
-Guide for building a pi package that depends on pi-flows. This covers package setup, resource registration, custom dashboard cards, workflows, gates, footer segments, and event handling.
+A complete guide for building packages that depend on pi-flows. Covers package setup, all registration hooks, and a step-by-step walkthrough using pi-judo as the reference implementation.
 
-Throughout this guide, [pi-judo](https://github.com/BlackBeltTechnology/pi-judo) is referenced as a real-world example of a package built on top of pi-flows.
+---
 
-> **Architecture note:** pi-flows uses a single extension entry point (`extensions/index.ts`) that loads all internal sub-extensions in one jiti module graph. This means all internal modules share state through normal imports. External packages (like yours) communicate with pi-flows exclusively through `pi.events` — you never need to import pi-flows modules directly at runtime (only `import type` for TypeScript types).
+## Overview
 
-## Table of Contents
+pi-flows exposes an event-based extension API. You register content (agents, flows, cards, tools, gates, guards, footer segments) by emitting `flow:*` events from your package's `activate` function. This keeps packages loosely coupled — pi-flows does not need to import your package, and your package only needs pi-flows' events interface.
 
-- [Package Setup](#package-setup)
-- [Registration Pattern](#registration-pattern)
-- [Registering Agents, Flows, and Skills](#registering-agents-flows-and-skills)
-- [Custom Card Renderers](#custom-card-renderers)
-- [Workflow Definitions](#workflow-definitions)
-- [Gates (Prerequisite Checks)](#gates-prerequisite-checks)
-- [Guard Extensions](#guard-extensions)
-- [Custom Agent Tools](#custom-agent-tools)
-- [Session Context](#session-context)
-- [Footer Segments](#footer-segments)
-- [Listening to Flow Events](#listening-to-flow-events)
-- [Querying Discovery State](#querying-discovery-state)
-- [Complete Example](#complete-example)
+The full events reference is in [events-api.md](events-api.md).
 
 ---
 
 ## Package Setup
 
-### package.json
+### 1. Create the package structure
 
-Your package needs:
-1. A `pi` manifest declaring your extensions directory
-2. pi-flows as a dependency
-3. pi core packages as peer dependencies
+```
+my-package/
+├── package.json
+├── extensions/
+│   └── my-extension/
+│       └── index.ts          # activate() entry point
+├── agents/                   # Agent .md files
+│   └── my-agent.md
+├── flows/                    # Flow .yaml files
+│   └── my-flow.yaml
+└── skills/                   # Optional: skill directories
+    └── my-skill/
+        ├── SKILL.md
+        └── reference.md
+```
+
+### 2. Configure package.json
 
 ```json
 {
-  "name": "my-domain-package",
+  "name": "my-package",
   "version": "0.1.0",
-  "description": "Domain-specific flows for pi",
   "keywords": ["pi-package"],
   "pi": {
-    "extensions": ["./extensions/my-domain"]
-  },
-  "dependencies": {
-    "pi-flows": "git+ssh://git@github.com:BlackBeltTechnology/pi-flows.git"
+    "extensions": ["./extensions"]
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
+    "@mariozechner/pi-ai": "*",
     "@sinclair/typebox": "*"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
+    "@mariozechner/pi-ai": "*",
     "@sinclair/typebox": "*"
   }
 }
 ```
 
-> **pi-judo reference:** See [pi-judo/package.json](https://github.com/BlackBeltTechnology/pi-judo/blob/main/package.json) for a working example.
+> **Peer dependencies only.** Pi-flows types are consumed at runtime through the shared module instance. You should not add `pi-flows` as a direct dependency — use the event interface and import types directly from the source path when needed.
 
-### Directory Structure
-
-```
-my-domain-package/
-├── package.json
-├── extensions/
-│   └── my-domain/
-│       ├── index.ts          # Extension entry point
-│       └── cards/            # Custom card renderers
-│           └── my-card.ts
-├── agents/                   # Agent .md files
-│   ├── my-researcher.md
-│   └── my-developer.md
-├── flows/                    # Flow .flow.md files
-│   └── my-pipeline.flow.md
-└── skills/                   # Skill directories
-    └── my-docs/
-        └── SKILL.md
-```
-
----
-
-## Registration Pattern
-
-All registration happens in your extension's `activate(pi)` function by emitting events. pi-flows listens for these events and integrates your resources.
-
-**Key principle:** Use `import.meta.url` to resolve paths relative to your package root. This ensures correct paths regardless of where the package is installed.
+### 3. Write the activate function
 
 ```typescript
+// extensions/my-extension/index.ts
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export default function activate(pi: ExtensionAPI) {
-  // Resolve package root from this file's location
-  const __filename = fileURLToPath(import.meta.url);
-  const pkgRoot = join(dirname(__filename), "..", "..");
+  const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-  // Register resources
+  // --- Register agents, flows, and skills ---
   pi.events?.emit("flow:register-agents-dir", { dir: join(pkgRoot, "agents") });
   pi.events?.emit("flow:register-flows-dir", { dir: join(pkgRoot, "flows") });
   pi.events?.emit("flow:register-skills-dir", { dir: join(pkgRoot, "skills") });
-
-  // Register dashboard cards, workflows, gates, footer segments...
 }
 ```
 
-> **pi-judo reference:** [pi-judo/extensions/judospec/index.ts](https://github.com/BlackBeltTechnology/pi-judo/blob/main/extensions/judospec/index.ts) lines 30–34 show this exact pattern.
+The `pkgRoot` calculation assumes your extension file is two directories deep inside the package root (`extensions/my-extension/index.ts` → `../../` → package root). Adjust the `"..", ".."` count to match your layout.
 
 ---
 
-## Registering Agents, Flows, and Skills
+## Registration Patterns
 
-### Agents
+### Registering Agents and Flows
 
-Place agent `.md` files in your agents directory. After registering with `flow:register-agents-dir`, they're discovered alongside pi-flows' built-in agents and any project-local agents.
+The most common pattern — add directories for pi-flows to discover:
 
-**Discovery priority** (last wins on name collision):
-1. Extra package agents (your registered directories)
-2. pi-flows package agents (`pi-flows/agents/`)
-3. Project-local agents (`.pi/flows/agents/`)
+```typescript
+pi.events?.emit("flow:register-agents-dir", { dir: join(pkgRoot, "agents") });
+pi.events?.emit("flow:register-flows-dir", { dir: join(pkgRoot, "flows") });
+```
 
-### Flows
+**Discovery priority** (later registrations win on name collision):
 
-Place flow `.flow.md` files in your flows directory. After registering with `flow:register-flows-dir`, each flow auto-registers as a slash command.
+1. Extra package agents/flows (registered via events) — in registration order
+2. pi-flows built-in agents/flows
+3. Project-local files (`.pi/flows/agents/`, `.pi/flows/flows/`) — **always wins**
 
-**Naming convention:** Prefix flow names with your package identifier to avoid collisions (e.g., `my-pkg:research`, `my-pkg:build`).
+This means users can always override your defaults by dropping a file in `.pi/flows/`.
 
-### Skills
+### Registering Skills
 
-Place skill directories inside your skills directory. After registering with `flow:register-skills-dir`, they're available to agents via the `skills:` frontmatter field and the `skill_read` tool.
+Skills provide injected documentation for agents:
 
-Each skill is a subdirectory containing a required `SKILL.md` and any number of detail files:
+```typescript
+pi.events?.emit("flow:register-skills-dir", { dir: join(pkgRoot, "skills") });
+```
+
+Each skill is a directory containing at minimum a `SKILL.md` file. Agents reference skills by directory name:
 
 ```
 skills/
-└── my-framework-docs/       # Skill name
-    ├── SKILL.md              # Overview (injected into agent prompt) + detail file list
-    ├── api-reference.md      # Detail file
-    └── examples.md           # Detail file
+└── my-backend-docs/
+    ├── SKILL.md          # Injected into agent system prompt
+    ├── api-reference.md  # Available via skill_read tool
+    └── examples.md
 ```
 
-**`SKILL.md` format:**
+`SKILL.md` must list available detail files so agents know what to request with `skill_read`:
 
 ```markdown
-# My Framework Docs
+# My Backend Docs
 
-Concise overview injected into the agent's system prompt.
+Core reference injected into every agent that uses this skill.
 
 ## Available Reference Files
 
+Read with `skill_read`:
 - `api-reference.md` — Full API reference
-- `examples.md` — Common usage patterns
+- `examples.md` — Code examples
 ```
 
-The full `SKILL.md` content is prepended to the agent's system prompt. The detail file list tells the agent what to request via `skill_read`. The `skill_read` tool validates that any requested file is listed in `SKILL.md` before serving it — files not listed cannot be read by the agent.
+### Registering Custom Card Renderers
 
-**Discovery priority for skills:**
-1. Extra registered directories (via `flow:register-skills-dir`, in registration order)
-2. pi-flows built-in skills
-
----
-
-## Custom Card Renderers
-
-The dashboard shows agent cards during flow execution. Each card can display domain-specific metrics via a custom `AgentCardRenderer`.
-
-### The AgentCardRenderer Interface
+Custom card renderers display domain-specific metrics in the flow dashboard. Each agent card can show one metric line (a short string).
 
 ```typescript
-interface AgentCardRenderer {
-  onToolCall(toolName: string, input: any): void;
-  onToolResult(toolName: string, output: any): void;
-  onComplete(result: AgentResult): void;
-  renderMetric(width: number): string;  // Single line for the dashboard card
-}
-```
+import type { AgentCardRenderer } from "pi-flows/extensions/flow-dashboard/types.js";
 
-**Lifecycle:**
-1. `onToolCall` — called when the agent invokes a tool
-2. `onToolResult` — called when a tool returns (track metrics here)
-3. `onComplete` — called when the agent finishes (final summary)
-4. `renderMetric` — called every render tick to display the metric line
-
-### Implementing a Custom Card
-
-```typescript
-import type { AgentResult } from "pi-flows/extensions/flow-engine/types.js";
-
-export class DeployCard implements AgentCardRenderer {
-  private deployCount = 0;
-  private lastTarget = "";
+export class MyCard implements AgentCardRenderer {
+  private count = 0;
 
   onToolCall(toolName: string, input: any): void {
-    // Track when the agent runs deploy commands
-    if (toolName === "bash" && input.command?.includes("deploy")) {
-      this.deployCount++;
-    }
+    if (toolName === "my_tool") this.count++;
   }
 
-  onToolResult(toolName: string, output: any): void {
-    // Extract deploy target from output
-    if (typeof output === "string" && output.includes("Deployed to")) {
-      const match = output.match(/Deployed to (\S+)/);
-      if (match) this.lastTarget = match[1];
-    }
-  }
+  onToolResult(_toolName: string, _output: any): void {}
 
-  onComplete(result: AgentResult): void {
-    // Nothing extra on completion
-  }
+  onComplete(_result: any): void {}
 
   renderMetric(width: number): string {
-    if (this.deployCount === 0) return "";
-    return `${this.deployCount} deploys → ${this.lastTarget || "pending"}`;
+    return `  calls:${this.count}`.slice(0, width);
   }
 }
-```
 
-### Registering the Card
-
-```typescript
-import { DeployCard } from "./cards/deploy-card.js";
-
+// Register:
 pi.events?.emit("flow:register-card", {
-  name: "deploy",
-  factory: () => new DeployCard(),
+  name: "my-card-type",
+  factory: () => new MyCard(),
 });
 ```
 
-Then reference it in your agent's frontmatter:
+Agents reference the renderer in their frontmatter:
 
 ```yaml
 card:
-  label: "Deploy"
-  metric: "deploy"
+  label: "My Agent"
+  metric: "my-card-type"
 ```
 
-**Built-in metric renderers:** `default` (tool call count), `files` (file modification tracking), `tests` (test result tracking).
+A new `MyCard` instance is created per agent card via `factory()`.
 
-> **pi-judo reference:** pi-judo registers 7 custom cards: `model`, `researcher`, `developer`, `writer`, `chain`, `tester`, `verifier`. See [pi-judo/extensions/judospec/cards/](https://github.com/BlackBeltTechnology/pi-judo/tree/main/extensions/judospec/cards).
+### Registering a Workflow Pipeline
 
----
+Workflows add breadcrumb navigation to the dashboard. When a flow belonging to a workflow stage runs, the breadcrumb shows the full pipeline with the active stage highlighted:
 
-## Workflow Definitions
-
-Workflows define multi-stage pipelines that appear as breadcrumb navigation in the dashboard. When a flow matching a stage's `flows` array runs, the breadcrumb highlights that stage.
-
-### WorkflowDefinition Type
-
-```typescript
-interface WorkflowDefinition {
-  id: string;                     // Unique workflow identifier
-  stages: WorkflowStage[];        // Ordered pipeline stages
-}
-
-interface WorkflowStage {
-  name: string;                   // Display name
-  flows: string[];                // Flow names that trigger this stage
-  detailFn?: (ctx: any) => string;  // Dynamic detail text
-}
 ```
-
-### Registration
+research → [apply] → verify
+```
 
 ```typescript
 pi.events?.emit("flow:register-workflow", {
   id: "my-pipeline",
   stages: [
-    { name: "research", flows: ["my-pkg:research", "my-pkg:research-all"] },
-    { name: "implement", flows: ["my-pkg:implement"] },
-    { name: "verify", flows: ["my-pkg:verify"] },
+    { name: "research", flows: ["my-pkg:research"] },
+    { name: "apply",    flows: ["my-pkg:apply"] },
+    { name: "verify",   flows: ["my-pkg:verify"] },
   ],
 });
 ```
 
-When the user runs `/my-pkg:implement`, the dashboard breadcrumb shows:
+The `flows` array lists flow names that trigger each stage (use the same names as the registered commands without the leading `/`).
 
-```
-research → [implement] → verify
-```
+### Registering Gates
 
-> **pi-judo reference:** pi-judo registers two workflows (`research-all` and `research`) at [index.ts lines 59–75](https://github.com/BlackBeltTechnology/pi-judo/blob/main/extensions/judospec/index.ts).
-
----
-
-## Gates (Prerequisite Checks)
-
-Gates block flows from running until conditions are met. Use them to enforce project structure requirements, check for dependencies, or validate configuration.
-
-### GateEntry Type
+Gates are prerequisite checks that block flows from running if conditions aren't met:
 
 ```typescript
-interface GateEntry {
-  name: string;            // Unique gate identifier
-  check: () => boolean;    // Returns true if gate passes
-  flows: string[];         // Glob patterns for flow names
-  message: string;         // User-facing message when blocked
-}
-```
+import { existsSync } from "node:fs";
 
-### Registration
+const hasConfig = existsSync(join(cwd, "my-package.config.json"));
 
-```typescript
-import { existsSync, globSync } from "node:fs";
-
-// Gate: require project files
 pi.events?.emit("flow:register-gate", {
-  name: "my-project-check",
-  check: () => {
-    try {
-      return globSync(join(cwd, "model", "*.model")).length > 0;
-    } catch {
-      return false;
-    }
-  },
-  flows: ["my-pkg:*"],
-  message: "No project files found. Run from a project root.",
-});
-
-// Gate: require research before implementation
-pi.events?.emit("flow:register-gate", {
-  name: "my-research-check",
-  check: () => existsSync(join(cwd, "research")),
-  flows: ["my-pkg:implement"],
-  message: "No research found. Run /my-pkg:research first.",
+  name: "my-package-config",
+  check: () => hasConfig,
+  flows: ["my-pkg:*"],  // applies to all my-pkg: flows
+  message: "No my-package.config.json found. Run /my-pkg:setup first.",
 });
 ```
 
-**Glob matching:** `"my-pkg:*"` matches any flow name starting with `"my-pkg:"`. Exact strings match only that flow name.
+The `check` function is called synchronously at the moment the user runs the flow command. Keep it fast (file existence, in-memory state). The `flows` array supports a trailing `*` wildcard.
 
-> **pi-judo reference:** pi-judo registers two gates — a project gate and a research gate at [index.ts lines 77–92](https://github.com/BlackBeltTechnology/pi-judo/blob/main/extensions/judospec/index.ts).
+### Registering Guard Extensions
 
----
-
-## Guard Extensions
-
-Guard extensions are `ExtensionFactory` functions applied to every agent session your package's flows dispatch. They let you enforce custom sandboxing rules — restrict tool access, block writes to sensitive paths, or add domain-specific validation — on top of the built-in guard that pi-flows already injects.
-
-Agents run as **in-process SDK sessions** (not separate subprocesses), so guards are wired directly into the session's extension runtime before the agent starts.
-
-### Registering a Guard Extension
+Guards intercept tool calls inside spawned agent subprocesses. Use them to enforce domain-specific access policies:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
 pi.events?.emit("flow:register-guard-extension", {
   factory: (piApi: ExtensionAPI) => {
-    piApi.on("tool_call", (event: any) => {
-      const toolName = event.toolName || event.name;
-      const params = event.params || event.input || {};
-
-      // Block all writes to the protected model directory
-      if ((toolName === "write" || toolName === "edit") &&
-          (params.file_path || "").startsWith("model/")) {
-        return { block: true, reason: "Direct writes to model/ are blocked. Use the model update flow instead." };
+    piApi.on("tool_call", (event: any, ctx: any, next: () => void) => {
+      if (event.name === "write" && event.params.path?.endsWith(".config")) {
+        ctx.block("Config files are read-only. Use the setup flow to modify them.");
+        return;
       }
-
-      return undefined;  // Allow the tool call
+      next();
     });
   },
 });
 ```
 
-The `factory` value is `(pi: ExtensionAPI) => void`. It can call `pi.on("tool_call", handler)` to intercept tool calls. The handler receives the event and should return `{ block: true, reason }` to block or `undefined` to allow.
+The factory is called once per spawned agent session. `piApi` is a scoped `ExtensionAPI` for that session. Guards apply to all agents spawned by pi-flows in this session — they cannot be scoped to individual agents.
 
-### Using createGuardExtension
+### Registering Footer Segments
 
-For common patterns (tool whitelists, access rules), you can use pi-flows' own guard factory directly:
-
-```typescript
-import { createGuardExtension } from "pi-flows/extensions/flow-engine/guard.js";
-
-pi.events?.emit("flow:register-guard-extension", {
-  factory: createGuardExtension({
-    accessRules: {
-      read: ["src/**", "docs/**"],
-      write: ["src/**"],
-      bash: { deny: ["curl", "wget"] },
-    },
-  }),
-});
-```
-
-See [public-api.md — Guard Extension API](public-api.md#guard-extension-api) for the full `GuardOptions` reference.
-
-> **pi-judo reference:** pi-judo registers a model protection guard via `flow:register-guard-extension` with `factory` to prevent agents from directly modifying model artifacts.
-
----
-
-## Custom Agent Tools
-
-Domain packages can expose custom tools to agents running inside flows. These tools are available to any agent that declares them in its `tools:` frontmatter field — they are not available in the main session.
-
-### Registering a Custom Tool
-
-Use the `flow:register-tool` event. The `tool` value is a pi-coding-agent `ToolDefinition` with a TypeBox parameter schema and an `execute` function:
+Footer segments appear in the status bar after pi-flows' built-in segments (provider, git branch, file stats, context usage):
 
 ```typescript
-import { Type } from "@sinclair/typebox";
-
-pi.events?.emit("flow:register-tool", {
-  tool: {
-    name: "model_cli",
-    description: "Run a model CLI command and return the output",
-    parameters: Type.Object({
-      command: Type.String({ description: "CLI command to execute" }),
-      args: Type.Optional(Type.Array(Type.String(), { description: "Additional arguments" })),
-    }),
-    execute: async ({ command, args = [] }: { command: string; args?: string[] }) => {
-      // Your implementation here
-      const result = await runModelCommand(command, args);
-      return { output: result };
-    },
-  },
-});
-```
-
-### Using the Tool in an Agent
-
-Agents opt-in to the tool by listing its name in `tools:`:
-
-```yaml
----
-name: model-modifier
-description: Modifies a Judo model using the CLI
-model: @coding
-tools: read, write, model_cli
----
-
-You are a model modifier agent. Use `model_cli` to apply changes.
-
-Your task: {task}
-```
-
-### How It Works
-
-- **Registration time:** `flow:register-tool` collects tool definitions in a module-level array.
-- **Run time:** When a flow starts, the registered tools are passed as `extraCustomTools` to `runFlow()` → `spawnAgent()`.
-- **Filtering:** `spawnAgent` filters `extraCustomTools` to only tools the agent declared in its `tools:` frontmatter. Agents without the tool name do not receive it.
-- **Scope:** Custom tools are only available in agent subprocesses — not in the main pi session.
-
-> **pi-judo reference:** pi-judo registers a `model_cli` tool via `flow:register-tool` to let model-modifier agents run CLI commands against the Judo model compiler.
-
----
-
-## Session Context
-
-When your extension dispatches agents directly (e.g., in a slash command that calls `spawnAgent()` without going through a `.flow.md` file), you need the live session's `authStorage` and `modelRegistry`. There are two ways to get them.
-
-### Option A: Capture session_start yourself
-
-```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { spawnAgent } from "pi-flows/extensions/flow-engine/execution.js";
-
-export default function activate(pi: ExtensionAPI) {
-  let authStorage: any;
-  let modelRegistry: any;
-
-  pi.on("session_start", (_event: any, ctx: any) => {
-    if (ctx.modelRegistry) {
-      modelRegistry = ctx.modelRegistry;
-      authStorage = (ctx.modelRegistry as any).authStorage;
-    }
-  });
-
-  pi.registerCommand("/my-run", async (_ctx: any) => {
-    const result = await spawnAgent({
-      agent: myAgent,
-      task: "Do the thing",
-      templateContext: { task: "Do the thing", inputs: {}, results: {}, forks: {} },
-      cwd: process.cwd(),
-      authStorage,
-      modelRegistry,
-    });
-  });
-}
-```
-
-### Option B: Query pi-flows for the captured context
-
-If pi-flows is loaded before your extension (which it is, since you depend on it), you can retrieve the already-captured context via the `flow:get-spawn-context` query event. This is simpler and automatically includes `extraGuardFactories` from all registered packages:
-
-```typescript
-pi.registerCommand("/my-run", async (_ctx: any) => {
-  const spawnCtx: any = {};
-  pi.events.emit("flow:get-spawn-context", spawnCtx);
-  const { authStorage, modelRegistry, extraGuardFactories } = spawnCtx;
-
-  const result = await spawnAgent({
-    agent: myAgent,
-    task: "Do the thing",
-    templateContext: { task: "Do the thing", inputs: {}, results: {}, forks: {} },
-    cwd: process.cwd(),
-    authStorage,
-    modelRegistry,
-    extraGuardFactories,
-  });
-});
-```
-
-See [events-api.md — flow:get-spawn-context](events-api.md#flowget-spawn-context) for the full event reference.
-
----
-
-## Footer Segments
-
-Footer segments add custom status indicators to the footer bar below the editor.
-
-### Registration
-
-```typescript
-let invalidateFn: (() => void) | null = null;
+let invalidate: (() => void) | null = null;
 
 pi.events?.emit("flow:register-footer-segment", {
   name: "my-status",
   render: () => {
-    const count = getActiveCount();
-    return `${count} active`;
+    const count = getMyCount();
+    return count > 0 ? `${count} items` : null;  // null hides the segment
   },
-  onRegistered: (invalidate: () => void) => {
-    invalidateFn = invalidate;
+  onRegistered: (fn) => { invalidate = fn; },
+});
+
+// Trigger re-render when data changes:
+onDataChange(() => invalidate?.());
+```
+
+Use `onRegistered` to receive the `invalidate` function — call it whenever your segment data changes to trigger a footer re-render.
+
+### Registering Custom Agent Tools
+
+Extension tools registered via `pi.registerTool()` are **automatically discovered** and made available to any agent that lists the tool in its `tools:` frontmatter field. No additional registration step is needed — the flow engine collects all tools from `pi.getAllTools()` at session start.
+
+```typescript
+import { Type } from "@sinclair/typebox";
+
+pi.registerTool({
+  name: "my_tool",
+  description: "Do something useful for agents.",
+  parameters: Type.Object({
+    action: Type.String({ description: "The action to perform" }),
+    target: Type.Optional(Type.String()),
+  }),
+  execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+    const result = await doSomething(params.action, params.target);
+    return {
+      content: [{ type: "text" as const, text: result }],
+      details: {},
+    };
   },
 });
 ```
 
-**Key points:**
+Agents declare it in frontmatter:
 
-- `render()` returns a plain string. Theme colors are not available inside the render function — use plain text indicators (e.g., `●`, `○`, `◐`, `✗`).
-- `onRegistered` is called with an `invalidate()` function. Call it whenever your data changes to trigger a footer re-render.
-- If you register a segment with the same `name`, it replaces the existing one.
-
-### Triggering Re-renders
-
-```typescript
-// When your state changes, call invalidate:
-someStateManager.onChange(() => invalidateFn?.());
+```yaml
+tools: read, write, my_tool
 ```
 
-> **pi-judo reference:** pi-judo registers two footer segments (`judo-mutations` and `judo-server`) in [extensions/judospec/footer.ts](https://github.com/BlackBeltTechnology/pi-judo/blob/main/extensions/judospec/footer.ts).
+The guard still enforces per-agent whitelisting — only tools declared in the agent's `tools:` frontmatter are allowed through. Auto-discovery just makes them **available** to be allowed.
 
----
+> **Note:** The `flow:register-tool` event is deprecated. Tools registered via `pi.registerTool()` are automatically available to subagent sessions. The event still works for backward compatibility but is no longer needed.
 
-## Listening to Flow Events
+### Listening to Flow Completion
 
-### flow:complete
-
-React to finished flows. Receives the full `FlowResult` with all step results.
+React to completed flows to trigger follow-up actions, sync state, or run post-processing:
 
 ```typescript
-pi.events?.on("flow:complete", (data: any) => {
-  const result = data as FlowResult;
-
-  if (!result?.results) return;
-
-  // Process step results
-  for (const [stepId, stepResult] of Object.entries(result.results)) {
-    console.log(`${stepId}: ${stepResult.status}`);
-
-    // Track file modifications
-    if (stepResult.files) {
-      for (const entry of stepResult.files.split(", ").filter(Boolean)) {
-        const match = entry.match(/^(.+?)\s+\((created|modified|read)\)$/);
-        if (match) {
-          console.log(`  File: ${match[1]} (${match[2]})`);
-        }
-      }
+pi.events?.on("flow:complete", (data: unknown) => {
+  const result = data as any; // FlowResult
+  if (result.flowName === "my-pkg:apply" && result.status === "success") {
+    // Flow completed successfully — trigger downstream work
+    const developerSummary = result.results["developer"]?.summary;
+    if (developerSummary) {
+      updateState(developerSummary);
     }
   }
 });
 ```
 
-### flow:subagent-tool-call / flow:subagent-tool-result
-
-Track tool activity across all agents during flow execution.
-
-```typescript
-pi.events?.on("flow:subagent-tool-call", (data: any) => {
-  const { agentName, toolName, input } = data;
-  // Track calls per agent, build metrics, etc.
-});
-
-pi.events?.on("flow:subagent-tool-result", (data: any) => {
-  const { agentName, toolName, output, isError } = data;
-  // Track results, errors, file modifications, etc.
-});
-```
-
-> **pi-judo reference:** pi-judo listens to `flow:complete` to track file modifications across all agents at [index.ts lines 142–160](https://github.com/BlackBeltTechnology/pi-judo/blob/main/extensions/judospec/index.ts).
+`flow:complete` fires even on error and abort, so always check `result.status`.
 
 ---
 
-## Querying Discovery State
+## Complete Example: pi-judo
 
-Use the synchronous query events to inspect what agents and flows are available:
+pi-judo is the canonical reference implementation. It uses every registration hook.
 
-```typescript
-// Get all discovered agents
-const agentQuery: any = {};
-pi.events.emit("flow:get-agents", agentQuery);
-const agents: Map<string, AgentConfig> = agentQuery.agents;
+### Package layout
 
-// Get all discovered flows
-const flowQuery: any = {};
-pi.events.emit("flow:get-flows", flowQuery);
-const flows: Map<string, FlowConfig> = flowQuery.flows;
+```
+pi-judo/
+├── package.json
+├── extensions/
+│   └── judospec/
+│       ├── index.ts          # activate()
+│       ├── footer.ts         # Footer segment helpers
+│       ├── guards.ts         # Model file protection guard
+│       ├── cards/            # Custom card metric renderers
+│       │   ├── model-card.ts
+│       │   ├── developer-card.ts
+│       │   └── ...
+│       ├── tools/
+│       │   └── model-cli.ts  # Custom model_cli tool
+│       └── ...
+├── agents/                   # Judo-specific agents
+├── flows/                    # Judo flows (registered as /judo:* commands)
+└── skills/                   # Judo skill documentation
 ```
 
----
-
-## Complete Example
-
-Here's a minimal but complete extension that registers agents, flows, skills, a custom card, a workflow, a gate, and a footer segment:
+### activate function walkthrough
 
 ```typescript
+// extensions/judospec/index.ts
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { MyMetricCard } from "./cards/my-metric-card.js";
+import { globSync, existsSync } from "node:fs";
+import { ModelCard } from "./cards/model-card.js";
+import { createModelProtectionGuard } from "./guards.js";
+import { createModelCliTool } from "./tools/model-cli.js";
+import { setupFooter } from "./footer.js";
 
 export default function activate(pi: ExtensionAPI) {
   const cwd = process.cwd();
   const __filename = fileURLToPath(import.meta.url);
-  const pkgRoot = join(dirname(__filename), "..", "..");
+  const judoPkgRoot = join(dirname(__filename), "..", "..");
 
-  // ── Register resources ─────────────────────────────────────────
-  pi.events?.emit("flow:register-agents-dir", { dir: join(pkgRoot, "agents") });
-  pi.events?.emit("flow:register-flows-dir", { dir: join(pkgRoot, "flows") });
-  pi.events?.emit("flow:register-skills-dir", { dir: join(pkgRoot, "skills") });
+  // 1. Register content directories
+  pi.events?.emit("flow:register-agents-dir", { dir: join(judoPkgRoot, "agents") });
+  pi.events?.emit("flow:register-flows-dir", { dir: join(judoPkgRoot, "flows") });
+  pi.events?.emit("flow:register-skills-dir", { dir: join(judoPkgRoot, "skills") });
 
-  // ── Custom card renderer ───────────────────────────────────────
-  pi.events?.emit("flow:register-card", {
-    name: "my-metric",
-    factory: () => new MyMetricCard(),
-  });
+  // 2. Register custom card metric renderers
+  pi.events?.emit("flow:register-card", { name: "model",      factory: () => new ModelCard() });
+  pi.events?.emit("flow:register-card", { name: "developer",  factory: () => new DeveloperCard() });
+  pi.events?.emit("flow:register-card", { name: "researcher", factory: () => new ResearcherCard() });
+  pi.events?.emit("flow:register-card", { name: "tester",     factory: () => new TesterCard() });
 
-  // ── Workflow definition ────────────────────────────────────────
+  // 3. Register workflow pipeline for breadcrumb
   pi.events?.emit("flow:register-workflow", {
-    id: "my-pipeline",
+    id: "sdd",
     stages: [
-      { name: "research", flows: ["my-pkg:research"] },
-      { name: "build", flows: ["my-pkg:build"] },
+      { name: "research", flows: ["judo:research-all"] },
+      { name: "apply",    flows: ["judo:apply"] },
+      { name: "verify",   flows: ["judo:verify"] },
     ],
   });
 
-  // ── Gate: require project config ───────────────────────────────
+  // 4. Register prerequisite gates
+  const models = globSync(join(cwd, "model", "*.model"));
+  const judoEnabled = models.length > 0;
+
   pi.events?.emit("flow:register-gate", {
-    name: "my-project-check",
-    check: () => existsSync(join(cwd, "my-config.json")),
-    flows: ["my-pkg:*"],
-    message: "No my-config.json found. Run from a project root.",
+    name: "judo-project",
+    check: () => judoEnabled,
+    flows: ["judo:*"],
+    message: "No JUDO model files found. JUDO flows require a JUDO project.",
   });
 
-  // ── Footer segment ────────────────────────────────────────────
-  let invalidate: (() => void) | null = null;
-  let itemCount = 0;
-
-  pi.events?.emit("flow:register-footer-segment", {
-    name: "my-items",
-    render: () => `${itemCount} items`,
-    onRegistered: (inv: () => void) => { invalidate = inv; },
+  pi.events?.emit("flow:register-gate", {
+    name: "judo-research",
+    check: () => existsSync(join(cwd, "judospec", "research")),
+    flows: ["judo:apply"],
+    message: "No research directory found. Run /judo:research-all first.",
   });
 
-  // ── React to flow completions ──────────────────────────────────
-  pi.events?.on("flow:complete", (data: any) => {
-    if (!data?.results) return;
-    itemCount = Object.keys(data.results).length;
-    invalidate?.();
+  // 5. Register guard and custom tool (only for JUDO projects)
+  if (judoEnabled) {
+    // Guard: blocks direct .model file access in agent subprocesses
+    pi.events?.emit("flow:register-guard-extension", {
+      factory: (piApi: ExtensionAPI) => {
+        piApi.on("tool_call", createModelProtectionGuard());
+      },
+    });
+
+    // Custom tool: auto-discovered by flow engine, available to agents that declare "model_cli" in tools:
+    const modelCliTool = createModelCliTool(cwd);
+    pi.registerTool(modelCliTool);
+  }
+
+  // 6. Register footer segments
+  setupFooter(pi, serverManager, getMutationCount);
+
+  // 7. React to flow completion
+  pi.events?.on("flow:complete", (data: unknown) => {
+    const result = data as any;
+    if (result.flowName === "judo:apply" && result.status === "success") {
+      // Refresh registry after apply
+      registry.reload();
+    }
   });
 }
 ```
+
+---
+
+## Dashboard Integration Points
+
+### Summary: All integration points
+
+| Hook | Event | Data |
+|------|-------|------|
+| Agent files | `flow:register-agents-dir` | `{ dir }` |
+| Flow files | `flow:register-flows-dir` | `{ dir }` |
+| Skill docs | `flow:register-skills-dir` | `{ dir }` |
+| Card metric | `flow:register-card` | `{ name, factory }` |
+| Workflow breadcrumb | `flow:register-workflow` | `WorkflowDefinition` |
+| Prerequisite check | `flow:register-gate` | `{ name, check, flows, message }` |
+| Sandbox guard | `flow:register-guard-extension` | `{ factory }` |
+| Footer segment | `flow:register-footer-segment` | `{ name, render, onRegistered? }` |
+| Agent tool | `pi.registerTool()` (auto-discovered) | Tool definition |
+| Flow lifecycle | `flow:complete` (listen) | `FlowResult` |
+| Tool observation | `flow:subagent-tool-call` (listen) | `{ agentName, toolName, input }` |
+
+### Typing card renderers
+
+Import the `AgentCardRenderer` type from pi-flows:
+
+```typescript
+import type { AgentCardRenderer } from "pi-flows/extensions/flow-dashboard/types.js";
+```
+
+Or inline the interface (avoids import path coupling):
+
+```typescript
+interface AgentCardRenderer {
+  onToolCall(toolName: string, input: any): void;
+  onToolResult(toolName: string, output: any): void;
+  onComplete(result: any): void;
+  renderMetric(width: number): string;
+}
+```
+
+### Importing exported types from pi-flows
+
+For typed access to `FlowResult`, `AgentConfig`, etc.:
+
+```typescript
+import type {
+  FlowResult,
+  AgentConfig,
+  FlowConfig,
+  AgentResult,
+} from "pi-flows/extensions/flow-engine/index.js";
+```
+
+See [public-api.md](public-api.md) for the full exported surface.
+
+---
+
+## Tips and Gotchas
+
+**Emit registration events synchronously** — pi-flows processes them during the same turn as `activate`. An `await` before a `flow:register-*` emit means the event fires after initial discovery, which may be too late for some hooks (e.g., gates are checked at command invocation time, so they can be registered after `activate`, but flows need to be registered before the user can call them).
+
+**Use `pkgRoot`, not `import.meta.url` directly** — `import.meta.url` gives the path of the current file, not the package root. Always traverse up with `join(dirname(...), "..", "..")` to the package root, then join to `agents/`, `flows/`, etc.
+
+**Guard factories get a fresh `pi` per agent session** — Each spawned agent subprocess has its own `ExtensionAPI` scope. The factory is called fresh for each agent. Don't share mutable state between guard instances.
+
+**Multiple `flow:register-card` calls for the same name replace** — If your package registers a card with `name: "default"`, it replaces pi-flows' default renderer. This is intentional for overrides, but can be surprising.
+
+**`flow:complete` fires on abort** — Always check `result.status` before acting on the result. A status of `"aborted"` means the user pressed Ctrl+X; `"error"` means the flow threw. Neither guarantees that any steps completed successfully.

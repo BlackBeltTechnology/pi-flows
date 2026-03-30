@@ -1,7 +1,7 @@
 import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult } from "./types.js";
 import { expandTemplateVariables, spawnAgent } from "./execution.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
-import { parseFlowFile } from "./flow-parser.js";
+import { parseFlowYamlFile } from "./flow-parser-yaml.js";
 import { globSync } from "node:fs";
 import { join } from "node:path";
 
@@ -776,7 +776,7 @@ async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: 
   let lastAgentResult: AgentResult | null = null;
   for (const flowPath of flowPaths) {
     try {
-      const subFlow = parseFlowFile(flowPath);
+      const subFlow = parseFlowYamlFile(flowPath);
       const flowResult = await runFlow({
         ...options,
         flow: subFlow,
@@ -807,6 +807,8 @@ function storeResult(ctx: FlowContext, stepId: string, result: AgentResult): voi
     summary: result.result.summary,
     artifacts: result.result.artifacts,
     files: result.result.files.map(f => `${f.path} (${f.action})`).join(", "),
+    // Merge typed outputs from agent's declared outputs
+    ...(result.typedOutputs ?? {}),
   };
 }
 

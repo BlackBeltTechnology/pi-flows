@@ -7,7 +7,7 @@
 
 import type { AgentConfig, FlowConfig } from "./types.js";
 import { parseAgentFile } from "./agent-parser.js";
-import { parseFlowFile } from "./flow-parser.js";
+import { parseFlowYamlFile } from "./flow-parser-yaml.js";
 import { readdirSync, existsSync, statSync } from "node:fs";
 import { join, basename, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 export interface DiscoveryResult {
   agents: Map<string, AgentConfig>;
   flows: Map<string, FlowConfig>;
+  warnings: string[];
 }
 
 // ---- Public API -----------------------------------------------------------
@@ -31,13 +32,14 @@ export function discoverAll(
 ): DiscoveryResult {
   const agents = new Map<string, AgentConfig>();
   const flows = new Map<string, FlowConfig>();
+  const warnings: string[] = [];
 
   // --- Agents ---
 
   // Extra package agents (registered by dependent packages via events)
   if (extraAgentsDirs) {
     for (const dir of extraAgentsDirs) {
-      for (const agent of discoverAgentsInDir(dir)) {
+      for (const agent of discoverAgentsInDir(dir, warnings)) {
         agents.set(agent.name, agent);
       }
     }
@@ -45,7 +47,7 @@ export function discoverAll(
 
   // pi-flows package agents: agents/*.md
   const packageAgentsDir = join(packageRoot, "agents");
-  for (const agent of discoverAgentsInDir(packageAgentsDir)) {
+  for (const agent of discoverAgentsInDir(packageAgentsDir, warnings)) {
     agents.set(agent.name, agent);
   }
 
@@ -54,31 +56,31 @@ export function discoverAll(
   // Extra package flows (registered by dependent packages via events)
   if (extraFlowsDirs) {
     for (const dir of extraFlowsDirs) {
-      for (const flow of discoverFlowsInDir(dir)) {
+      for (const flow of discoverFlowsInDir(dir, warnings)) {
         flows.set(flow.name, flow);
       }
     }
   }
 
-  // pi-flows package flows: flows/*.flow.md (recursive)
+  // pi-flows package flows: flows/*.yaml (recursive)
   const packageFlowsDir = join(packageRoot, "flows");
-  for (const flow of discoverFlowsInDir(packageFlowsDir)) {
+  for (const flow of discoverFlowsInDir(packageFlowsDir, warnings)) {
     flows.set(flow.name, flow);
   }
 
   // --- Project-local (highest priority — overrides package on name collision) ---
 
   const localAgentsDir = join(projectRoot, ".pi", "flows", "agents");
-  for (const agent of discoverAgentsInDir(localAgentsDir)) {
+  for (const agent of discoverAgentsInDir(localAgentsDir, warnings)) {
     agents.set(agent.name, agent);
   }
 
   const localFlowsDir = join(projectRoot, ".pi", "flows", "flows");
-  for (const flow of discoverFlowsInDir(localFlowsDir)) {
+  for (const flow of discoverFlowsInDir(localFlowsDir, warnings)) {
     flows.set(flow.name, flow);
   }
 
-  return { agents, flows };
+  return { agents, flows, warnings };
 }
 
 /**
@@ -96,9 +98,9 @@ export function resolvePackageRoot(importMetaUrl: string): string {
 // ---- Agent discovery helpers ----------------------------------------------
 
 /**
- * Scan a directory for agent `.md` files (excluding .flow.md).
+ * Scan a directory for agent `.md` files (excluding non-agent files).
  */
-function discoverAgentsInDir(dir: string): AgentConfig[] {
+function discoverAgentsInDir(dir: string, warnings: string[]): AgentConfig[] {
   if (!existsSync(dir)) return [];
 
   const agents: AgentConfig[] = [];
@@ -111,8 +113,8 @@ function discoverAgentsInDir(dir: string): AgentConfig[] {
   }
 
   for (const entry of entries) {
-    // Only consider .md files, but exclude .flow.md and .chain.md files
-    if (!entry.endsWith(".md") || entry.endsWith(".flow.md") || entry.endsWith(".chain.md")) continue;
+    // Only consider .md files, exclude .chain.md and skip .yaml files entirely
+    if (!entry.endsWith(".md") || entry.endsWith(".chain.md")) continue;
 
     const filePath = join(dir, entry);
 
@@ -126,9 +128,8 @@ function discoverAgentsInDir(dir: string): AgentConfig[] {
       const config = parseAgentFile(filePath);
       agents.push(config);
     } catch (err) {
-      console.warn(
-        `[discovery] Skipping unparseable agent file: ${filePath}`,
-        err instanceof Error ? err.message : err,
+      warnings.push(
+        `[discovery] Skipping unparseable agent file: ${filePath} ${err instanceof Error ? err.message : err}`,
       );
     }
   }
@@ -139,25 +140,26 @@ function discoverAgentsInDir(dir: string): AgentConfig[] {
 // ---- Flow discovery helpers -----------------------------------------------
 
 /**
- * Recursively scan a directory for `.flow.md` files.
+ * Recursively scan a directory for `.yaml` flow files.
  * Subfolder structure determines the flow name prefix:
- *   `flows/judo/research.flow.md` -> name = `judo:research`
+ *   `flows/judo/research.yaml` -> name = `judo:research`
  */
-function discoverFlowsInDir(flowsRoot: string): FlowConfig[] {
+function discoverFlowsInDir(flowsRoot: string, warnings: string[]): FlowConfig[] {
   if (!existsSync(flowsRoot)) return [];
 
   const flows: FlowConfig[] = [];
-  walkFlowFiles(flowsRoot, flowsRoot, flows);
+  walkFlowFiles(flowsRoot, flowsRoot, flows, warnings);
   return flows;
 }
 
 /**
- * Recursively walk `dir`, collecting `.flow.md` files.
+ * Recursively walk `dir`, collecting `.yaml` flow files.
  */
 function walkFlowFiles(
   dir: string,
   flowsRoot: string,
   results: FlowConfig[],
+  warnings: string[],
 ): void {
   let entries: string[];
   try {
@@ -177,25 +179,25 @@ function walkFlowFiles(
     }
 
     if (stat.isDirectory()) {
-      walkFlowFiles(fullPath, flowsRoot, results);
+      walkFlowFiles(fullPath, flowsRoot, results, warnings);
       continue;
     }
 
-    if (!entry.endsWith(".flow.md")) continue;
+    if (!entry.endsWith(".yaml")) continue;
 
     try {
-      const config = parseFlowFile(fullPath);
+      const config = parseFlowYamlFile(fullPath);
 
       // Compute the flow name from the subfolder structure.
-      // E.g., flows/judo/research.flow.md -> relative = "judo/research.flow.md"
+      // E.g., flows/judo/research.yaml -> relative = "judo/research.yaml"
       //   -> baseName = "research", prefix = "judo" -> name = "judo:research"
       const relativePath = relative(flowsRoot, fullPath);
       const relDir = dirname(relativePath);
-      const baseName = basename(entry, ".flow.md");
+      const baseName = basename(entry, ".yaml");
 
       // Enforce single-subfolder depth: skip files nested 2+ levels deep
       if (relDir !== "." && relDir.includes("/")) {
-        console.warn(
+        warnings.push(
           `[discovery] Skipping flow file with excessive nesting (max 1 subfolder): ${fullPath}`,
         );
         continue;
@@ -209,9 +211,8 @@ function walkFlowFiles(
 
       results.push(config);
     } catch (err) {
-      console.warn(
-        `[discovery] Skipping unparseable flow file: ${fullPath}`,
-        err instanceof Error ? err.message : err,
+      warnings.push(
+        `[discovery] Skipping unparseable flow file: ${fullPath} ${err instanceof Error ? err.message : err}`,
       );
     }
   }

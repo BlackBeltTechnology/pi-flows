@@ -41,6 +41,7 @@ export function parseAgentString(content: string, source: string): AgentConfig {
   const skills = splitCsv(fields.get("skills") ?? "") || undefined;
   const context = parseYamlArray(fields.get("context:array") ?? "") || undefined;
   const inputs = parseYamlArray(fields.get("inputs:array") ?? "") || undefined;
+  const outputs = parseOutputsArray(fields, frontmatter) || undefined;
 
   const access = parseAccessBlock(fields, source);
 
@@ -79,6 +80,7 @@ export function parseAgentString(content: string, source: string): AgentConfig {
     ...(skills !== undefined && skills.length > 0 && { skills }),
     ...(context !== undefined && context.length > 0 && { context }),
     ...(inputs !== undefined && inputs.length > 0 && { inputs }),
+    ...(outputs !== undefined && outputs.length > 0 && { outputs }),
     systemPrompt: body.trim(),
     ...(output !== undefined && { output }),
     ...(interactive !== undefined && { interactive }),
@@ -271,6 +273,90 @@ function parseAccessBlock(
 function splitCsv(value: string): string[] {
   if (!value.trim()) return [];
   return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Parse outputs from frontmatter. Supports:
+ * - Simple array: `outputs: [findings, verdict]` or `outputs:\n  - findings\n  - verdict`
+ * - Expanded objects: `outputs:\n  - name: findings\n    description: ...\n  - name: verdict`
+ */
+function parseOutputsArray(
+  fields: Map<string, string>,
+  frontmatter: string,
+): Array<{name: string, description?: string}> | null {
+  // First try simple array format (like inputs)
+  const simpleArray = parseYamlArray(fields.get("outputs:array") ?? "");
+  if (simpleArray.length > 0) {
+    // Check if items look like "name: value" (expanded format parsed as flat array)
+    // or plain names (simple format)
+    const hasNamePrefix = simpleArray.some(item => item.startsWith("name:"));
+    if (!hasNamePrefix) {
+      // Simple format: each item is just a name
+      return simpleArray.map(name => ({ name }));
+    }
+  }
+
+  // Try expanded format: parse from raw frontmatter
+  // Look for outputs: block and parse name/description pairs
+  const outputEntries: Array<{name: string, description?: string}> = [];
+  const lines = frontmatter.split("\n");
+  let inOutputs = false;
+  let currentEntry: {name?: string, description?: string} | null = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const indent = line.length - line.trimStart().length;
+
+    // Detect start of outputs block
+    if (/^outputs\s*:/.test(trimmed) && trimmed.endsWith(":")) {
+      inOutputs = true;
+      continue;
+    }
+
+    if (!inOutputs) continue;
+
+    // Back to root level — end of outputs block
+    if (indent === 0 && trimmed !== "" && !trimmed.startsWith("-")) {
+      break;
+    }
+
+    // New array item
+    if (/^- /.test(trimmed)) {
+      // Save previous entry
+      if (currentEntry?.name) {
+        outputEntries.push({ name: currentEntry.name, ...(currentEntry.description && { description: currentEntry.description }) });
+      }
+
+      const afterDash = trimmed.slice(2).trim();
+      // Check if it's `- name: value` on same line
+      if (afterDash.startsWith("name:")) {
+        const nameVal = afterDash.slice(5).trim().replace(/^["']|["']$/g, "");
+        currentEntry = { name: nameVal };
+      } else if (afterDash && !afterDash.includes(":")) {
+        // Simple name: `- findings`
+        currentEntry = { name: afterDash.replace(/^["']|["']$/g, "") };
+      } else {
+        currentEntry = {};
+      }
+      continue;
+    }
+
+    // Nested property of current entry
+    if (currentEntry && indent > 2) {
+      if (trimmed.startsWith("name:")) {
+        currentEntry.name = trimmed.slice(5).trim().replace(/^["']|["']$/g, "");
+      } else if (trimmed.startsWith("description:")) {
+        currentEntry.description = trimmed.slice(12).trim().replace(/^["']|["']$/g, "");
+      }
+    }
+  }
+
+  // Don't forget the last entry
+  if (currentEntry?.name) {
+    outputEntries.push({ name: currentEntry.name, ...(currentEntry.description && { description: currentEntry.description }) });
+  }
+
+  return outputEntries.length > 0 ? outputEntries : null;
 }
 
 /** Parse newline-separated array values (stored from YAML array lines). */

@@ -15,14 +15,7 @@ import type {
   AgentLoopDecisionStep,
   FlowRefStep,
 } from "../flow-engine/types.js";
-import { visibleWidth } from "@mariozechner/pi-tui";
-
-/** Pad a line (which may contain ANSI codes) with trailing spaces to exactly `targetWidth` visible characters. */
-function padLine(line: string, targetWidth: number): string {
-  const vw = visibleWidth(line);
-  if (vw >= targetWidth) return line;
-  return line + " ".repeat(targetWidth - vw);
-}
+import { renderBox } from "./box-renderer.js";
 
 // Key constants
 const KEY_ESC = "\x1b";
@@ -229,7 +222,6 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
  */
 export function createFlowPreviewOverlay(opts: FlowPreviewOverlayOptions) {
   const { flow, theme, tui, done } = opts;
-  const fg = (c: string, t: string) => theme?.fg?.(c, t) ?? t;
 
   let scrollOffset = 0;
   let allLines: string[] | null = null;
@@ -255,17 +247,7 @@ export function createFlowPreviewOverlay(opts: FlowPreviewOverlayOptions) {
       // Pad to viewport height
       while (visible.length < viewportHeight) visible.push("");
 
-      // Wrap in bordered box
-      const bord = (s: string) => fg("dim", s);
-      const lines: string[] = [];
-
-      lines.push(bord("┌" + "─".repeat(w) + "┐"));
-      for (const line of visible) {
-        lines.push(bord("│") + " " + padLine(line, innerWidth) + " " + bord("│"));
-      }
-      lines.push(bord("└" + "─".repeat(w) + "┘"));
-
-      return lines;
+      return renderBox({ width, theme, content: visible });
     },
 
     handleInput(data: string): void {

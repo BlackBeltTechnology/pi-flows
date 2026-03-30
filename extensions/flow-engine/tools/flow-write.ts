@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Flow Write Tool
 //
-// Validates flow .md content via flow-validate, then writes to disk if valid.
+// Validates flow YAML content via flow-validate, then writes to disk if valid.
 // Emits "flow:rediscover" event after successful write to trigger re-discovery.
 // Returns validation errors if the content is invalid.
 // ---------------------------------------------------------------------------
@@ -20,10 +20,10 @@ export function registerFlowWriteTool(
   pi.registerTool({
     name: "flow_write",
     description:
-      "Validate and write a flow .md file. Runs flow_validate internally first. If validation passes, writes the file to the specified path. Returns errors if invalid.",
+      "Validate and write a flow YAML file. Runs flow_validate internally first. If validation passes, writes the file to the specified path. Returns errors if invalid.",
     parameters: Type.Object({
-      path: Type.String({ description: "Absolute or relative path to write the flow .md file" }),
-      content: Type.String({ description: "The flow .md content to validate and write" }),
+      path: Type.String({ description: "Absolute or relative path to write the flow .yaml file" }),
+      content: Type.String({ description: "The flow YAML content to validate and write" }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       // Run validation first

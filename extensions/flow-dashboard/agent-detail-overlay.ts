@@ -16,7 +16,7 @@ import {
   computeExpandedContentLines,
   type DetailScrollState,
 } from "./detail-view.js";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { renderBox } from "./box-renderer.js";
 
 // Key constants
 const KEY_ESC = "\x1b";
@@ -26,13 +26,6 @@ const KEY_ENTER = "\r";
 const KEY_BACKSPACE_1 = "\x7f";
 const KEY_BACKSPACE_2 = "\b";
 const KEY_CTRL_T = "\x14";
-
-/** Pad a line (which may contain ANSI codes) with trailing spaces to exactly `targetWidth` visible characters. */
-function padLine(line: string, targetWidth: number): string {
-  const vw = visibleWidth(line);
-  if (vw >= targetWidth) return line;
-  return line + " ".repeat(targetWidth - vw);
-}
 
 export interface AgentDetailOverlayOptions {
   agentName: string;
@@ -51,10 +44,8 @@ export interface AgentDetailOverlayOptions {
 export function createAgentDetailOverlay(opts: AgentDetailOverlayOptions) {
   const { agentName, status, summary, entries, theme, tui, done } = opts;
 
-  const scroll: DetailScrollState = createDetailScrollState();
+  const scroll: DetailScrollState = createDetailScrollState(Math.max(0, entries.length - 1));
   let showThinking = true;
-
-  const fg = (c: string, t: string) => theme?.fg?.(c, t) ?? t;
 
   return {
     render(width: number): string[] {
@@ -72,23 +63,7 @@ export function createAgentDetailOverlay(opts: AgentDetailOverlayOptions) {
         showThinking,
       );
 
-      // Wrap in bordered box
-      const bord = (s: string) => fg("dim", s);
-      const w = width - 2; // inner width between │ borders
-      const lines: string[] = [];
-
-      // Top border
-      lines.push(bord("┌" + "─".repeat(w) + "┐"));
-
-      // Content lines with side borders and symmetric padding
-      for (const line of contentLines) {
-        lines.push(bord("│") + " " + padLine(line, innerWidth) + " " + bord("│"));
-      }
-
-      // Bottom border
-      lines.push(bord("└" + "─".repeat(w) + "┘"));
-
-      return lines;
+      return renderBox({ width, theme, content: contentLines });
     },
 
     handleInput(data: string): void {

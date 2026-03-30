@@ -12,7 +12,8 @@
 //   - Preview mode when flow_preview is called
 // ---------------------------------------------------------------------------
 
-import { Text } from "@mariozechner/pi-tui";
+import { Text, visibleWidth } from "@mariozechner/pi-tui";
+import { renderBox } from "./box-renderer.js";
 
 // ---- Spinner frames --------------------------------------------------------
 
@@ -60,17 +61,30 @@ interface DagStep {
 // ---- Widget mode -----------------------------------------------------------
 
 type WidgetMode = "design" | "preview";
+type PreviewSubMode = "preview" | "navigate";
+
+// ---- Parsed flow entry (for multi-flow preview) ----------------------------
+
+interface ParsedFlowEntry {
+  name: string;
+  description: string;
+  maxConcurrent: number;
+  steps: DagStep[];
+}
 
 // ---- Internal state --------------------------------------------------------
 
 interface ArchitectState {
   mode: WidgetMode;
+  previewSubMode: PreviewSubMode;
+  selectedFlowIndex: number;
   flowName: string;
   flowDescription: string;
   flowPath: string;
   maxConcurrent: number;
   agents: AgentEntry[];
   dagSteps: DagStep[];
+  parsedFlows: ParsedFlowEntry[];
   statusLeft: string;
   statusRight: string;
   spinFrame: number;
@@ -248,12 +262,18 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   setReady(): void;
   getFlowContent(): string | null;
   hasFlowContent(): boolean;
+  getFlowContents(): Array<{ name: string; content: string }>;
+  setPreviewSubMode(mode: "preview" | "navigate"): void;
+  getPreviewSubMode(): "preview" | "navigate";
+  getSelectedFlowIndex(): number;
+  setSelectedFlowIndex(index: number): void;
+  getFlowCount(): number;
   getEventLog(): any[];
   dispose(): void;
 } {
   const resolveAgentType = opts?.resolveAgentType;
-  // Stash flow content for overlay — updated on flow_write/flow_preview
-  let lastFlowContent: string | null = null;
+  // Stash flow contents for overlay — accumulates across flow_write/flow_preview calls
+  const flowContents: Array<{ name: string; content: string }> = [];
 
   // Catalog metadata — stored separately from state.agents to avoid cluttering the display
   let catalogAgentTypes = new Map<string, "built-in" | "local">();
@@ -264,12 +284,15 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
   const state: ArchitectState = {
     mode: "design",
+    previewSubMode: "preview",
+    selectedFlowIndex: 0,
     flowName: "",
     flowDescription: "",
     flowPath: "",
     maxConcurrent: 0,
     agents: [],
     dagSteps: [],
+    parsedFlows: [],
     statusLeft: "",
     statusRight: "",
     spinFrame: 0,
@@ -282,6 +305,9 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   let spinTimer: ReturnType<typeof setInterval> | null = null;
   let invalidateFn: (() => void) | null = null;
   let onUpdate: (() => void) | null = null;
+
+  // Height ratcheting for preview mode — prevents jitter as flows are added
+  let previewMinHeight = 0;
 
   // Track which agent is currently being created (by agent_write)
   let pendingAgentName: string | null = null;
@@ -360,11 +386,34 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         state.statusRight = "Writing flow\u2026";
         // Store the flow path
         if (input?.path) state.flowPath = input.path;
-        // Stash raw flow content for overlay
-        if (input?.content) lastFlowContent = input.content;
-        // Parse steps from the content
+        // Parse and accumulate flow content
         if (input?.content) {
           const parsed = parseFlowSteps(input.content);
+          const flowName = parsed.name || "unnamed";
+
+          // Upsert into flowContents
+          const existingIdx = flowContents.findIndex((f) => f.name === flowName);
+          if (existingIdx >= 0) {
+            flowContents[existingIdx].content = input.content;
+          } else {
+            flowContents.push({ name: flowName, content: input.content });
+          }
+
+          // Upsert into parsedFlows
+          const parsedEntry: ParsedFlowEntry = {
+            name: flowName,
+            description: parsed.description,
+            maxConcurrent: parsed.maxConcurrent,
+            steps: parsed.steps,
+          };
+          const existingParsed = state.parsedFlows.findIndex((f) => f.name === flowName);
+          if (existingParsed >= 0) {
+            state.parsedFlows[existingParsed] = parsedEntry;
+          } else {
+            state.parsedFlows.push(parsedEntry);
+          }
+
+          // Update current flow state (for design mode)
           if (parsed.name) state.flowName = parsed.name;
           if (parsed.description) state.flowDescription = parsed.description;
           if (parsed.maxConcurrent) state.maxConcurrent = parsed.maxConcurrent;
@@ -388,8 +437,33 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
       }
 
       case "flow_preview":
-        // Stash raw flow content for overlay
-        if (input?.content) lastFlowContent = input.content;
+        // Parse and accumulate flow content
+        if (input?.content) {
+          const parsed = parseFlowSteps(input.content);
+          const flowName = parsed.name || "unnamed";
+
+          // Upsert into flowContents
+          const existingIdx = flowContents.findIndex((f) => f.name === flowName);
+          if (existingIdx >= 0) {
+            flowContents[existingIdx].content = input.content;
+          } else {
+            flowContents.push({ name: flowName, content: input.content });
+          }
+
+          // Upsert into parsedFlows
+          const parsedEntry: ParsedFlowEntry = {
+            name: flowName,
+            description: parsed.description,
+            maxConcurrent: parsed.maxConcurrent,
+            steps: parsed.steps,
+          };
+          const existingParsed = state.parsedFlows.findIndex((f) => f.name === flowName);
+          if (existingParsed >= 0) {
+            state.parsedFlows[existingParsed] = parsedEntry;
+          } else {
+            state.parsedFlows.push(parsedEntry);
+          }
+        }
         // Parse preview content to update DAG if available
         if (input?.content) {
           const parsed = parseFlowSteps(input.content);
@@ -413,6 +487,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         }
         // Transition to preview mode
         state.mode = "preview";
+        state.previewSubMode = "preview";
         state.previewApproval = "Awaiting approval\u2026";
         break;
 
@@ -447,17 +522,30 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           const catalog = typeof output === "string" ? JSON.parse(output) : output;
           if (Array.isArray(catalog)) {
             catalogCount = catalog.length;
+            const typeCounts = new Map<string, number>();
             for (const entry of catalog) {
               if (entry.name) {
                 const agentType = resolveAgentType ? resolveAgentType(entry.name) : "built-in";
                 catalogAgentTypes.set(entry.name, agentType);
+                const sourceType = entry.source_type || agentType;
+                typeCounts.set(sourceType, (typeCounts.get(sourceType) || 0) + 1);
               }
+            }
+            // Build grouped count string: "18 built-in · 3 local · 2 package"
+            if (catalogCount === 0) {
+              state.statusLeft = "Catalog: 0 agents";
+            } else {
+              const parts: string[] = [];
+              for (const type of ["built-in", "local", "package"] as const) {
+                const count = typeCounts.get(type);
+                if (count) parts.push(`${count} ${type}`);
+              }
+              state.statusLeft = `Catalog: ${parts.length > 0 ? parts.join(" \u00B7 ") : `${catalogCount} agents`}`;
             }
           }
         } catch {
           // Non-critical — catalog may be in unexpected format
         }
-        state.statusLeft = `Catalog: ${catalogCount} agents`;
         break;
       }
 
@@ -513,6 +601,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           // Transition to preview mode — the widget shows the structured view
           // while ctx.ui.select() asks the bare question below
           state.mode = "preview";
+          state.previewSubMode = "preview";
           stopSpinner();
         }
         break;
@@ -654,10 +743,9 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
           const dagLines = renderDag(state.dagSteps, theme);
           for (const dagLine of dagLines) {
-            // DAG lines already have leading spaces; just pad to width
-            // We can't easily compute visible length of themed strings,
-            // so we delegate to Text for padding below.
-            lines.push(bord("\u2502") + dagLine);
+            const vw = visibleWidth(dagLine);
+            const pad = Math.max(0, w - vw);
+            lines.push(bord("\u2502") + dagLine + " ".repeat(pad) + bord("\u2502"));
           }
 
           // Empty line after DAG
@@ -709,173 +797,96 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
         // Bottom border
         lines.push(bord("\u2514" + "\u2500".repeat(w) + "\u2518"));
+      } else if (state.previewSubMode === "navigate") {
+        // -- Navigate mode: flow selector list --------------------------------
+
+        const content: string[] = [];
+
+        // Header
+        content.push(theme.fg("accent", `${state.parsedFlows.length} flow${state.parsedFlows.length !== 1 ? "s" : ""} \u00B7 Select flow to inspect`));
+
+        for (let i = 0; i < state.parsedFlows.length; i++) {
+          const pf = state.parsedFlows[i];
+          const sel = i === state.selectedFlowIndex ? ">" : " ";
+          const stepCount = pf.steps.length;
+          const meta = pf.maxConcurrent ? ` \u2502 max concurrent: ${pf.maxConcurrent}` : "";
+          content.push(`${sel} ${theme.fg("accent", "\u25C7")} ${theme.fg("accent", pf.name)} ${theme.fg("dim", `(${stepCount} step${stepCount !== 1 ? "s" : ""}${meta})`)}`);
+        }
+
+        const boxLines = renderBox({
+          width,
+          theme,
+          title: "Flow Preview",
+          content,
+          separatorAfter: [0],
+          footer: [theme.fg("dim", "\u2191\u2193 navigate \u00B7 Enter inspect \u00B7 Backspace back")],
+        });
+        lines.push(...boxLines);
       } else {
-        // -- Preview mode layout — rich structured view -----------------------
+        // -- Preview mode layout \u2014 truncated multi-flow view -------------------
 
-        const MAX_VISIBLE_STEPS = 8;
+        const content: string[] = [];
+        const separators: number[] = [];
 
-        // Top border with title
-        const title = " Flow Preview ";
-        const titleLen = title.length;
-        const afterTitle = w - titleLen - 1;
-        lines.push(
-          bord("\u250C\u2500") +
-            theme.fg("accent", title) +
-            bord("\u2500".repeat(Math.max(0, afterTitle)) + "\u2510"),
-        );
-
-        // Header: flow name + description + metadata (spinner when still working)
-        const flowLabel = state.flowName || "unnamed";
         const spinnerActive = spinTimer !== null;
-        const namePrefix = spinnerActive
-          ? ` ${theme.fg("accent", SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length])} `
-          : " ";
-        const nameStr = `${namePrefix}${theme.fg("accent", flowLabel)}`;
-        // Visible length: space + (spinner + space if active) + flowLabel
-        const nameVisLen = spinnerActive ? (1 + 1 + 1 + flowLabel.length) : (1 + flowLabel.length);
-        lines.push(
-          bord("\u2502") + nameStr + " ".repeat(Math.max(0, w - nameVisLen)) + bord("\u2502"),
-        );
+        const spinnerStr = spinnerActive
+          ? theme.fg("accent", SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]) + " "
+          : "";
 
-        if (state.flowDescription) {
-          const descStr = ` ${state.flowDescription}`;
-          const descTrunc = descStr.length > w ? descStr.slice(0, w - 3) + "..." : descStr;
-          const descVis = Math.min(descStr.length, w);
-          lines.push(
-            bord("\u2502") +
-              theme.fg("muted", descTrunc) +
-              " ".repeat(Math.max(0, w - descVis)) +
-              bord("\u2502"),
-          );
-        }
+        const flows = state.parsedFlows;
 
-        // Metadata line: step count, concurrency, file path
-        const stepCount = state.dagSteps.length;
-        const metaParts: string[] = [`${stepCount} step${stepCount !== 1 ? "s" : ""}`];
-        if (state.maxConcurrent) metaParts.push(`max concurrent: ${state.maxConcurrent}`);
-        const metaLine = ` ${metaParts.join(" \u2502 ")}`;
-        const metaVis = metaLine.length;
-        lines.push(
-          bord("\u2502") +
-            theme.fg("dim", metaLine) +
-            " ".repeat(Math.max(0, w - metaVis)) +
-            bord("\u2502"),
-        );
+        for (let fi = 0; fi < flows.length; fi++) {
+          const pf = flows[fi];
 
-        if (state.flowPath) {
-          const pathLine = ` File: ${state.flowPath}`;
-          const pathTrunc = pathLine.length > w ? pathLine.slice(0, w - 3) + "..." : pathLine;
-          const pathVis = Math.min(pathLine.length, w);
-          lines.push(
-            bord("\u2502") +
-              theme.fg("dim", pathTrunc) +
-              " ".repeat(Math.max(0, w - pathVis)) +
-              bord("\u2502"),
-          );
-        }
+          // Flow header: name + metadata
+          const stepCount = pf.steps.length;
+          const metaParts: string[] = [`${stepCount} step${stepCount !== 1 ? "s" : ""}`];
+          if (pf.maxConcurrent) metaParts.push(`max concurrent: ${pf.maxConcurrent}`);
+          const prefix = fi === 0 ? spinnerStr : "";
+          content.push(`${prefix}${theme.fg("accent", "\u25C7")} ${theme.fg("accent", pf.name)}  ${theme.fg("dim", metaParts.join(" \u2502 "))}`);
 
-        // Separator
-        lines.push(bord("\u2502\u2500" + "\u2500".repeat(Math.max(0, w - 2)) + "\u2500\u2502"));
-
-        // -- Steps section ----------------------------------------------------
-        if (state.dagSteps.length > 0) {
-          const visibleSteps = state.dagSteps.slice(0, MAX_VISIBLE_STEPS);
-          const remaining = state.dagSteps.length - visibleSteps.length;
-
-          for (let i = 0; i < visibleSteps.length; i++) {
-            const step = visibleSteps[i];
-            const num = `${i + 1}.`;
-            const stepHeader = ` ${num} ${theme.fg("accent", step.id)}`;
-            const stepHeaderVis = 1 + num.length + 1 + step.id.length;
-            lines.push(
-              bord("\u2502") + stepHeader + " ".repeat(Math.max(0, w - stepHeaderVis)) + bord("\u2502"),
-            );
-
-            // Task description (wrapped to width)
-            if (step.task) {
-              const indent = "    ";
-              const maxTaskW = w - indent.length;
-              const taskWords = step.task.split(/\s+/);
-              let taskLine = "";
-              for (const word of taskWords) {
-                if (taskLine.length + word.length + 1 > maxTaskW) {
-                  const tl = indent + taskLine;
-                  const tlVis = tl.length;
-                  lines.push(
-                    bord("\u2502") + theme.fg("muted", tl) + " ".repeat(Math.max(0, w - tlVis)) + bord("\u2502"),
-                  );
-                  taskLine = word;
-                } else {
-                  taskLine = taskLine ? taskLine + " " + word : word;
-                }
+          // Truncated step chain: \u25CB step1 \u2192 \u25CB step2 \u2192 ...
+          if (pf.steps.length > 0) {
+            const chainMaxW = w - 4; // padding
+            let chain = "";
+            let shown = 0;
+            for (const step of pf.steps) {
+              const segment = (shown > 0 ? " \u2192 " : "") + `\u25CB ${step.id}`;
+              if (chain.length + segment.length > chainMaxW && shown > 0) {
+                const remaining = pf.steps.length - shown;
+                chain += theme.fg("dim", ` ... +${remaining} more`);
+                break;
               }
-              if (taskLine) {
-                const tl = indent + taskLine;
-                const tlVis = tl.length;
-                lines.push(
-                  bord("\u2502") + theme.fg("muted", tl) + " ".repeat(Math.max(0, w - tlVis)) + bord("\u2502"),
-                );
-              }
+              chain += theme.fg("dim", shown > 0 ? " \u2192 " : "") + theme.fg("dim", "\u25CB") + " " + theme.fg("muted", step.id);
+              shown++;
             }
-
-            // Dependencies
-            if (step.blockedBy.length > 0) {
-              const depLine = `    blockedBy: ${step.blockedBy.join(", ")}`;
-              const depTrunc = depLine.length > w ? depLine.slice(0, w - 3) + "..." : depLine;
-              const depVis = Math.min(depLine.length, w);
-              lines.push(
-                bord("\u2502") + theme.fg("dim", depTrunc) + " ".repeat(Math.max(0, w - depVis)) + bord("\u2502"),
-              );
-            }
-
-            // Empty line between steps (except last)
-            if (i < visibleSteps.length - 1) {
-              lines.push(bord("\u2502") + " ".repeat(w) + bord("\u2502"));
-            }
+            content.push(`  ${chain}`);
           }
 
-          if (remaining > 0) {
-            const moreLine = `    ... and ${remaining} more step${remaining > 1 ? "s" : ""}`;
-            const moreVis = moreLine.length;
-            lines.push(
-              bord("\u2502") + theme.fg("dim", moreLine) + " ".repeat(Math.max(0, w - moreVis)) + bord("\u2502"),
-            );
-          }
-
-          // Empty line before DAG
-          lines.push(bord("\u2502") + " ".repeat(w) + bord("\u2502"));
-        }
-
-        // -- Dependency tree --------------------------------------------------
-        if (state.dagSteps.length > 1) {
-          const dagLabel = " Dependency Graph:";
-          lines.push(
-            bord("\u2502") +
-              theme.fg("dim", dagLabel) +
-              " ".repeat(Math.max(0, w - dagLabel.length)) +
-              bord("\u2502"),
-          );
-
-          const dagLines = renderDag(state.dagSteps, theme);
-          for (const dagLine of dagLines) {
-            lines.push(bord("\u2502") + dagLine);
+          // Add separator between flows (but not after the last one)
+          if (fi < flows.length - 1) {
+            separators.push(content.length - 1);
           }
         }
 
-        // -- Keyboard hints ---------------------------------------------------
-        {
-          const hintText = " Ctrl+X stop \u00B7 Ctrl+O inspect full flow";
-          const hintVis = hintText.length;
-          lines.push(
-            bord("\u2502") +
-              theme.fg("dim", hintText) +
-              " ".repeat(Math.max(0, w - hintVis)) +
-              bord("\u2502"),
-          );
-        }
+        const hintParts = ["Ctrl+X stop", "Ctrl+O inspect"];
+        if (flows.length > 1) hintParts[1] = "Ctrl+O inspect flows";
 
-        // Bottom border
-        lines.push(bord("\u2514" + "\u2500".repeat(w) + "\u2518"));
+        const boxLines = renderBox({
+          width,
+          theme,
+          title: "Flow Preview",
+          content,
+          separatorAfter: separators,
+          footer: [theme.fg("dim", hintParts.join(" \u00B7 "))],
+        });
+        lines.push(...boxLines);
+      }
+
+      // Height ratcheting: pad to prevent jitter when flows are added
+      if (state.mode === "preview") {
+        if (lines.length > previewMinHeight) previewMinHeight = lines.length;
+        while (lines.length < previewMinHeight) lines.push("");
       }
 
       // Use Text component for ANSI-aware width padding
@@ -912,11 +923,40 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   }
 
   function getFlowContent(): string | null {
-    return lastFlowContent;
+    return flowContents.length > 0 ? flowContents[flowContents.length - 1].content : null;
   }
 
   function hasFlowContent(): boolean {
-    return lastFlowContent !== null;
+    return flowContents.length > 0;
+  }
+
+  function getFlowContents(): Array<{ name: string; content: string }> {
+    return flowContents;
+  }
+
+  function setPreviewSubMode(mode: "preview" | "navigate"): void {
+    state.previewSubMode = mode;
+    if (mode === "navigate") {
+      state.selectedFlowIndex = 0;
+    }
+    invalidateFn?.();
+  }
+
+  function getPreviewSubMode(): "preview" | "navigate" {
+    return state.previewSubMode;
+  }
+
+  function getSelectedFlowIndex(): number {
+    return state.selectedFlowIndex;
+  }
+
+  function setSelectedFlowIndex(index: number): void {
+    state.selectedFlowIndex = Math.max(0, Math.min(index, state.parsedFlows.length - 1));
+    invalidateFn?.();
+  }
+
+  function getFlowCount(): number {
+    return flowContents.length;
   }
 
   function onAssistantText(text: string): void {
@@ -933,5 +973,5 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     return eventLog;
   }
 
-  return { factory, setUpdateCallback, onToolCall, onToolResult, setReady, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getEventLog, dispose };
+  return { factory, setUpdateCallback, onToolCall, onToolResult, setReady, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getFlowContents, setPreviewSubMode, getPreviewSubMode, getSelectedFlowIndex, setSelectedFlowIndex, getFlowCount, getEventLog, dispose };
 }

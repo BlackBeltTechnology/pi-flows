@@ -9,8 +9,9 @@ export interface DetailScrollState {
   contentScroll: number; // line offset within expanded content (EXPANDED mode only)
 }
 
-export function createDetailScrollState(): DetailScrollState {
-  return { scrollOffset: 0, selectedIndex: 0, expandedIndex: -1, contentScroll: 0 };
+export function createDetailScrollState(initialIndex?: number): DetailScrollState {
+  const idx = initialIndex != null && initialIndex >= 0 ? initialIndex : 0;
+  return { scrollOffset: 0, selectedIndex: idx, expandedIndex: -1, contentScroll: 0 };
 }
 
 /**

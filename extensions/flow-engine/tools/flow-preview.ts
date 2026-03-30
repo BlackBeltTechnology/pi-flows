@@ -8,8 +8,8 @@
 
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig, FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, FlowRefStep } from "../types.js";
-import { parseFlowString } from "../flow-parser.js";
+import type { AgentConfig, FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep } from "../types.js";
+import { parseFlowYamlString } from "../flow-parser-yaml.js";
 
 // ---- Preview rendering ----------------------------------------------------
 
@@ -101,6 +101,18 @@ function renderFlowPreview(flow: FlowConfig, knownAgents: Map<string, AgentConfi
         break;
       }
 
+      case "agent-loop-decision": {
+        const aldStep = step as AgentLoopDecisionStep;
+        lines.push(`  ${num}. [agent-loop-decision] ${aldStep.id}`);
+        lines.push(`     agent: ${aldStep.agent}`);
+        if (aldStep.task) {
+          lines.push(`     task: ${truncate(aldStep.task, 80)}`);
+        }
+        lines.push(`     loop -> ${aldStep.loop_target} (max ${aldStep.max_iterations} iterations)`);
+        lines.push(`     exit -> ${aldStep.exit_target}`);
+        break;
+      }
+
       case "flow-ref": {
         const frStep = step as FlowRefStep;
         lines.push(`  ${num}. [flow-ref] ${frStep.id}`);
@@ -162,13 +174,13 @@ export function registerFlowPreviewTool(
     description:
       "Preview a flow by rendering its steps, dependencies, and custom agents as formatted text. Returns the preview — the orchestrator handles user approval.",
     parameters: Type.Object({
-      content: Type.String({ description: "The flow .md content to preview" }),
+      content: Type.String({ description: "The flow YAML content to preview" }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       // Parse the flow content
       let flow: FlowConfig;
       try {
-        flow = parseFlowString(params.content, "<preview>");
+        flow = parseFlowYamlString(params.content, "<preview>");
       } catch (err) {
         return {
           content: [

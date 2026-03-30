@@ -53,6 +53,7 @@ export function registerAgentCatalogTool(
         description: string;
         tools: string[];
         inputs?: string[];
+        outputs?: Array<{name: string, description?: string}>;
         card?: { type?: string; label?: string; metric?: string };
         source_type: "local" | "package" | "built-in";
         source_path?: string;
@@ -69,6 +70,7 @@ export function registerAgentCatalogTool(
           description: agent.description,
           tools: agent.tools,
           ...(agent.inputs && agent.inputs.length > 0 ? { inputs: agent.inputs } : {}),
+          ...(agent.outputs && agent.outputs.length > 0 ? { outputs: agent.outputs } : {}),
           ...(agent.card ? { card: agent.card } : {}),
           source_type: sourceType,
           // Include path for local/package agents so architect can read/modify them

@@ -10,6 +10,9 @@
       "./extensions"
     ]
   },
+  "dependencies": {
+    "yaml": "^2.8.0"
+  },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",

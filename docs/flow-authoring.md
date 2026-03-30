@@ -1,110 +1,115 @@
-# Flow Authoring
+# Flow Authoring Reference
 
-Comprehensive reference for writing agents (`.md` files) and flows (`.flow.md` files). For a quick start, see the main [README](../README.md).
-
-## Table of Contents
-
-- [Writing Agents](#writing-agents)
-  - [Agent Frontmatter Reference](#agent-frontmatter-reference)
-  - [Available Agent Tools](#available-agent-tools)
-  - [Model Roles](#model-roles)
-  - [Access Control](#access-control)
-  - [Skills Directory Format](#skills-directory-format)
-  - [Agent Example](#agent-example)
-- [Writing Flows](#writing-flows)
-  - [Flow Frontmatter](#flow-frontmatter)
-  - [Step Types](#step-types)
-  - [Template Variables](#template-variables)
-  - [Flow Example](#flow-example)
+Complete reference for the agent `.md` and flow `.yaml` file formats. Covers every frontmatter field, all step types with syntax and examples, the template variable system, and the `finish` result envelope agents must produce.
 
 ---
 
-## Writing Agents
+## Agent File Format
 
-Agents are `.md` files with YAML frontmatter and a system prompt body. Place them in `.pi/flows/agents/` or a registered agents directory (via `flow:register-agents-dir`).
+Agents are Markdown files with a YAML frontmatter block followed by the system prompt body. The frontmatter configures how the agent is dispatched; the body is the prompt the agent receives.
 
-### Agent Frontmatter Reference
+**Location:** `.pi/flows/agents/<name>.md` or a package-registered agents directory.
 
-| Field | Required | Type | Description | Example |
-|-------|:---:|------|-------------|---------|
-| `name` | yes | `string` | Unique agent identifier | `researcher` |
-| `description` | yes | `string` | What this agent does | `Investigates the codebase` |
-| `model` | yes | `string` | Model role (`@coding`, `@planning`) or direct model ID | `@coding` |
-| `thinking` | no | `string` | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` | `high` |
-| `tools` | yes | `string` | Comma-separated list of tools | `read, write, edit, bash` |
-| `skills` | no | `string \| string[]` | Skill names to inject into system prompt | `judo-backend-docs` |
-| `context` | no | `string[]` | File paths to inject as context (resolved relative to project root) | `["src/config.ts"]` |
-| `inputs` | no | `string[]` | Named inputs this agent expects (populated via step `inputs:`) | `["research_output"]` |
-| `output` | no | `string` | Default output filename | `report.md` |
-| `interactive` | no | `boolean` | Whether this agent interacts with the user | `false` |
-| `access` | no | `AccessRules` | Sandboxing rules (see [Access Control](#access-control)) | — |
-| `card` | no | `CardConfig` | Dashboard card configuration (see below) | — |
-| `architect` | no | `ArchitectMeta` | Hints for the Flow Architect (see below) | — |
+### Complete frontmatter reference
 
-#### card (Dashboard Card Config)
+```yaml
+---
+name: backend-developer
+description: Implements backend changes based on research findings
+model: @coding
+thinking: high
+tools: read, write, edit, bash, grep, skill_read
+skills: my-backend-docs
+context:
+  - docs/architecture.md
+  - config/api-spec.json
+inputs:
+  - research_output
+  - ticket_id
+output: implementation-result.md
+interactive: false
+access:
+  read:
+    - "src/**"
+    - "tests/**"
+  write:
+    - "src/**"
+    - "tests/**"
+  bash:
+    deny:
+      - "rm -rf *"
+      - "curl *"
+      - "sudo *"
+card:
+  label: "Developer"
+  metric: "developer"
+architect:
+  use_when: "When backend code changes are needed"
+  produces: "Modified source files with tests"
+  depends_on: "Research findings and ticket context"
+  domain: "development"
+---
 
-| Sub-field | Type | Description | Example |
-|-----------|------|-------------|---------|
-| `card.label` | `string` | Display label on the dashboard card | `"Research"` |
-| `card.metric` | `string` | Metric renderer name (built-in: `default`, `files`, `tests`) | `"files"` |
-| `card.type` | `string` | Card type hint | `"agent"` |
-| `card.role` | `string` | Visual role hint | `"primary"` |
+You are a backend developer. Your task: ${{task}}
 
-Custom metric renderers are registered via `flow:register-card`. See [events-api.md](events-api.md#flowregister-card).
+Use the research context provided:
+${{input.research_output}}
 
-#### architect (Flow Architect Metadata)
+Reference ticket: ${{input.ticket_id}}
 
-| Sub-field | Type | Description | Example |
-|-----------|------|-------------|---------|
-| `architect.use_when` | `string` | When the architect should select this agent | `"When code changes are needed"` |
-| `architect.produces` | `string` | What this agent outputs | `"Modified source files"` |
-| `architect.depends_on` | `string` | What inputs this agent needs | `"Research results"` |
-| `architect.domain` | `string` | Domain classification | `"development"` |
+Focus on clean, tested implementations. Run the existing test suite after changes.
+```
 
-### Available Agent Tools
+### Field reference
 
-These tools can be declared in the agent `tools:` field:
+| Field | Required | Type | Description |
+|-------|:--------:|------|-------------|
+| `name` | ✓ | string | Unique identifier. Used in flow steps (`agent: name`) and the `subagent` tool. Must be unique across all registered agents. |
+| `description` | ✓ | string | Short description. Shown in the Flow Architect and `/catalog`. |
+| `model` | ✓ | string | Model role (`@coding`, `@planning`, etc.) or direct model ID (`claude-sonnet-4-20250514`). Roles are resolved from the user's `/roles` config. |
+| `thinking` | | string | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Activates extended reasoning on supported models. |
+| `tools` | ✓ | csv or list | Tools the agent can call. See [Available Tools](#available-tools). `finish` is auto-injected — do not declare it. |
+| `skills` | | csv or list | Skill names to inject into this agent's system prompt. Each skill must exist in a registered skills directory. |
+| `context` | | yaml list | File paths (relative to project root) injected as read-only context before the agent's first turn. |
+| `inputs` | | yaml list | Declared input names. These become `${{input.NAME}}` variables in the system prompt. Must be wired in the flow step's `inputs:` block. |
+| `output` | | string | Default output filename (written by the agent). Overridable per step. |
+| `interactive` | | boolean | If `true`, the agent can call `ask_user` to prompt the user mid-execution. Default: `false`. |
+| `access` | | block | Sandboxing rules. Restricts `read`, `write`, and `bash`. See [Access Control](#access-control). |
+| `card` | | block | Dashboard card display configuration. See [Dashboard Cards](#dashboard-cards). |
+| `architect` | | block | Metadata for the Flow Architect LLM. Helps it understand when and how to use this agent. |
 
-| Tool | Description |
+### Model reference formats
+
+```yaml
+model: @coding                          # Role alias — resolved via /roles
+model: claude-sonnet-4-20250514         # Direct model ID
+model: claude-sonnet-4-20250514:high    # Direct model ID with thinking suffix
+```
+
+Role aliases (`@planning`, `@coding`, `@fast`, `@research`, `@compact`, `@vision`) are resolved from the user's role assignments at dispatch time. If no model is assigned to the role, the agent fails with a clear error.
+
+### Available tools
+
+Declare these in the `tools:` field. Tools not listed are unavailable to the agent.
+
+| Name | Description |
 |------|-------------|
 | `read` | Read file contents (text and images) |
-| `write` | Write/create files |
-| `edit` | Surgical text replacement |
+| `write` | Write or create files |
+| `edit` | Surgical text replacement in existing files |
 | `bash` | Execute shell commands |
-| `grep` | Search file contents (supports a `glob:` parameter for file filtering) |
+| `grep` | Search file contents with regex (supports `glob:` filter) |
 | `find` | Find files in directory trees (supports glob patterns) |
 | `ls` | List directory contents |
-| `skill_read` | Read skill documentation files |
+| `skill_read` | Read detail files from declared skills |
 
-> **Note:** The `finish` tool is automatically available to every agent — do **not** declare it. Agents must call `finish` as their last action to submit structured results. See [tools-reference.md](tools-reference.md#finish) for the `finish` parameter schema.
+> **`finish` is automatic.** Never declare it. Every agent session has `finish` auto-injected. Agents *must* call `finish` as their last action.
 
-> **Extension tools:** Packages can register additional tools via `flow:register-tool`. These domain-specific tools (e.g., `model_cli`) are made available to any agent that declares them in `tools:`. See [events-api.md](events-api.md#flowregister-tool).
+> **Extension tools** (e.g., `model_cli`) registered by packages via `flow:register-tool` can also be declared here.
 
-### Model Roles
+> **Do not declare** `subagent`, `ask_user` (unless `interactive: true`), or any architect tools (`agent_catalog`, `flow_validate`, etc.) — they are blocked in agent subprocesses.
 
-Agents reference models using role aliases prefixed with `@`. Roles are assigned to specific models via the `/roles` command.
-
-| Role | Typical Use |
-|------|-------------|
-| `@planning` | High-level reasoning, architecture, decision-making |
-| `@coding` | Code generation and modification |
-| `@fast` | Quick tasks, routing decisions |
-| `@research` | Investigation and analysis |
-| `@compact` | Summarization |
-| `@vision` | Image/visual analysis |
-
-**Setup:**
-
-```
-/roles             # Interactive role assignment UI
-/provider          # Add an LLM provider first
-```
-
-**Resolution:** When an agent specifies `model: @coding`, the flow engine resolves `@coding` to whatever concrete model the user has assigned to that role. If a model reference includes a thinking suffix (e.g., `claude-sonnet-4-20250514:high`), the suffix is used as the thinking level unless the agent's `thinking` field overrides it.
-
-### Access Control
-
-The `access` frontmatter block restricts what an agent can do, providing sandboxing for sensitive operations.
+### Access control
 
 ```yaml
 access:
@@ -116,331 +121,553 @@ access:
   bash:
     deny:
       - "rm -rf *"
-      - "sudo *"
       - "curl *"
+      - "sudo *"
 ```
 
-| Sub-field | Type | Description |
-|-----------|------|-------------|
-| `access.read` | `string[]` | Glob patterns for allowed read paths. If set, reads outside these patterns are blocked. |
-| `access.write` | `string[]` | Glob patterns for allowed write paths. If set, writes outside these patterns are blocked. |
-| `access.bash.deny` | `string[]` | Command patterns to block. Matched against the `command` argument of bash tool calls. |
+- **`read`** — Glob patterns for allowed read paths. Reads outside these paths are blocked.
+- **`write`** — Glob patterns for allowed write paths. Writes outside are blocked.
+- **`bash.deny`** — Shell command patterns to block. Matched against the full command string.
 
-### Skills Directory Format
+If `access` is omitted entirely, no restrictions apply.
 
-Skills are directories containing a `SKILL.md` entry point and optional detail files. Place skill directories inside a directory that is registered with `flow:register-skills-dir`. Project-local skills can also be placed in `.pi/skills/<skill-name>/`.
+### Dashboard cards
 
-```
-my-skills/
-└── my-framework-docs/       # Skill directory (= skill name)
-    ├── SKILL.md              # Required: overview + list of detail files
-    ├── getting-started.md    # Detail file (readable via skill_read)
-    ├── api-reference.md
-    └── examples.md
+```yaml
+card:
+  label: "Developer"     # Display label shown on the card
+  metric: "developer"    # Metric type — matches a registered AgentCardRenderer
 ```
 
-**`SKILL.md` format:**
+Built-in metric types: `default` (no metric line), `files` (counts file edits), `tests` (counts test results).
 
-The full content of `SKILL.md` is injected into the agent's system prompt when the agent declares the skill in its `skills:` frontmatter field. It should provide a concise overview and list all available detail files so the agent knows what to request via `skill_read`.
+Custom metric types are registered by packages via `flow:register-card`. See [events-api.md](events-api.md#flowregister-card).
 
-```markdown
-# My Framework Documentation
+### Architect metadata
 
-This skill provides reference documentation for MyFramework.
-
-## Overview
-
-MyFramework is a ... (brief description for context).
-
-## Available Reference Files
-
-Read these files with `skill_read` for detailed information:
-
-- `getting-started.md` — Installation, setup, and first steps
-- `api-reference.md` — Complete API reference
-- `examples.md` — Common usage patterns and recipes
-
-## Key Concepts
-
-- **Concept A**: Brief explanation
-- **Concept B**: Brief explanation
+```yaml
+architect:
+  use_when: "When backend code changes are needed"
+  produces: "Modified source files and tests"
+  depends_on: "Research summary and feature spec"
+  domain: "development"
 ```
 
-**How skills are used:**
+These fields are consumed by the Flow Architect agent when generating flows. They help the architect choose appropriate agents and sequence them correctly. All fields are optional but improve flow quality.
 
-1. The agent declares the skill in its frontmatter: `skills: my-framework-docs`
-2. At dispatch time, `SKILL.md` is prepended to the agent's system prompt
-3. The agent reads the overview and calls `skill_read` for detail files as needed
+### System prompt body
 
-**Discovery priority for skills:**
-1. Extra registered directories (via `flow:register-skills-dir`)
-2. pi-flows built-in skills directory
-3. There is no project-local skills auto-discovery — register `.pi/skills/` explicitly if needed
-
-### Agent Example
+The body below the second `---` is the agent's system prompt. It supports template variables:
 
 ```markdown
 ---
-name: backend-developer
-description: Implements backend changes based on research findings
-model: @coding
-thinking: high
-tools: read, write, edit, bash, grep
-skills: judo-backend-docs
-inputs:
-  - research_output
-card:
-  label: "Developer"
-  metric: "files"
-architect:
-  use_when: "When backend code changes are needed"
-  produces: "Modified source files"
-  depends_on: "research results"
-  domain: "development"
-access:
-  write:
-    - "src/**"
-    - "tests/**"
-  bash:
-    deny:
-      - "rm -rf *"
+name: developer
+...
 ---
 
 You are a backend developer. Your task: ${{task}}
 
-Use the research context provided:
+Research context:
 ${{input.research_output}}
 
-Focus on clean, tested implementations. Run existing tests after changes.
+Your job is to implement the feature described in the task. Follow the existing code style.
+Call `finish` when done with a summary of what you changed.
 ```
+
+Template variables in the body are expanded when the agent is dispatched — they are resolved against the flow's execution context at that point. See the [Template Variable Reference](#template-variable-reference) below.
 
 ---
 
-## Writing Flows
+## Flow File Format
 
-Flows are `.flow.md` files with YAML frontmatter and `##`-delimited steps. Save them in `.pi/flows/flows/` or a registered flows directory (via `flow:register-flows-dir`). Each saved flow auto-registers as a `/command`.
+Flows are `.yaml` files with YAML frontmatter and `##`-delimited step sections. The file defines a pipeline of steps that form a directed acyclic graph (DAG) via `blockedBy` declarations.
 
-### Flow Frontmatter
+**Location:** `.pi/flows/flows/<name>.yaml` or a package-registered flows directory.
 
-| Field | Required | Type | Description |
-|-------|:---:|------|-------------|
-| `name` | yes | `string` | Flow identifier (for documentation purposes — see note below) |
-| `description` | yes | `string` | What this flow does |
-| `max_concurrent` | no | `number` | Maximum agents running in parallel (default: unlimited) |
-| `task_required` | no | `boolean` | When `true`, prompt user for task if no command args provided |
-| `task_prompt` | no | `string` | Custom prompt text (default: "Describe what you want \<name\> to do:") |
-
-> **Flow naming from the filesystem:** The flow's actual registered name — and thus its slash command — is derived from the file's path within the flows directory, **not** from the `name:` frontmatter field. The frontmatter `name:` is overridden at discovery time:
->
-> - `flows/my-research.flow.md` → registers as `/my-research`
-> - `flows/judo/research.flow.md` → registers as `/judo:research`
->
-> Subdirectory nesting maps to a colon prefix (max 1 level deep). Files nested 2+ levels are skipped. Keep the frontmatter `name:` in sync with the expected command name for clarity, but the command name is always filesystem-derived.
-
-### Step Types
-
-Each `## heading` defines a step. The step type is determined by the **header prefix**:
-
-| Header syntax | Step type |
-|---------------|-----------|
-| `## step-id` | Agent step (default — requires `agent:` in body) |
-| `## fork: id` | Fork step (user choice branching) |
-| `## conditional: id` | Conditional step (data-driven branching) |
-| `## agent-decision: id` | Agent decision step (AI-driven routing) |
-| `## agent-loop-decision: id` | Agent loop decision step (iterative cycles) |
-| `## flow-ref: path` | Flow reference step (delegate to sub-flow) |
-
-For agent steps, the heading text is the **step ID** — used for wiring (`blockedBy`, `${{result.ID}}`), branching, and result storage. The `agent:` field is **always required**.
-
-#### agent
-
-Dispatch a named agent to perform a task.
-
-| Field | Required | Description |
-|-------|:---:|-------------|
-| `agent` | yes | Which agent to dispatch |
-| `task` | no | Task override (template string) |
-| `model` | no | Model override for this step |
-| `blockedBy` | no | Step IDs that must complete first (comma-separated or array) |
-| `inputs` | no | Named inputs wired from template expressions |
-| `output` | no | Output file |
-| `reads` | no | Files to read before execution |
-| `on_complete` | no | Step ID to route to on success |
-| `on_error` | no | Step ID to route to on error |
+### Flow frontmatter
 
 ```yaml
-## developer
-agent: backend-developer
-blockedBy: researcher
-inputs:
-  research_output: "${{result.researcher.summary}}"
-task: Implement based on research: ${{input.research_output}}
-```
-
-#### fork
-
-Ask the user a question and branch based on their answer. Fork steps use the `## fork: id` header syntax — the step type is determined by the header prefix, not a body field.
-
-| Field | Required | Description |
-|-------|:---:|-------------|
-| `question` | yes | Question to display |
-| `options` | yes | Answer choices (comma-separated or YAML list) |
-| `branches` | yes | Map of option text → step ID |
-| `allowNotes` | no | Prompt for optional freetext notes after selection. Access via `${{fork.ID.notes}}` — wire into downstream branch step tasks. |
-| `allowCustom` | no | Append "Other (describe)" option. Freetext answers are routed by a decision agent. |
-| `multiSelect` | no | Allow multiple selections. All selected branches execute sequentially. |
-| `agent` | no | Agent name for autonomous mode. When autonomous mode is active (Ctrl+A), this agent decides the branch instead of prompting the user. |
-| `task` | no | Task for the autonomous decision agent. Defaults to a prompt containing the question and options. |
-
-**Autonomous mode:** If the flow is running in autonomous mode (`🤖 auto` shown in the footer) and the fork step has an `agent:` field, the named agent automatically picks a branch. The agent calls `finish` with `branch: "<option>"`. If `agent:` is absent, autonomous-mode forks still prompt the user.
-
-```
-## fork: choose-approach
-question: Which approach do you prefer?
-options: Quick fix, Full refactor
-branches:
-  Quick fix: quick-fix-step
-  Full refactor: refactor-step
-```
-
-With an autonomous agent added:
-
-```
-## fork: choose-approach
-question: Which approach do you prefer?
-options: Quick fix, Full refactor
-branches:
-  Quick fix: quick-fix-step
-  Full refactor: refactor-step
-agent: router-agent
-task: "Based on the research summary, choose the most appropriate approach: ${{result.researcher.summary}}"
-```
-
-#### conditional
-
-Branch based on the presence of data in a previous step's result. Conditional steps use the `## conditional: id` header syntax.
-
-| Field | Required | Description |
-|-------|:---:|-------------|
-| `check` | yes | `stepId` or `stepId.field` — field to check from a completed step's result. Supported fields: `artifacts` (default), `summary`, `files`, `status`. |
-| `present` | yes | Step ID to route to if the resolved field is non-empty |
-| `absent` | yes | Step ID to route to if the resolved field is empty or the step has no result |
-
-```
-## conditional: check-gaps
-check: researcher.artifacts
-present: fix-gaps-step
-absent: proceed-step
-```
-
-The `check` field is parsed as `stepId.field`. If just `stepId` is given (no dot), the `artifacts` field is checked. The route to `present` if the field's text content is non-empty, `absent` otherwise.
-
-#### agent-decision
-
-Let an agent analyze results and choose a branch. Agent decision steps use the `## agent-decision: id` header syntax.
-
-| Field | Required | Description |
-|-------|:---:|-------------|
-| `agent` | yes | Agent name for the decision |
-| `task` | yes | Task for the decision agent (template string) |
-| `branches` | yes | Map of branch name → step ID |
-
-```
-## agent-decision: route-decision
-agent: my-router
-task: "Analyze results and decide: ${{result.analyzer.summary}}"
-branches:
-  needs-work: fix-step
-  ready: deploy-step
-```
-
-The decision agent must call `finish` with a `branch` parameter matching one of the declared branch names.
-
-#### agent-loop-decision
-
-Iterative verify/fix cycles. An agent decides whether to loop back or exit forward. Loop decision steps use the `## agent-loop-decision: id` header syntax.
-
-| Field | Required | Description |
-|-------|:---:|-------------|
-| `agent` | yes | Agent name for the loop decision |
-| `task` | yes | Task for the decision agent (template string) |
-| `loop_target` | yes | Step ID to jump back to (must be defined earlier in the flow) |
-| `exit_target` | yes | Step ID to continue to when exiting the loop |
-| `max_iterations` | yes | Safety cap — forces exit when exceeded (positive integer) |
-
-```
-## agent-loop-decision: verify-loop
-agent: verifier
-task: "Check implementation: ${{result.developer.summary}}"
-loop_target: developer
-exit_target: finalize
-max_iterations: 3
-```
-
-The decision agent calls `finish` with `branch: "developer"` (the `loop_target` step ID) to loop back, or `branch: "finalize"` (the `exit_target` step ID) to exit forward. When `max_iterations` is exceeded, the flow forces exit to `exit_target`.
-
-#### flow-ref
-
-Delegate execution to a sub-flow. The path to the sub-flow is encoded directly in the header: `## flow-ref: <path>`.
-
-| Field | Required | Description |
-|-------|:---:|-------------|
-| `on_complete` | no | Step ID to route to on success |
-| `on_error` | no | Step ID to route to on error |
-
-```
-## flow-ref: .pi/flows/flows/test-suite.flow.md
-on_complete: deploy-step
-on_error: fix-step
-```
-
-### Template Variables
-
-Use these in `task`, `inputs`, and `question` fields:
-
-| Variable | Resolves To |
-|----------|-------------|
-| `${{task}}` | The task passed when the flow was invoked |
-| `${{result.<step-id>.summary}}` | Summary from a completed step's `finish` call |
-| `${{result.<step-id>.status}}` | Status: `complete`, `error`, `blocked` |
-| `${{result.<step-id>.artifacts}}` | Structured data (XML) from a step's `finish` call |
-| `${{result.<step-id>.files}}` | Files touched by a step |
-| `${{result.<step-id>}}` | Full output from a step |
-| `${{input.<name>}}` | Resolved step input value (wired in `inputs:` block) |
-| `${{fork.<id>.answer}}` | User's answer from a fork step |
-| `${{fork.<id>.notes}}` | User's notes from a fork step |
-| `${{loop.<id>.iteration}}` | Current loop iteration number |
-| `${{loop.<id>.max}}` | Max iterations for a loop |
-
-### Flow Example
-
-```markdown
 ---
 name: research-and-build
 description: Research the codebase then implement changes
 max_concurrent: 2
+task_required: true
+task_prompt: "What feature should I research and implement?"
+---
+```
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `name` | ✓ | Used for documentation. The actual slash command derives from the file path, not this field. |
+| `description` | ✓ | Shown in the command list and dashboard header. |
+| `max_concurrent` | | Maximum agents running in parallel. Default: `4`. Use `1` to force sequential execution. |
+| `task_required` | | When `true`, pi-flows prompts the user for a task if they invoke the command without arguments. |
+| `task_prompt` | | Custom prompt text shown when asking for a task. Default: `"Describe what you want <name> to do:"`. |
+
+> **Command naming.** The slash command is derived from the file path, not the `name:` field:
+>
+> | File path | Command |
+> |-----------|---------|
+> | `.pi/flows/flows/research.yaml` | `/research` |
+> | `.pi/flows/flows/judo/apply.yaml` | `/judo:apply` |
+>
+> Keep `name:` in sync with the file path for clarity, but pi-flows always uses the filesystem-derived name.
+
+---
+
+## Step Types
+
+Steps are `##`-delimited sections in the flow body. The `##` header determines the step type and ID:
+
+| Header syntax | Step type |
+|---------------|-----------|
+| `## step-id` | Agent step (default) |
+| `## fork: step-id` | Fork step |
+| `## conditional: step-id` | Conditional step |
+| `## agent-decision: step-id` | Agent decision step |
+| `## agent-loop-decision: step-id` | Agent loop decision step |
+| `## flow-ref: path/to/flow.yaml` | Flow reference step |
+
+---
+
+### Agent Steps
+
+Dispatches a named agent with an optional task override. This is the most common step type.
+
+**Syntax:**
+
+```markdown
+## step-id
+agent: agent-name
+task: Optional task override. Supports ${{template}} variables.
+model: @fast                     # optional model override for this step only
+blockedBy: other-step, another   # comma-separated step IDs
+inputs:
+  input_name: "${{result.other-step.summary}}"
+output: result-file.md           # optional output filename override
+reads:                           # files to inject as context before execution
+  - docs/spec.md
+on_complete: next-step           # route to this step on success
+on_error: error-handler          # route to this step on failure
+```
+
+**Field reference:**
+
+| Field | Description |
+|-------|-------------|
+| `agent` | **Required.** Agent name to dispatch. Must exist in the agent registry. |
+| `task` | Task override. If omitted, uses the flow's task (`${{task}}`). Supports template variables. |
+| `model` | Override the agent's `model` field for this step only. |
+| `blockedBy` | Comma-separated step IDs that must complete before this step starts. |
+| `inputs` | Named input values wired from template expressions. See [Input Wiring](#input-wiring). |
+| `output` | Override the agent's default output filename. |
+| `reads` | File paths injected as read-only context before the agent's first turn. |
+| `on_complete` | Step ID to route to after this step succeeds. |
+| `on_error` | Step ID to route to if this step errors. |
+
+**Example — parallel research with sequential development:**
+
+```markdown
+---
+name: research-and-build
+description: Research then implement
 ---
 
 ## researcher
 agent: researcher
 task: Investigate the codebase for ${{task}}
 
+## summarizer
+agent: summarizer
+task: Summarize the test coverage
+
 ## developer
 agent: developer
-blockedBy: researcher
+blockedBy: researcher, summarizer
 inputs:
-  context: "${{result.researcher.summary}}"
-task: Implement based on research context: ${{input.context}}
+  research: "${{result.researcher.summary}}"
+  coverage: "${{result.summarizer.summary}}"
+task: Implement ${{task}} based on research
 
+## verifier
+agent: verifier
+blockedBy: developer
+task: Verify the implementation is correct
+```
+
+`researcher` and `summarizer` run in parallel. `developer` starts only after both complete. `verifier` runs last.
+
+**Reusing the same agent for multiple steps:**
+
+Give each instance a unique step ID:
+
+```markdown
+## draft
+agent: writer
+task: Write initial draft
+
+## revise
+agent: writer
+blockedBy: draft
+task: Revise based on feedback: ${{result.draft.summary}}
+```
+
+---
+
+### Fork Steps
+
+Pause execution and present the user with a choice. The selected option determines which branch runs next.
+
+**Syntax:**
+
+```markdown
+## fork: choose-approach
+question: Which approach do you prefer?
+options: Quick fix, Full refactor
+branches:
+  Quick fix: quick-fix-step
+  Full refactor: refactor-step
+allowNotes: true
+allowCustom: false
+multiSelect: false
+agent: router-agent
+task: Choose the approach based on the technical context
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `question` | ✓ | Question displayed to the user |
+| `options` | ✓ | Comma-separated or YAML list of choices |
+| `branches` | ✓ | Map of option text → step ID. Must cover all options. |
+| `allowNotes` | | If `true`, prompts for optional freetext notes after selection. Notes accessible via `${{fork.ID.notes}}`. |
+| `allowCustom` | | Deprecated — use `allowNotes`. Adds "Other (describe)" option. |
+| `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
+| `agent` | | Agent to use when autonomous mode is active (Ctrl+A). If absent, always prompts. |
+| `task` | | Context passed to the autonomous agent. Defaults to the question + options. |
+
+**Template variable access:**
+
+```yaml
+# In downstream steps:
+task: "User chose: ${{fork.choose-approach.answer}}"
+task: "Notes: ${{fork.choose-approach.notes}}"
+```
+
+**Autonomous mode:** When the user presses Ctrl+A (enabling `🤖 auto` in the footer), fork steps that have an `agent:` field skip the user prompt and let the named agent decide the branch automatically. Fork steps without `agent:` always prompt the user, even in autonomous mode.
+
+---
+
+### Conditional Steps
+
+Branch based on whether a field from a previous step's result contains data.
+
+**Syntax:**
+
+```markdown
+## conditional: check-artifacts
+check: researcher.artifacts
+present: process-artifacts
+absent: skip-to-build
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `check` | ✓ | `stepId` or `stepId.field` to inspect. Field defaults to `artifacts` if omitted. |
+| `present` | ✓ | Step ID to route to when the field is non-empty |
+| `absent` | ✓ | Step ID to route to when the field is empty or the step has no result |
+
+**Supported fields for `check`:**
+
+| Field | Checks |
+|-------|--------|
+| `artifacts` | The `<artifacts>` block from `finish` |
+| `summary` | The `<summary>` from `finish` |
+| `files` | The files list from `finish` |
+| `status` | The status field (`"complete"`, `"error"`, etc.) |
+
+**Example:**
+
+```markdown
+## researcher
+agent: researcher
+task: Look for existing API docs
+
+## conditional: has-docs
+check: researcher.artifacts
+present: use-existing-docs
+absent: create-new-docs
+
+## use-existing-docs
+agent: developer
+task: Extend existing API: ${{result.researcher.artifacts}}
+
+## create-new-docs
+agent: developer
+task: Create new API documentation from scratch
+```
+
+---
+
+### Agent Decision Steps
+
+Delegate a routing decision to an agent. The agent analyzes the flow context and calls `finish` with a `branch` name to select the next step.
+
+**Syntax:**
+
+```markdown
+## agent-decision: route-next
+agent: router-agent
+task: "Review the analysis and decide: ${{result.analyzer.summary}}"
+branches:
+  needs-work: fix-step
+  ready: deploy-step
+  escalate: human-review-step
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `agent` | ✓ | Agent name — must call `finish` with a valid `branch` name |
+| `task` | ✓ | Task for the decision agent. Supports template variables. |
+| `branches` | ✓ | Map of branch names → step IDs. The agent's `finish(branch:)` must match a key. |
+
+The decision agent's `finish` call:
+
+```
+finish(summary="Quality is sufficient.", branch="ready")
+```
+
+If the agent returns a `branch` value not in `branches`, the flow errors.
+
+---
+
+### Agent Loop Decision Steps
+
+Iterative verify/fix cycles. On each iteration, the agent decides whether to loop back for more work or exit forward.
+
+**Syntax:**
+
+```markdown
 ## agent-loop-decision: verify-loop
 agent: verifier
-task: "Check if implementation is correct: ${{result.developer.summary}}"
+task: "Check iteration ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}: ${{result.developer.summary}}"
+loop_target: developer
+exit_target: finalize
+max_iterations: 3
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `agent` | ✓ | Decision agent — calls `finish(branch:)` with `loop_target` or `exit_target` step ID |
+| `task` | ✓ | Task for the decision agent. Supports loop template variables. |
+| `loop_target` | ✓ | Step ID to jump back to when the agent decides more work is needed |
+| `exit_target` | ✓ | Step ID to continue to when the agent is satisfied |
+| `max_iterations` | ✓ | Safety cap — forces exit to `exit_target` when exceeded |
+
+**How the agent decides:**
+
+```
+# To continue looping:
+finish(summary="Tests still failing on auth module.", branch="developer")
+
+# To exit the loop:
+finish(summary="All tests passing.", branch="finalize")
+```
+
+The `branch` value must exactly match either `loop_target` or `exit_target`.
+
+**Loop template variables:**
+
+```yaml
+task: "Iteration ${{loop.verify-loop.iteration}} of ${{loop.verify-loop.max}}: ..."
+```
+
+**Full loop example:**
+
+```markdown
+## developer
+agent: developer
+task: Implement ${{task}}
+
+## verify-loop
+agent: verifier
+task: >
+  Check implementation (attempt ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}).
+  Developer output: ${{result.developer.summary}}
 loop_target: developer
 exit_target: finalize
 max_iterations: 3
 
 ## finalize
-agent: finalize
-blockedBy: verify-loop
-task: Write documentation for the changes made
+agent: summarizer
+task: Summarize the completed implementation
+```
+
+---
+
+### Flow Reference Steps
+
+Delegate execution to another flow file. The sub-flow runs to completion before the parent flow continues.
+
+**Syntax:**
+
+```markdown
+## flow-ref: .pi/flows/flows/sub-flow.yaml
+on_complete: next-step
+on_error: error-handler
+```
+
+The `##` header text IS the path — there is no separate `path:` field. The path is the full or relative path to the `.yaml` file.
+
+**Field reference:**
+
+| Field | Description |
+|-------|-------------|
+| `on_complete` | Step ID to route to after the sub-flow completes |
+| `on_error` | Step ID to route to if the sub-flow errors |
+
+---
+
+## Template Variable Reference
+
+Template variables are placeholders in `task`, `inputs`, `question`, and system prompt text. They are expanded just before an agent is dispatched.
+
+| Variable | Resolves To |
+|----------|-------------|
+| `${{task}}` | The task string passed when the flow was invoked |
+| `${{input.NAME}}` | A wired input value for this step (from the `inputs:` block) |
+| `${{result.STEP-ID}}` | Full raw output from a completed step |
+| `${{result.STEP-ID.summary}}` | Summary from `finish(summary:)` |
+| `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |
+| `${{result.STEP-ID.artifacts}}` | The `<artifacts>` XML block from `finish` |
+| `${{result.STEP-ID.files}}` | Human-readable file list (e.g., `src/auth.ts (created)`) |
+| `${{fork.STEP-ID.answer}}` | User's answer from a fork step |
+| `${{fork.STEP-ID.notes}}` | Optional notes the user added to a fork answer |
+| `${{loop.STEP-ID.iteration}}` | Current iteration number (1-based) in a loop step |
+| `${{loop.STEP-ID.max}}` | Maximum iterations configured for a loop step |
+
+> **Resolution order:** Variables are expanded at dispatch time, not at parse time. `${{result.X}}` resolves to the result of step X if X has already completed — this is guaranteed when `X` is in the current step's `blockedBy` chain.
+
+> **Missing values resolve to empty string.** A variable that references an unrun step, an undeclared input, or a non-existent field quietly becomes `""`.
+
+> **Legacy `{variable}` syntax** (without `${{...}}`) is still accepted for backward compatibility but is deprecated. Use `${{...}}` in all new flows.
+
+---
+
+## Input Wiring
+
+Inputs wire specific data from one step to another as named variables, separate from the task text.
+
+### Declare on the agent
+
+```yaml
+# agents/developer.md
+inputs:
+  - research_output
+  - ticket_context
+```
+
+### Wire in the flow step
+
+```yaml
+## developer
+agent: developer
+blockedBy: researcher
+inputs:
+  research_output: "${{result.researcher.summary}}"
+  ticket_context: "${{result.ticket-fetch.artifacts}}"
+```
+
+### Reference in the system prompt
+
+```markdown
+You are a developer. Task: ${{task}}
+
+Research context:
+${{input.research_output}}
+
+Ticket context:
+${{input.ticket_context}}
+```
+
+If the `inputs:` list is not declared in the agent's frontmatter, the input values are still substituted but the system prompt has no `${{input.NAME}}` to expand them into — making them silently useless. Always declare inputs in the frontmatter.
+
+---
+
+## The `finish` Result Envelope
+
+Agents must call `finish` as their last action to submit a structured result. The `finish` call's arguments are encoded as a `<result>` XML envelope in the output stream.
+
+### Standard finish call
+
+```
+finish(
+  summary="Implemented the feature. Added auth module with JWT support.",
+  status="complete",
+  files=[
+    { path: "src/auth.ts",        action: "created" },
+    { path: "tests/auth.test.ts", action: "created" }
+  ],
+  artifacts="<test_count>12</test_count><coverage>94%</coverage>"
+)
+```
+
+This produces:
+
+```xml
+<result status="complete">
+  <summary>Implemented the feature. Added auth module with JWT support.</summary>
+  <files>
+    <file path="src/auth.ts" action="created"/>
+    <file path="tests/auth.test.ts" action="created"/>
+  </files>
+  <artifacts>
+    <test_count>12</test_count>
+    <coverage>94%</coverage>
+  </artifacts>
+</result>
+```
+
+### Decision/loop finish call
+
+For `agent-decision` and `agent-loop-decision` steps, include the `branch` parameter:
+
+```
+finish(summary="Tests passing.", branch="finalize")
+```
+
+### Parameter reference
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `summary` | string | Human-readable summary. Shown in the dashboard and accessible via `${{result.STEP.summary}}`. |
+| `status` | string | `"complete"` (default), `"error"`, or `"blocked"`. |
+| `files` | list | Files the agent touched. Each entry: `{ path, action }` where action is `created`, `modified`, or `read`. |
+| `artifacts` | string | Arbitrary XML data. Accessible via `${{result.STEP.artifacts}}` and `conditional` step checks. |
+| `branch` | string | For decision steps only. Must match a key in the step's `branches:` map or one of `loop_target`/`exit_target`. |
+
+### System prompt guidance for agents
+
+Tell agents to call `finish` in their system prompt:
+
+```markdown
+When your work is complete, call `finish` with:
+- A concise summary of what you did
+- The list of files you created or modified
+- Any structured data in the artifacts field that downstream steps might need
+```
+
+For decision agents:
+
+```markdown
+Analyze the situation, then call `finish` with:
+- `summary`: Your reasoning
+- `branch`: One of "needs-work" or "ready"
 ```

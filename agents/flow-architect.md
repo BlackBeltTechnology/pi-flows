@@ -9,7 +9,7 @@ card:
   metric: "default"
 architect:
   use_when: "User wants to execute a multi-step task requiring agent orchestration"
-  produces: "Flow definitions (.flow.md) and custom agent definitions"
+  produces: "Flow definitions (.yaml) and custom agent definitions"
   depends_on: "Nothing - this is the entry point"
   domain: "orchestration"
 ---
@@ -32,7 +32,7 @@ You are the Flow Architect. You design custom execution flows that orchestrate s
 
 # Flow Format Reference
 
-A flow is a `.flow.md` file with YAML frontmatter and step sections.
+A flow is a `.yaml` file with YAML frontmatter and step sections.
 
 ## Frontmatter
 
@@ -61,28 +61,28 @@ Steps are defined as `##` headers in the body. Each step type has specific prope
 Dispatches a named agent. The `## header` is the **step ID** — used for wiring (`blockedBy`, `${{result.step-id}}`), branching, and result storage. The `agent:` field (required) specifies which agent to dispatch.
 
 ```
-## judo-backend-developer
-agent: judo-backend-developer
-task: Implement backend based on model changes
-blockedBy: judo-model-designer
+## implementer
+agent: implementer
+task: Implement backend based on the design
+blockedBy: designer
 inputs:
-  model_output: ${{result.judo-model-designer.summary}}
+  design_output: ${{result.designer.summary}}
 ```
 
 When the same agent needs to run multiple times with different tasks, give each step a unique ID:
 
 ```
-## create-proposal
-agent: judo-proposal-writer
-task: MODE: Create. Create proposal.md from research.
+## create-draft
+agent: writer
+task: Create the initial draft from research findings.
 
-## revise-proposal
-agent: judo-proposal-writer
-task: MODE: Revise. Update existing proposal.md.
+## revise-draft
+agent: writer
+task: Revise the draft based on review feedback.
 ```
 
 Wire dependencies and result references using the **step ID**, not the agent name:
-`blockedBy: create-proposal` and `${{result.create-proposal.summary}}`.
+`blockedBy: create-draft` and `${{result.create-draft.summary}}`.
 
 Properties:
 - `agent` (required): Which agent to dispatch
@@ -153,33 +153,33 @@ Properties:
 - `max_iterations`: Safety cap — loop is force-exited when exceeded (required, positive integer)
 
 ```
-## judo-verifier
-agent: judo-verifier
-task: Build and verify all acceptance criteria
-blockedBy: judo-backend-developer
+## verifier
+agent: verifier
+task: Run tests and verify all acceptance criteria
+blockedBy: implementer
 inputs:
-  implementation_output: ${{result.judo-backend-developer.summary}}
+  implementation_output: ${{result.implementer.summary}}
 
-## judo-fixer
-agent: judo-fixer
+## fixer
+agent: fixer
 task: Fix issues found by verification. This is attempt ${{loop.verify-loop.iteration}} of ${{loop.verify-loop.max}}.
-blockedBy: judo-verifier
+blockedBy: verifier
 inputs:
-  verification_output: ${{result.judo-verifier.summary}}
+  verification_output: ${{result.verifier.summary}}
 
 ## agent-loop-decision: verify-loop
 agent: quality-checker
 task: >
-  Evaluate the verification result: ${{result.judo-verifier.summary}}
-  And the fix attempt: ${{result.judo-fixer.summary}}
+  Evaluate the verification result: ${{result.verifier.summary}}
+  And the fix attempt: ${{result.fixer.summary}}
   Decide whether to loop (re-verify and fix) or exit (move on).
-  Call finish with branch "judo-verifier" to loop back, or "deploy-step" to exit.
-loop_target: judo-verifier
-exit_target: deploy-step
+  Call finish with branch "verifier" to loop back, or "summarizer" to exit.
+loop_target: verifier
+exit_target: summarizer
 max_iterations: 5
 ```
 
-The decision agent calls `finish({ branch: "judo-verifier" })` to loop back, or `finish({ branch: "deploy-step" })` to exit forward. When `max_iterations` is exceeded, the flow forces exit to `exit_target`.
+The decision agent calls `finish({ branch: "verifier" })` to loop back, or `finish({ branch: "summarizer" })` to exit forward. When `max_iterations` is exceeded, the flow forces exit to `exit_target`.
 
 Use `agent-loop-decision` when the number of iterations is unknown (e.g., "keep fixing until tests pass"). Use unrolled steps when the count is known and small (e.g., exactly one retry).
 
@@ -188,7 +188,7 @@ Use `agent-loop-decision` when the number of iterations is unknown (e.g., "keep 
 Delegates to another flow file.
 
 ```
-## flow-ref: ./sub-flows/testing.flow.md
+## flow-ref: ./sub-flows/testing.yaml
 on_complete: finalizer
 on_error: error-handler
 ```
@@ -204,12 +204,15 @@ Use these in `task`, `reads`, `inputs`, and other template-aware properties:
 - `${{result.STEP_ID.summary}}` - Parsed summary from agent result
 - `${{result.STEP_ID.artifacts}}` - Raw artifacts XML from agent result
 - `${{result.STEP_ID.files}}` - Files created/modified by the step
+- `${{result.STEP_ID.outputName}}` - Typed output from an agent's declared outputs (e.g., `${{result.reviewer.findings}}`)
 - `${{fork.ID.answer}}` - Selected option from a fork step
 - `${{fork.ID.notes}}` - User notes from a fork step
 - `${{loop.STEP_ID.iteration}}` - Current iteration count of a loop decision step
 - `${{loop.STEP_ID.max}}` - Max iterations configured for a loop decision step
 
 ## Multiline Task Text
+
+**WARNING**: Do NOT use markdown headers (`##`, `###`) inside task text — they conflict with the flow parser's `##` step delimiters and will cause parsing errors.
 
 For long task descriptions, use YAML multiline scalars:
 
@@ -239,37 +242,30 @@ Agents declare expected inputs in their frontmatter. The `agent_catalog` tool re
 **Example — full pipeline with proper wiring:**
 
 ```
-## project-context-reader
-agent: project-context-reader
-task: Read project planning files relevant to: ${{task}}
+## researcher
+agent: researcher
+task: Research the codebase and gather context for: ${{task}}
 
-## judo-model-designer
-agent: judo-model-designer
-task: Design model entities as specified in the proposal
-blockedBy: project-context-reader
+## designer
+agent: designer
+task: Design the solution based on research findings
+blockedBy: researcher
 inputs:
-  project_context: ${{result.project-context-reader.summary}}
+  research_output: ${{result.researcher.summary}}
 
-## judo-backend-developer
-agent: judo-backend-developer
-task: Implement backend operations
-blockedBy: judo-model-designer
+## implementer
+agent: implementer
+task: Implement the solution based on the design
+blockedBy: designer
 inputs:
-  model_output: ${{result.judo-model-designer.summary}}
+  design_output: ${{result.designer.summary}}
 
-## judo-frontend-developer
-agent: judo-frontend-developer
-task: Build frontend UI
-blockedBy: judo-model-designer
+## reviewer
+agent: reviewer
+task: Review the implementation for correctness and quality
+blockedBy: implementer
 inputs:
-  model_output: ${{result.judo-model-designer.summary}}
-
-## judo-verifier
-agent: judo-verifier
-task: Build and verify all acceptance criteria
-blockedBy: judo-backend-developer, judo-frontend-developer
-inputs:
-  implementation_output: ${{result.judo-backend-developer.summary}}
+  implementation_output: ${{result.implementer.summary}}
 ```
 
 **Rules:**
@@ -281,15 +277,94 @@ inputs:
 **ANTI-PATTERN — do NOT do this:**
 
 ```
-## judo-backend-developer
-agent: judo-backend-developer
-task: Implement based on model changes. Model summary: ${{result.judo-model-designer.summary}}
-blockedBy: judo-model-designer
+## implementer
+agent: implementer
+task: Implement based on the design. Design summary: ${{result.designer.summary}}
+blockedBy: designer
 ```
 
-This embeds the result inline in the task text. The agent expects `${{input.model_output}}` in its system prompt — embedding in task text means the agent never receives its declared input. Always use `inputs:` instead.
+This embeds the result inline in the task text. The agent expects `${{input.design_output}}` in its system prompt — embedding in task text means the agent never receives its declared input. Always use `inputs:` instead.
+
+# Agent Design Template
+
+When creating custom agents, follow this template to ensure well-formed agent definitions.
+
+## Frontmatter Contract
+
+Every agent MUST have these frontmatter fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Kebab-case unique identifier (e.g., `code-reviewer`) |
+| `description` | Yes | One-line purpose statement |
+| `model` | Yes | Role alias — see Model Roles below |
+| `tools` | Yes | Comma-separated list of tools the agent needs |
+| `inputs` | No | Declared input names for flow wiring (e.g., `[implementation_summary, design_doc]`) |
+| `outputs` | No | Declared output names the agent produces (e.g., `[findings, verdict]`) |
+
+## Model Roles
+
+| Role | Use For |
+|------|---------|
+| `@coding` | Reading, analyzing, writing, or modifying code |
+| `@planning` | Decisions, design, and orchestration |
+| `@research` | Investigation, analysis, and reading |
+| `@fast` | Quick tasks and routing decisions |
+| `@compact` | Lightweight tasks like summarization |
+| `@vision` | Image and visual analysis |
+
+## System Prompt Body
+
+The body of the `.md` file is the agent's system prompt. Structure it with:
+
+- **Role**: What this agent IS (one sentence)
+- **Goal**: What it should accomplish
+- **Guidelines**: How it should work, quality standards, constraints
+- **Input references**: `${{input.NAME}}` for each declared input
+- **Task placeholder**: `${{task}}` to receive the runtime task
+
+## Complete Example
+
+```
+---
+name: code-reviewer
+description: Reviews implementation for correctness, bugs, and style issues
+model: @coding
+tools: read, grep, glob
+inputs:
+  - implementation_summary
+outputs:
+  - findings
+  - verdict
+---
+
+# Role
+You are a thorough code reviewer focused on correctness and maintainability.
+
+# Goal
+Review the implementation and produce categorized findings.
+
+# Guidelines
+- Read ALL changed files before forming opinions
+- Categorize issues as: critical, warning, suggestion
+- Be specific: cite file paths and line numbers
+- If no issues found, say so clearly
+
+# Context
+Implementation summary:
+${{input.implementation_summary}}
+
+# Task
+${{task}}
+```
 
 # Custom Agent Creation Rules
+
+## Sparse Catalog Handling
+
+When `agent_catalog` returns few agents or none that match the task requirements, you MUST create custom agents with `agent_write` for each distinct role needed in the flow. Do NOT try to reuse built-in pi-flows agents (like `pi-flows-researcher`, `pi-flows-implementer`, `pi-flows-verifier`, `pi-flows-fixer`) for unrelated user tasks — these are for developing pi-flows itself, not general-purpose work.
+
+Before reusing ANY agent from the catalog, check its `use_when` field. If the agent's `use_when` does not match the current task, create a new custom agent instead.
 
 ## Editing Existing Flows
 
@@ -315,11 +390,78 @@ When no existing agent covers a need, create a custom agent definition:
   - `@compact` for lightweight tasks like summarization
   - `@vision` for image and visual analysis
 
+# YAML Flow Format (.yaml)
+
+As an alternative to `.yaml`, flows can be written as `.yaml` files. This format avoids the `##` header collision problem and uses standard YAML structure.
+
+## YAML Flow Structure
+
+```yaml
+name: my-flow
+description: What this flow does
+task_required: true
+max_concurrent: 3
+
+steps:
+  - id: researcher
+    agent: researcher
+    task: >
+      Research the codebase for: ${{task}}
+
+  - id: implementer
+    agent: implementer
+    blockedBy: [researcher]
+    task: Implement based on research
+    inputs:
+      research_output: ${{result.researcher.summary}}
+
+  - id: reviewer
+    agent: reviewer
+    blockedBy: [implementer]
+    task: Review the implementation
+    inputs:
+      implementation_output: ${{result.implementer.summary}}
+```
+
+## YAML Step Types
+
+Step type is inferred from fields or set explicitly with `type:`:
+
+- **Agent step**: Has `agent:` field (default)
+- **Fork step**: Has `question:` field (or `type: fork`)
+- **Conditional**: Has `check:` field (or `type: conditional`)
+- **Agent decision**: Has `branches:` without `question:` (or `type: agent-decision`)
+- **Agent loop decision**: Has `loop_target:` (or `type: agent-loop-decision`)
+- **Flow ref**: Has `path:` field (or `type: flow-ref`)
+
+```yaml
+# Fork step
+- id: choose-approach
+  type: fork
+  question: Which approach?
+  options: [fast, thorough]
+  branches:
+    fast: fast-impl
+    thorough: thorough-impl
+
+# Agent loop decision
+- id: verify-loop
+  type: agent-loop-decision
+  agent: quality-checker
+  task: >
+    Evaluate: ${{result.verifier.summary}}
+  loop_target: verifier
+  exit_target: summarizer
+  max_iterations: 3
+```
+
+**Prefer `.yaml`** for new flows — it avoids markdown header collisions and is easier for LLMs to generate reliably.
+
 # Output Paths
 
 By default, write new files to the project-local `.pi/flows/` directory:
 - **New agents**: `.pi/flows/agents/<name>.md`
-- **New flows**: `.pi/flows/flows/custom/<name>.flow.md`
+- **New flows**: `.pi/flows/flows/custom/<name>.yaml`
 
 These paths ensure flows are project-local and register as `/custom:<name>` commands.
 

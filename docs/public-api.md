@@ -1,157 +1,124 @@
 # Public API
 
-pi-flows exports types and functions from its flow-engine and flow-dashboard modules. These can be imported directly by dependent packages.
-
-## Table of Contents
-
-- [Import Paths](#import-paths)
-- [Flow Engine Types](#flow-engine-types)
-  - [AgentConfig](#agentconfig)
-  - [FlowConfig](#flowconfig)
-  - [FlowStep Types](#flowstep-types)
-  - [AgentResult](#agentresult)
-  - [FlowResult](#flowresult)
-  - [TemplateContext](#templatecontext)
-  - [ParsedResult](#parsedresult)
-  - [ToolCallRecord](#toolcallrecord)
-  - [SubagentEvent Types](#subagentevent-types)
-  - [Supporting Types](#supporting-types)
-- [Flow Dashboard Types](#flow-dashboard-types)
-  - [WorkflowDefinition](#workflowdefinition)
-  - [AgentCardRenderer](#agentcardrenderer)
-  - [CardData](#carddata)
-- [Exported Functions](#exported-functions)
-  - [Agent & Flow Parsing](#agent--flow-parsing)
-  - [Template Expansion](#template-expansion)
-  - [Execution](#execution)
-  - [Discovery](#discovery)
-  - [Model Resolution](#model-resolution)
-  - [Result Parsing](#result-parsing)
-- [Guard Extension API](#guard-extension-api)
-  - [createGuardExtension](#createguardextension)
-  - [GuardOptions](#guardoptions)
-- [SDK Integration Details](#sdk-integration-details)
-  - [In-Process Session Model](#in-process-session-model)
-  - [Capturing Session Context](#capturing-session-context)
-  - [Tool Factory Map](#tool-factory-map)
+Exported types and functions from pi-flows. Import these when you need programmatic access to the flow engine, typed access to pi-flows data structures, or want to build utilities that work with agent and flow configurations.
 
 ---
 
 ## Import Paths
 
-pi-flows is loaded by pi via [jiti](https://github.com/unjs/jiti) (TypeScript-to-JS transpilation at runtime). Import from the extension module paths relative to your pi-flows dependency:
+pi-flows exports its public API through the flow-engine extension module:
 
 ```typescript
-// Types from flow-engine
+// Core types and functions
 import type {
-  AgentConfig,
-  FlowConfig,
-  AgentResult,
-  FlowResult,
-  TemplateContext,
-} from "pi-flows/extensions/flow-engine/types.js";
-
-// Functions from flow-engine
-import { spawnAgent, expandTemplateVariables } from "pi-flows/extensions/flow-engine/execution.js";
-import { runFlow } from "pi-flows/extensions/flow-engine/flow-execution.js";
-import { discoverAll, resolvePackageRoot } from "pi-flows/extensions/flow-engine/discovery.js";
-import { resolveModel } from "pi-flows/extensions/flow-engine/model-roles.js";
-import { parseResult, hasArtifactElement } from "pi-flows/extensions/flow-engine/result-parser.js";
-import { parseAgentFile, parseAgentString } from "pi-flows/extensions/flow-engine/agent-parser.js";
-import { parseFlowFile, parseFlowString } from "pi-flows/extensions/flow-engine/flow-parser.js";
-
-// Guard factory (for building custom guard extensions)
-import { createGuardExtension } from "pi-flows/extensions/flow-engine/guard.js";
-import type { GuardOptions } from "pi-flows/extensions/flow-engine/guard.js";
-
-// Types from flow-dashboard
-import type {
-  WorkflowDefinition,
-  WorkflowStage,
-  AgentCardRenderer,
-  CardStatus,
-  CardData,
-} from "pi-flows/extensions/flow-dashboard/types.js";
-```
-
-Alternatively, the flow-engine index re-exports the most commonly used types and functions:
-
-```typescript
-import type {
-  AgentConfig,
-  FlowConfig,
-  AgentResult,
-  FlowResult,
-  TemplateContext,
-  SubagentEvent,
-  ArchitectMeta,
-  CardConfig,
+  AgentConfig, FlowConfig, FlowResult, AgentResult,
+  FlowStep, AgentStep, ForkStep, TemplateContext,
 } from "pi-flows/extensions/flow-engine/index.js";
 
 import {
-  spawnAgent,
-  expandTemplateVariables,
-  runFlow,
-  discoverAll,
-  resolvePackageRoot,
-  resolveModel,
-  parseResult,
-  hasArtifactElement,
-  parseAgentFile,
-  parseAgentString,
-  parseFlowFile,
-  parseFlowString,
-  extractAgentNames,
+  spawnAgent, runFlow, discoverAll, parseAgentFile,
+  parseFlowYamlFile, resolvePackageRoot, expandTemplateVariables,
 } from "pi-flows/extensions/flow-engine/index.js";
+
+// Dashboard types
+import type {
+  WorkflowDefinition, WorkflowStage, AgentCardRenderer,
+  CardData, CardStatus,
+} from "pi-flows/extensions/flow-dashboard/index.js";
 ```
 
-> **Note:** pi-flows uses a single extension entry point, so all internal modules share one jiti module graph and module-level state works naturally. External packages should use the event-based APIs (e.g., `flow:get-agents`, `flow:register-card`) rather than importing pi-flows modules directly at runtime. Type-only imports (`import type`) are fine since they're erased at compile time.
+> **Prefer events over direct imports.** The event-based API ([events-api.md](events-api.md)) is the stable, recommended extension surface. Direct imports are appropriate for utilities, type checking, and programmatic flow execution outside the normal pi lifecycle.
 
 ---
 
-## Flow Engine Types
+## Core Types
 
-### AgentConfig
+### `AgentConfig`
 
-Parsed from agent `.md` frontmatter. Represents a fully resolved agent definition.
+Represents a parsed agent definition from a `.md` file.
 
 ```typescript
 interface AgentConfig {
-  name: string;                 // Unique agent identifier
-  description: string;          // What this agent does
-  model: string;                // Model role (@coding) or direct model ID
-  thinking?: string;            // off, minimal, low, medium, high, xhigh
-  tools: string[];              // Declared tools (e.g., ["read", "write", "bash"])
-  skills?: string[];            // Skill names for prompt injection
-  context?: string[];           // File paths to inject as context
-  inputs?: string[];            // Declared input names (contract for flow wiring)
-  systemPrompt: string;         // Body of the .md file (template with {task}, {input.*})
-  output?: string;              // Default output filename
-  interactive?: boolean;        // Whether agent interacts with user
-  source: string;               // File path where this agent was discovered
-  access?: AccessRules;         // Sandboxing rules
-  card?: CardConfig;            // Dashboard card configuration
-  architect?: ArchitectMeta;    // Flow Architect metadata
+  name: string;
+  description: string;
+  model: string;           // "@coding", "@planning", or explicit model ID
+  thinking?: string;       // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
+  tools: string[];         // e.g., ["read", "write", "edit", "bash"]
+  skills?: string[];       // e.g., ["judo-backend-docs"]
+  context?: string[];      // File paths injected as read-only context
+  inputs?: string[];       // Declared input names (contract for flow wiring)
+  systemPrompt: string;    // The body of the .md file (prompt template)
+  output?: string;         // Default output filename
+  interactive?: boolean;
+  source: string;          // File path where this agent was discovered
+  access?: AccessRules;
+  card?: CardConfig;
+  architect?: ArchitectMeta;
 }
 ```
 
-### FlowConfig
+---
 
-Parsed from `.flow.md` frontmatter and step sections.
+### `AccessRules`
+
+```typescript
+interface AccessRules {
+  read?: string[];    // Glob patterns for allowed read paths
+  write?: string[];   // Glob patterns for allowed write paths
+  bash?: {
+    deny: string[];   // Command patterns to block
+  };
+}
+```
+
+---
+
+### `CardConfig`
+
+```typescript
+interface CardConfig {
+  type?: string;    // Legacy type field
+  label?: string;   // Display label on the dashboard card
+  metric?: string;  // Metric renderer name (matches a registered AgentCardRenderer)
+}
+```
+
+---
+
+### `ArchitectMeta`
+
+```typescript
+interface ArchitectMeta {
+  use_when?: string;    // When to use this agent
+  produces?: string;    // What the agent outputs
+  depends_on?: string;  // What it needs as input
+  domain?: string;      // Agent's domain
+}
+```
+
+---
+
+### `FlowConfig`
+
+Represents a parsed flow definition from a `.yaml` file.
 
 ```typescript
 interface FlowConfig {
-  name: string;                 // Flow identifier (becomes the slash command)
-  description: string;          // What this flow does
-  max_concurrent?: number;      // Max parallel agents
-  steps: FlowStep[];            // Ordered step definitions
-  source: string;               // File path where discovered
+  name: string;
+  description: string;
+  max_concurrent?: number;
+  task_required?: boolean;
+  task_prompt?: string;
+  steps: FlowStep[];
+  source: string;   // File path where this flow was discovered
 }
 ```
 
-### FlowStep Types
+---
 
-Discriminated union on `stepType`:
+### `FlowStep`
+
+Discriminated union of all step types:
 
 ```typescript
 type FlowStep =
@@ -161,7 +128,11 @@ type FlowStep =
   | AgentDecisionStep
   | AgentLoopDecisionStep
   | FlowRefStep;
+```
 
+#### `AgentStep`
+
+```typescript
 interface AgentStep {
   stepType: "agent";
   id: string;
@@ -170,42 +141,57 @@ interface AgentStep {
   model?: string;
   output?: string;
   reads?: string[];
-  inputs?: Record<string, string>;
+  inputs?: Record<string, string>;   // name → template expression
   blockedBy?: string[];
   on_complete?: string;
   on_error?: string;
 }
+```
 
+#### `ForkStep`
+
+```typescript
 interface ForkStep {
   stepType: "fork";
   id: string;
   question: string;
   options: string[];
-  branches: Record<string, string>;
+  branches: Record<string, string>;  // option → step ID
   allowNotes?: boolean;
-  allowCustom?: boolean;    // @deprecated — use allowNotes instead
+  allowCustom?: boolean;
   multiSelect?: boolean;
-  decisionAgent?: string;   // @deprecated — use agent field instead
-  agent?: string;           // Agent to use when auto-deciding (autonomous mode)
-  task?: string;            // Context/task for the agent when auto-deciding
+  agent?: string;                    // Agent for autonomous mode
+  task?: string;                     // Task for autonomous agent
 }
+```
 
+#### `ConditionalStep`
+
+```typescript
 interface ConditionalStep {
   stepType: "conditional";
   id: string;
-  check: string;
-  present: string;
-  absent: string;
+  check: string;    // "stepId" or "stepId.field"
+  present: string;  // Step ID if non-empty
+  absent: string;   // Step ID if empty
 }
+```
 
+#### `AgentDecisionStep`
+
+```typescript
 interface AgentDecisionStep {
   stepType: "agent-decision";
   id: string;
   agent: string;
   task: string;
-  branches: Record<string, string>;
+  branches: Record<string, string>;  // branch name → step ID
 }
+```
 
+#### `AgentLoopDecisionStep`
+
+```typescript
 interface AgentLoopDecisionStep {
   stepType: "agent-loop-decision";
   id: string;
@@ -215,65 +201,109 @@ interface AgentLoopDecisionStep {
   exit_target: string;
   max_iterations: number;
 }
+```
 
+#### `FlowRefStep`
+
+```typescript
 interface FlowRefStep {
   stepType: "flow-ref";
   id: string;
-  path: string;
+  path: string;        // Path to the sub-flow file
   on_complete?: string;
   on_error?: string;
 }
 ```
 
-### AgentResult
+---
 
-Result from a single agent execution (in-process SDK session).
+### `FlowResult`
 
-```typescript
-interface AgentResult {
-  success: boolean;             // Whether the agent completed successfully
-  output: string;               // Raw full output text (last assistant message)
-  stderr: string;               // Session diagnostics (API errors, etc.)
-  exitCode: number | null;      // Process exit code
-  result: ParsedResult;         // Parsed from <result> envelope
-  toolCalls: ToolCallRecord[];  // All tool calls made
-  duration: number;             // Execution time in ms
-  tokens: {
-    input: number;
-    output: number;
-  };
-  finishParams?: Record<string, any>;  // Raw finish tool call args
-}
-```
-
-### FlowResult
-
-Complete result from a flow execution. Emitted with `flow:complete`.
+The return value of `runFlow()` and the data payload of the `flow:complete` event.
 
 ```typescript
 interface FlowResult {
-  lastResult: AgentResult;      // Result from the last executed step
+  flowName: string;
+  status?: "success" | "error" | "aborted";
+  stepCount: number;
+  totalDuration: number;  // Wall-clock time in milliseconds
+
   results: Record<string, {
-    fullOutput: string;
-    status: string;             // "complete" | "error" | "blocked"
-    summary: string;
-    artifacts: string;
-    files: string;
+    fullOutput: string;   // Raw agent output text
+    status: string;       // "complete" | "error" | "blocked"
+    summary: string;      // From finish(summary:)
+    artifacts: string;    // Raw XML from <artifacts>
+    files: string;        // Human-readable file list
   }>;
+
   forks: Record<string, {
     answer: string;
     notes?: string;
   }>;
-  flowName: string;
-  stepCount: number;
-  totalDuration: number;        // Wall-clock ms for entire flow
-  status?: "success" | "error" | "aborted"; // Overall flow outcome
+
+  lastResult: AgentResult;
 }
 ```
 
-### TemplateContext
+---
 
-Context object for template variable expansion in flow steps.
+### `AgentResult`
+
+The result from a single agent execution.
+
+```typescript
+interface AgentResult {
+  success: boolean;
+  output: string;          // Raw full output text
+  stderr: string;          // Subprocess stderr
+  exitCode: number | null;
+  result: ParsedResult;    // Parsed from <result> XML envelope
+  toolCalls: ToolCallRecord[];
+  duration: number;        // Milliseconds
+  tokens: { input: number; output: number };
+  finishParams?: Record<string, any>;  // Raw finish tool call arguments
+}
+```
+
+---
+
+### `ParsedResult`
+
+Parsed from the `<result>` XML envelope that agents emit via `finish`.
+
+```typescript
+interface ParsedResult {
+  status: "complete" | "error" | "blocked" | "unknown";
+  files: ResultFile[];
+  artifacts: string;  // Raw XML string of <artifacts> block
+  summary: string;
+}
+
+interface ResultFile {
+  path: string;
+  action: "created" | "modified" | "read";
+}
+```
+
+---
+
+### `ToolCallRecord`
+
+```typescript
+interface ToolCallRecord {
+  toolName: string;
+  input: any;
+  output: any;
+  duration: number;
+  isError: boolean;
+}
+```
+
+---
+
+### `TemplateContext`
+
+The context used to expand template variables (`${{task}}`, `${{input.X}}`, etc.).
 
 ```typescript
 interface TemplateContext {
@@ -286,50 +316,17 @@ interface TemplateContext {
     artifacts: string;
     files: string;
   }>;
-  forks: Record<string, {
-    answer: string;
-    notes?: string;
-  }>;
+  forks: Record<string, { answer: string; notes?: string }>;
   loopCounters?: Record<string, number>;
   loopMaxIterations?: Record<string, number>;
 }
 ```
 
-### ParsedResult
+---
 
-Parsed from the `<result>` XML envelope that agents produce via the `finish` tool.
+### `SubagentEvent` (and variants)
 
-```typescript
-interface ParsedResult {
-  status: "complete" | "error" | "blocked" | "unknown";
-  files: ResultFile[];
-  artifacts: string;            // Raw XML string of <artifacts> block
-  summary: string;
-}
-
-interface ResultFile {
-  path: string;
-  action: "created" | "modified" | "read";
-}
-```
-
-### ToolCallRecord
-
-Record of a single tool call made during agent execution.
-
-```typescript
-interface ToolCallRecord {
-  toolName: string;
-  input: any;
-  output: any;
-  duration: number;             // ms
-  isError: boolean;
-}
-```
-
-### SubagentEvent Types
-
-Event types for tracking agent session activity during flow execution.
+Event types for observing agent execution.
 
 ```typescript
 type SubagentEventType = "started" | "complete" | "tool_call" | "tool_result";
@@ -342,61 +339,13 @@ interface SubagentEvent {
   timestamp: number;
   data: any;
 }
-
-interface SubagentStartedEvent extends SubagentEvent {
-  type: "started";
-  data: { task: string; model: string };
-}
-
-interface SubagentCompleteEvent extends SubagentEvent {
-  type: "complete";
-  data: AgentResult;
-}
-
-interface SubagentToolCallEvent extends SubagentEvent {
-  type: "tool_call";
-  data: { toolName: string; input: any };
-}
-
-interface SubagentToolResultEvent extends SubagentEvent {
-  type: "tool_result";
-  data: { toolName: string; output: any; isError: boolean };
-}
-```
-
-### Supporting Types
-
-```typescript
-interface CardConfig {
-  type?: string;
-  label?: string;
-  metric?: string;
-  role?: string;
-}
-
-interface ArchitectMeta {
-  use_when?: string;
-  produces?: string;
-  depends_on?: string;
-  domain?: string;
-}
-
-interface AccessRules {
-  read?: string[];              // Glob patterns for allowed read paths
-  write?: string[];             // Glob patterns for allowed write paths
-  bash?: {
-    deny: string[];             // Command patterns to block
-  };
-}
 ```
 
 ---
 
-## Flow Dashboard Types
+## Dashboard Types
 
-### WorkflowDefinition
-
-Multi-stage pipeline definition for breadcrumb navigation.
+### `WorkflowDefinition`
 
 ```typescript
 interface WorkflowDefinition {
@@ -405,32 +354,34 @@ interface WorkflowDefinition {
 }
 
 interface WorkflowStage {
-  name: string;
-  flows: string[];
-  detailFn?: (ctx: any) => string;
+  name: string;       // Display name in breadcrumb
+  flows: string[];    // Flow command names that trigger this stage
+  detailFn?: (ctx: any) => string;  // Optional dynamic detail text
 }
 ```
 
-### AgentCardRenderer
+---
 
-Interface for custom dashboard card metric renderers.
+### `AgentCardRenderer`
+
+Implement this interface to create a custom dashboard card metric renderer. Register it via [`flow:register-card`](events-api.md#flowregister-card).
 
 ```typescript
 interface AgentCardRenderer {
   onToolCall(toolName: string, input: any): void;
   onToolResult(toolName: string, output: any): void;
   onComplete(result: AgentResult): void;
-  renderMetric(width: number): string;
+  renderMetric(width: number): string;  // Returns a single metric line
 }
 ```
 
-### CardData
+---
 
-Internal tracking state for agent cards on the dashboard.
+### `CardData`
+
+Internal card state tracked by the dashboard.
 
 ```typescript
-type CardStatus = "pending" | "running" | "complete" | "error";
-
 interface CardData {
   agentName: string;
   status: CardStatus;
@@ -440,175 +391,235 @@ interface CardData {
   renderer: AgentCardRenderer;
   result?: AgentResult;
 }
+
+type CardStatus = "pending" | "running" | "complete" | "error";
 ```
 
 ---
 
-## Exported Functions
+## Core Functions
 
-### Agent & Flow Parsing
+### `spawnAgent`
 
-#### parseAgentFile
-
-Parse an agent definition from a `.md` file on disk.
+Spawn an agent as a subprocess and wait for it to complete. The agent runs its system prompt with the given task and template context, calls `finish`, and the subprocess exits.
 
 ```typescript
-function parseAgentFile(filePath: string): AgentConfig
-```
-
-#### parseAgentString
-
-Parse an agent definition from a string. `source` is recorded on the returned config for diagnostics.
-
-```typescript
-function parseAgentString(content: string, source: string): AgentConfig
-```
-
-#### parseFlowFile
-
-Parse a `.flow.md` file from disk.
-
-```typescript
-function parseFlowFile(filePath: string): FlowConfig
-```
-
-#### parseFlowString
-
-Parse a `.flow.md` string directly.
-
-```typescript
-function parseFlowString(content: string, source: string): FlowConfig
-```
-
-#### extractAgentNames
-
-Collect all agent names referenced by a flow (from agent steps).
-
-```typescript
-function extractAgentNames(flow: FlowConfig): string[]
-```
-
-### Template Expansion
-
-#### expandTemplateVariables
-
-Expand template variables (`{task}`, `{result.*}`, `{input.*}`, etc.) in a string using the provided context.
-
-```typescript
-function expandTemplateVariables(template: string, ctx: TemplateContext): string
-```
-
-### Execution
-
-#### spawnAgent
-
-Execute a single agent as an in-process SDK session. Returns the full `AgentResult` including output, tool calls, tokens, and parsed result.
-
-Agents no longer run as separate subprocesses — they run as in-process `createAgentSession()` calls from the pi-coding-agent SDK. The `authStorage` and `modelRegistry` needed to make model API calls are captured from the main session's `session_start` event (see [Capturing Session Context](#capturing-session-context)).
-
-```typescript
-import type { AuthStorage, ModelRegistry, ExtensionFactory } from "@mariozechner/pi-coding-agent";
+async function spawnAgent(options: SpawnOptions): Promise<AgentResult>
 
 interface SpawnOptions {
   agent: AgentConfig;
   task: string;
   templateContext: TemplateContext;
-  skillContents?: Map<string, string>;      // Pre-loaded skill content to prepend to prompt
-  contextFileContents?: string[];           // Pre-loaded context file strings
+  skillContents?: Map<string, string>;    // Pre-loaded skill content
+  contextFileContents?: string[];         // Pre-loaded context file content
   getModelRole?: (role: string) => string | undefined;
-  cwd: string;
-  authStorage?: AuthStorage;               // From session_start capture (required for model calls)
-  modelRegistry?: ModelRegistry;           // From session_start capture (required for model lookup)
-  extraGuardFactories?: ExtensionFactory[]; // Additional guard factories beyond the built-in one
-  extraCustomTools?: any[];                 // Extra tool definitions passed as customTools to the session
+  cwd: string;                            // Working directory
+  authStorage?: AuthStorage;
+  modelRegistry?: ModelRegistry;
+  extraGuardFactories?: ExtensionFactory[];
+  extraCustomTools?: any[];               // Extension tools to include
   onToolCall?: (toolName: string, input: any) => void;
   onToolResult?: (toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (text: string) => void;
   onThinkingText?: (text: string) => void;
-  onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void;
-  decisionBranches?: string[];              // Branch names for agent-decision steps
+  onExtensionUIRequest?: (request: any, respond: (r: any) => void) => void;
+  decisionBranches?: string[];            // Valid branch names for decision agents
   signal?: AbortSignal;
 }
-
-function spawnAgent(options: SpawnOptions): Promise<AgentResult>
 ```
 
-#### runFlow
-
-Execute a complete flow with all its steps, handling DAG scheduling, forks, conditionals, decisions, loops, and sub-flows.
+**Example:**
 
 ```typescript
+import { spawnAgent, parseAgentFile } from "pi-flows/extensions/flow-engine/index.js";
+
+const agent = parseAgentFile(".pi/flows/agents/researcher.md");
+const result = await spawnAgent({
+  agent,
+  task: "Investigate the authentication module",
+  templateContext: { task: "...", inputs: {}, results: {}, forks: {} },
+  cwd: process.cwd(),
+  getModelRole: (role) => modelRegistry.resolve(role),
+  authStorage,
+  modelRegistry,
+});
+
+console.log(result.result.summary);
+```
+
+---
+
+### `runFlow`
+
+Execute a complete flow with DAG scheduling, branching, and all step types. This is the main orchestration function used internally by pi-flows when you run a `/flow-name` command.
+
+```typescript
+async function runFlow(options: FlowRunOptions): Promise<FlowResult>
+
 interface FlowRunOptions {
   flow: FlowConfig;
   task: string;
   cwd: string;
-  authStorage?: any;                   // From session_start capture
-  modelRegistry?: any;                 // From session_start capture
-  extraGuardFactories?: any[];         // Additional ExtensionFactory instances
-  extraCustomTools?: any[];            // Extension tool definitions injected into agent sessions
+  authStorage?: any;
+  modelRegistry?: any;
+  extraGuardFactories?: any[];
+  extraCustomTools?: any[];
   getModelRole?: (role: string) => string | undefined;
   getAgent: (name: string) => AgentConfig | undefined;
   getSkillContent?: (name: string) => string | undefined;
-  getContextFiles?: (agent: AgentConfig) => string[];
-  askUser: (question: string, type: string, options?: string[], extra?: any) =>
-    Promise<{ answer: string; notes?: string }>;
+  askUser: (question: string, type: string, options?: string[], extra?: any)
+    => Promise<{ answer: string; notes?: string }>;
   onAgentStarted?: (agentName: string, stepId: string) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult) => void;
   onToolCall?: (agentName: string, toolName: string, input: any) => void;
   onToolResult?: (agentName: string, toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (agentName: string, text: string) => void;
   onThinkingText?: (agentName: string, text: string) => void;
-  onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void) => void;
+  onExtensionUIRequest?: (agentName: string, request: any, respond: (r: any) => void) => void;
   onLoopIteration?: (stepId: string, iteration: number, maxIterations: number) => void;
-  isAutonomous?: () => boolean;        // If true, fork steps auto-decide via agent
-  onAutoDecision?: (forkId: string, agentName: string, chosenBranch: string, targetStepId: string) => void;
+  isAutonomous?: () => boolean;
+  onAutoDecision?: (forkId: string, agentName: string, branch: string, targetStepId: string) => void;
   signal?: AbortSignal;
 }
-
-function runFlow(options: FlowRunOptions): Promise<FlowResult>
 ```
 
-### Discovery
-
-#### discoverAll
-
-Discover all agents and flows from multiple tiers: extra package directories → pi-flows package → project-local (`.pi/flows/`).
+**`FlowCancelledError`** — exported error class thrown when the user cancels a fork prompt. Catch this to distinguish user cancellation from runtime errors:
 
 ```typescript
-interface DiscoveryResult {
-  agents: Map<string, AgentConfig>;
-  flows: Map<string, FlowConfig>;
-}
+import { runFlow, FlowCancelledError } from "pi-flows/extensions/flow-engine/index.js";
 
+try {
+  const result = await runFlow({ ... });
+} catch (err) {
+  if (err instanceof FlowCancelledError) {
+    console.log("User cancelled");
+  } else {
+    throw err;
+  }
+}
+```
+
+---
+
+### `discoverAll`
+
+Scan directories to build agent and flow registries. Returns `DiscoveryResult` with `agents` and `flows` Maps.
+
+```typescript
 function discoverAll(
   packageRoot: string,
   projectRoot: string,
   extraAgentsDirs?: string[],
   extraFlowsDirs?: string[],
 ): DiscoveryResult
+
+interface DiscoveryResult {
+  agents: Map<string, AgentConfig>;
+  flows: Map<string, FlowConfig>;
+}
 ```
 
-#### resolvePackageRoot
+Discovery tiers (later wins on name collision):
+1. `extraAgentsDirs` / `extraFlowsDirs` — registered package directories
+2. `packageRoot/agents` and `packageRoot/flows` — pi-flows built-ins
+3. `projectRoot/.pi/flows/agents` and `projectRoot/.pi/flows/flows` — project-local files
 
-Resolve a package root directory from `import.meta.url`. Goes up two levels from the calling file's directory (e.g., `extensions/my-ext/index.ts` → `my-pkg/`).
+---
+
+### `resolvePackageRoot`
+
+Compute the package root from an `import.meta.url` value. Assumes the calling module is two directories below the package root.
 
 ```typescript
 function resolvePackageRoot(importMetaUrl: string): string
-
-// Usage in your extension:
-const pkgRoot = resolvePackageRoot(import.meta.url);
 ```
 
-### Model Resolution
+**Example:**
 
-#### resolveModel
+```typescript
+import { resolvePackageRoot } from "pi-flows/extensions/flow-engine/index.js";
 
-Resolve a model reference string into a concrete model ID and optional thinking level.
+// In extensions/my-extension/index.ts:
+const pkgRoot = resolvePackageRoot(import.meta.url);
+// Returns the package root (two directories up from the calling file)
+```
 
-Supports three formats:
-1. **Role alias** — `@planning`, `@coding` (resolved via callback)
-2. **Model ID with thinking suffix** — `claude-sonnet-4-20250514:high`
-3. **Plain model ID** — `claude-sonnet-4-20250514`
+---
+
+### `parseAgentFile`
+
+Parse an agent `.md` file from disk into an `AgentConfig`.
+
+```typescript
+function parseAgentFile(filePath: string): AgentConfig
+```
+
+Throws if the file is missing required frontmatter fields (`name`, `description`, `model`).
+
+---
+
+### `parseAgentString`
+
+Parse an agent definition from a raw string. Useful for testing or inline definitions.
+
+```typescript
+function parseAgentString(content: string, source: string): AgentConfig
+```
+
+`source` is stored on the returned config as the `source` field (used for diagnostics).
+
+---
+
+### `parseFlowYamlFile`
+
+Parse a `.yaml` flow file from disk into a `FlowConfig`.
+
+```typescript
+function parseFlowYamlFile(filePath: string): FlowConfig
+```
+
+---
+
+### `parseFlowYamlString`
+
+Parse a flow definition from a raw YAML string.
+
+```typescript
+function parseFlowYamlString(content: string, source: string): FlowConfig
+```
+
+---
+
+### `expandTemplateVariables`
+
+Expand all `${{...}}` and legacy `{...}` template variables in a string using a `TemplateContext`.
+
+```typescript
+function expandTemplateVariables(template: string, ctx: TemplateContext): string
+```
+
+**Example:**
+
+```typescript
+import { expandTemplateVariables } from "pi-flows/extensions/flow-engine/index.js";
+
+const expanded = expandTemplateVariables(
+  "Implement ${{task}} based on: ${{result.researcher.summary}}",
+  {
+    task: "auth module",
+    inputs: {},
+    results: { researcher: { summary: "JWT tokens are used", ... } },
+    forks: {},
+  }
+);
+// → "Implement auth module based on: JWT tokens are used"
+```
+
+---
+
+### `resolveModel`
+
+Resolve a model reference string (role alias or model ID) to a concrete model ID and optional thinking level.
 
 ```typescript
 function resolveModel(
@@ -618,170 +629,75 @@ function resolveModel(
 ): { modelId: string; thinking?: string }
 ```
 
-### Result Parsing
+Supported formats:
+- `"@coding"` — role alias, resolved via `getModelRole`
+- `"claude-sonnet-4-20250514"` — direct model ID
+- `"claude-sonnet-4-20250514:high"` — model ID with thinking suffix
 
-#### parseResult
+---
 
-Parse a `<result>` XML envelope from raw agent output. If no `<result>` block is found, returns a fallback with `status: "unknown"`.
+### `parseResult`
+
+Parse a `<result>` XML envelope from raw agent output text.
 
 ```typescript
 function parseResult(output: string): ParsedResult
 ```
 
-#### hasArtifactElement
+If no `<result>` block is found, returns a fallback with `status: "unknown"` and the raw output (truncated to 2000 chars) as the summary.
 
-Check whether a specific element exists inside a raw `<artifacts>` XML string. Uses dot-notation (e.g., `"artifacts.gaps"` checks for a `<gaps` tag).
+---
+
+### `hasArtifactElement`
+
+Check whether a `<result>` output contains any `<artifacts>` content. Used by `conditional` steps.
 
 ```typescript
-function hasArtifactElement(artifacts: string, elementPath: string): boolean
+function hasArtifactElement(output: string): boolean
 ```
 
 ---
 
-## Guard Extension API
+## Dashboard Functions
 
-The guard extension is the sandboxing layer injected into every agent session. It enforces tool whitelists, access rules, and the `finish` requirement.
+### `resolveWorkflow`
 
-### createGuardExtension
-
-Creates an `ExtensionFactory` that sandboxes an agent session. Used internally by `spawnAgent()` but also exported for advanced use cases where you need to spawn agents directly outside the flow engine.
+Find which workflow and stage a given flow name belongs to.
 
 ```typescript
-import { createGuardExtension } from "pi-flows/extensions/flow-engine/guard.js";
-import type { GuardOptions } from "pi-flows/extensions/flow-engine/guard.js";
-
-const factory = createGuardExtension({
-  allowedTools: ["read", "grep", "finish"],
-  requireFinish: true,
-  accessRules: {
-    read: ["src/**", "docs/**"],
-    write: ["src/**"],
-    bash: { deny: ["rm -rf", "curl"] },
-  },
-});
+function resolveWorkflow(
+  flowName: string,
+): { workflow: WorkflowDefinition; stageIndex: number } | null
 ```
 
-The returned `ExtensionFactory` is a `(pi: ExtensionAPI) => void` function that wires the guard logic into the session via `pi.on("tool_call", ...)` and `pi.registerTool(...)`.
-
-### GuardOptions
-
-```typescript
-interface GuardOptions {
-  allowedTools?: string[];      // Whitelist of allowed tool names (finish always implicitly allowed)
-  requireFinish?: boolean;      // Register the finish tool and block post-finish calls
-  accessRules?: AccessRules;    // File read/write/bash path restrictions
-  decisionBranches?: string[];  // Add branch parameter to finish for agent-decision steps
-  allowAskUser?: boolean;       // Allow ask_user tool calls (default: false — agents must decide autonomously)
-}
-```
-
-When `decisionBranches` is set, the `finish` tool gains a required `branch` parameter constrained to one of the listed values. This is how `agent-decision` and `agent-loop-decision` steps enforce routing.
+Returns `null` if the flow name is not registered in any workflow.
 
 ---
 
-## SDK Integration Details
+### `registerWorkflow`
 
-This section documents how pi-flows uses the pi-coding-agent SDK internally to run agents as in-process sessions. This is relevant if you are calling `spawnAgent()` or `runFlow()` directly from your own code.
-
-### In-Process Session Model
-
-Agents no longer run as separate `pi` subprocesses. Instead, `spawnAgent()` creates an in-process SDK session using `createAgentSession()` from `@mariozechner/pi-coding-agent`:
+Register a workflow definition programmatically (equivalent to emitting `flow:register-workflow`).
 
 ```typescript
-import {
-  createAgentSession,
-  SessionManager,
-  createExtensionRuntime,
-  createEventBus,
-} from "@mariozechner/pi-coding-agent";
-
-// Internally, spawnAgent() does:
-const { session } = await createAgentSession({
-  model,                          // Resolved Model object (from modelRegistry or getModel)
-  thinkingLevel: thinking,        // "high" | "medium" | "low" | "off" | undefined
-  tools,                          // SDK tool instances from TOOL_FACTORIES
-  customTools: extraCustomTools,  // Extra tool definitions (architect tools, etc.)
-  resourceLoader,                 // Provides guard extensions + appended system prompt
-  sessionManager: SessionManager.inMemory(),
-  authStorage,
-  modelRegistry,
-  cwd,
-});
-
-await session.bindExtensions({ uiContext });
-await session.prompt(userMessage, { expandPromptTemplates: false });
+function registerWorkflow(def: WorkflowDefinition): void
 ```
 
-The guard extensions are passed via a `ResourceLoader` object:
+---
+
+### `getCardRenderer`
+
+Get the registered card renderer factory for a metric type.
 
 ```typescript
-const resourceLoader: ResourceLoader = {
-  getExtensions: () => ({ extensions, errors: [], runtime }),
-  getAppendSystemPrompt: () => [capturedSystemPrompt],
-  // ... other no-op methods
-};
+function getCardRenderer(metricType: string): (() => AgentCardRenderer) | undefined
 ```
 
-> **Why `getAppendSystemPrompt` and not `getSystemPrompt`?** Using `getSystemPrompt` would replace the SDK's default system prompt (which includes tool descriptions and guidelines). `getAppendSystemPrompt` appends the agent-specific system prompt *after* the SDK builds its default prompt, so the agent gets both tool descriptions and its custom instructions.
+---
 
-Guard factories (`ExtensionFactory[]`) are converted to Extension objects via an internal `buildExtensionFromFactory()` helper, which constructs a minimal `ExtensionAPI` shim and runs the factory against it. This is necessary because the SDK's `loadExtensionFromFactory` is not exported from the top-level package path.
+### `registerMetric`
 
-### Capturing Session Context
-
-`spawnAgent()` requires `authStorage` and `modelRegistry` to resolve and call models. These are available from the pi session context, captured in the main session's `activate()` function:
+Register a card metric renderer factory (equivalent to emitting `flow:register-card`).
 
 ```typescript
-export default function activate(pi: ExtensionAPI) {
-  let authStorage: any;
-  let modelRegistry: any;
-
-  // Capture auth + registry from the live session
-  pi.on("session_start", (_event: any, ctx: any) => {
-    if (ctx.modelRegistry) {
-      modelRegistry = ctx.modelRegistry;
-      authStorage = (ctx.modelRegistry as any).authStorage;
-    }
-  });
-
-  // Pass them along when spawning agents directly:
-  const result = await spawnAgent({
-    agent,
-    task,
-    templateContext,
-    cwd: process.cwd(),
-    authStorage,
-    modelRegistry,
-    // ...
-  });
-}
+function registerMetric(name: string, factory: () => AgentCardRenderer): void
 ```
-
-Alternatively, use the `flow:get-spawn-context` query event to retrieve the captured values from pi-flows itself (useful when the values are captured by pi-flows but your extension needs them):
-
-```typescript
-const spawnCtx: any = {};
-pi.events.emit("flow:get-spawn-context", spawnCtx);
-const { authStorage, modelRegistry, extraGuardFactories } = spawnCtx;
-```
-
-See [events-api.md](events-api.md#flowget-spawn-context) for details on this query event.
-
-### Tool Factory Map
-
-`spawnAgent()` instantiates the agent's declared tools by mapping tool names to SDK factory functions:
-
-```typescript
-const TOOL_FACTORIES: Record<string, (cwd: string) => any> = {
-  read:  createReadTool,
-  bash:  createBashTool,
-  edit:  createEditTool,
-  write: createWriteTool,
-  grep:  createGrepTool,
-  find:  createFindTool,
-  ls:    createLsTool,
-};
-```
-
-Any tool name in the agent's `tools:` frontmatter that is not in this map is silently ignored (e.g., `skill_read`, `ask_user` — those are provided via extensions, not SDK tool factories).
-
-The `finish` tool is not in the factory map. It is injected exclusively by the guard extension (`createGuardExtension({ requireFinish: true })`), which registers it as a proper tool with TypeBox schema validation.

@@ -1,649 +1,639 @@
 # Events API
 
-pi-flows uses `pi.events` (the shared event bus from pi's extension API) for all inter-extension communication. Dependent packages register resources, listen for runtime events, and query discovery state through these events.
+All `flow:*` events that pi-flows emits and listens to. This is the primary extension surface for packages that depend on pi-flows. Events are dispatched via `pi.events` from within your extension's `activate` function.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    pi-flows Event Architecture                      │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌─── Registration (you → pi-flows) ──┐  ┌── Runtime (pi-flows → you) ──┐
-│  │                                     │  │                              │
-│  │  flow:register-agents-dir           │  │  flow:run                    │
-│  │  flow:register-flows-dir            │  │  flow:complete               │
-│  │  flow:unregister-agents-dir         │  │  flow:rediscover             │
-│  │  flow:unregister-flows-dir          │  │  flow:subagent-tool-call     │
-│  │  flow:register-skills-dir           │  │  flow:subagent-tool-result   │
-│  │  flow:register-card                 │  │  flow:loop-iteration         │
-│  │  flow:register-workflow             │  │  flow:auto-decision          │
-│  │  flow:register-gate                 │  │                              │
-│  │  flow:register-guard-extension      │  └──────────────────────────────┘
-│  │  flow:register-footer-segment       │
-│  │  flow:register-tool                 │
-│  │                                     │
-│  └─────────────────────────────────────┘
-│                                                                     │
-│  ┌─── Query (synchronous read-back) ──┐                             │
-│  │                                     │                             │
-│  │  flow:get-agents                    │                             │
-│  │  flow:get-flows                     │                             │
-│  │  flow:get-architect-tools           │                             │
-│  │  flow:get-spawn-context             │                             │
-│  │                                     │                             │
-│  └─────────────────────────────────────┘                             │
-└─────────────────────────────────────────────────────────────────────┘
-```
+---
 
-## Table of Contents
+## Overview
 
-- [Registration Events](#registration-events)
-  - [flow:register-agents-dir](#flowregister-agents-dir)
-  - [flow:register-flows-dir](#flowregister-flows-dir)
-  - [flow:unregister-agents-dir](#flowunregister-agents-dir)
-  - [flow:unregister-flows-dir](#flowunregister-flows-dir)
-  - [flow:register-skills-dir](#flowregister-skills-dir)
-  - [flow:register-card](#flowregister-card)
-  - [flow:register-workflow](#flowregister-workflow)
-  - [flow:register-gate](#flowregister-gate)
-  - [flow:register-guard-extension](#flowregister-guard-extension)
-  - [flow:register-footer-segment](#flowregister-footer-segment)
-  - [flow:register-tool](#flowregister-tool)
-- [Runtime Events](#runtime-events)
-  - [flow:run](#flowrun)
-  - [flow:complete](#flowcomplete)
-  - [flow:rediscover](#flowrediscover)
-  - [flow:subagent-tool-call](#flowsubagent-tool-call)
-  - [flow:subagent-tool-result](#flowsubagent-tool-result)
-  - [flow:loop-iteration](#flowloop-iteration)
-  - [flow:auto-decision](#flowauto-decision)
-- [Query Events](#query-events)
-  - [flow:get-agents](#flowget-agents)
-  - [flow:get-flows](#flowget-flows)
-  - [flow:get-architect-tools](#flowget-architect-tools)
-  - [flow:get-spawn-context](#flowget-spawn-context)
-- [Key Type Shapes](#key-type-shapes)
+Events are categorized by direction:
+
+| Category | Description |
+|----------|-------------|
+| [Registration](#registration-events) | You emit → pi-flows handles. Register agents, flows, cards, tools, etc. |
+| [Runtime](#runtime-events) | pi-flows emits → you listen. React to flow execution lifecycle. |
+| [Internal / Query](#internal--query-events) | Used between pi-flows sub-extensions. Avoid from external packages. |
+
+All events are **fire-and-forget** (they do not return a value) except the query events, which mutate a shared object passed as event data.
 
 ---
 
 ## Registration Events
 
-Registration events are emitted by your extension to extend pi-flows. Emit them in your `activate(pi)` function during extension load. pi-flows listens for these and integrates your resources into the flow engine, dashboard, and footer.
+Emit these events from your extension's `activate` function to register content with pi-flows. Registration is synchronous — pi-flows processes each event immediately on receipt.
 
-### flow:register-agents-dir
+> **Timing:** Emit registration events at the top of `activate`, before any `await`. pi-flows reads them during the same synchronous turn.
 
-Register a directory of agent `.md` files for discovery.
+### `flow:register-agents-dir`
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ dir: string }` |
-| **Effect** | Agents in the directory are discovered and become available in flows. Triggers re-discovery. |
+Add a directory of agent `.md` files to the agent discovery pool.
+
+```typescript
+pi.events?.emit("flow:register-agents-dir", { dir: string });
+```
+
+**Data shape:**
+
+```typescript
+{ dir: string }  // Absolute path to agents directory
+```
+
+**Behavior:** pi-flows scans the directory for `*.md` files (excluding `*.yaml`), parses each as an `AgentConfig`, and adds them to the agent registry. If an agent with the same name already exists, the new one overwrites it. Re-discovery runs immediately.
+
+**Example:**
 
 ```typescript
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __filename = fileURLToPath(import.meta.url);
-const pkgRoot = join(dirname(__filename), "..", "..");
-
-pi.events?.emit("flow:register-agents-dir", {
-  dir: join(pkgRoot, "agents"),
-});
+const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+pi.events?.emit("flow:register-agents-dir", { dir: join(pkgRoot, "agents") });
 ```
 
-### flow:register-flows-dir
+---
 
-Register a directory of `.flow.md` files for discovery. Newly discovered flows are auto-registered as `/commands`.
+### `flow:register-flows-dir`
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ dir: string }` |
-| **Effect** | Flows in the directory are discovered. New flows register as slash commands (e.g., `/my-flow`). |
+Add a directory of `.yaml` files. Each discovered flow is registered as a slash command.
 
 ```typescript
-pi.events?.emit("flow:register-flows-dir", {
-  dir: join(pkgRoot, "flows"),
-});
+pi.events?.emit("flow:register-flows-dir", { dir: string });
 ```
 
-### flow:unregister-agents-dir
-
-Unregister a previously registered agents directory. Agents discovered from that directory are removed and re-discovery runs without it.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ dir: string }` |
-| **Effect** | The directory is removed from the agents search path. Re-discovery runs immediately. |
+**Data shape:**
 
 ```typescript
-// Remove a staging agents directory after a flow design session
-pi.events?.emit("flow:unregister-agents-dir", {
-  dir: join(projectRoot, ".pi", "staging", "agents"),
-});
+{ dir: string }  // Absolute path to flows directory
 ```
 
-### flow:unregister-flows-dir
+**Behavior:** pi-flows recursively scans the directory for `*.yaml` files. The slash command name is derived from the file path relative to the flows directory root:
 
-Unregister a previously registered flows directory. Flows from that directory are removed from the registry and their slash commands are de-registered.
+| File path | Registered command |
+|-----------|-------------------|
+| `flows/research.yaml` | `/research` |
+| `flows/judo/research.yaml` | `/judo:research` |
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ dir: string }` |
-| **Effect** | The directory is removed from the flows search path. Re-discovery runs immediately. Slash commands for removed flows are de-registered. |
+Nesting deeper than one subfolder is skipped with a warning. Later registrations with the same flow name win (project-local files have the highest priority).
+
+**Example:**
 
 ```typescript
-// Remove a staging flows directory after a flow design session
-pi.events?.emit("flow:unregister-flows-dir", {
-  dir: join(projectRoot, ".pi", "staging", "flows"),
-});
+pi.events?.emit("flow:register-flows-dir", { dir: join(pkgRoot, "flows") });
 ```
 
-> **When to use:** These are primarily used by pi-flows' own workspace module to clean up temporary staging directories after `/flows:new` or `/flows:edit` sessions complete. External packages can use them if they dynamically register temporary directories that should be torn down later. Prefer permanent registration (`flow:register-*`) unless you specifically need temporary directory management.
+---
 
-### flow:register-skills-dir
+### `flow:unregister-agents-dir`
 
-Register a directory of skill files for agent prompt injection.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ dir: string }` |
-| **Effect** | Skills in the directory become available to agents via the `skills:` frontmatter field and the `skill_read` tool. |
+Remove a previously registered agents directory.
 
 ```typescript
-pi.events?.emit("flow:register-skills-dir", {
-  dir: join(pkgRoot, "skills"),
-});
+pi.events?.emit("flow:unregister-agents-dir", { dir: string });
 ```
 
-### flow:register-card
+Used for cleanup after temporary staging directories (e.g., when the flow workspace saves a new agent). Triggers re-discovery.
 
-Register a custom dashboard card metric renderer. Cards display agent-specific metrics (file counts, test results, domain-specific data) on the live dashboard during flow execution.
+---
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ name: string, factory: () => AgentCardRenderer }` |
-| **Effect** | Agents with `card.metric: "<name>"` in their frontmatter use this renderer. |
+### `flow:unregister-flows-dir`
+
+Remove a previously registered flows directory.
 
 ```typescript
-import { MyCustomCard } from "./cards/my-card.js";
+pi.events?.emit("flow:unregister-flows-dir", { dir: string });
+```
 
+The flows that were registered from this directory are no longer discoverable, but their slash commands persist until the session ends (commands cannot be unregistered at runtime).
+
+---
+
+### `flow:register-skills-dir`
+
+Add a skills directory so its skills become available to agents that declare them.
+
+```typescript
+pi.events?.emit("flow:register-skills-dir", { dir: string });
+```
+
+**Data shape:**
+
+```typescript
+{ dir: string }  // Absolute path to skills directory
+```
+
+**Behavior:** Skills are directories inside the skills root, each containing a `SKILL.md` file. When an agent declares a skill by name (in its frontmatter `skills:` field), pi-flows searches registered skills directories in registration order, falling back to pi-flows' own built-in skills. Package skills take precedence over built-in skills; project-local skills (`.pi/skills/`) have the highest priority.
+
+**Example:**
+
+```typescript
+pi.events?.emit("flow:register-skills-dir", { dir: join(pkgRoot, "skills") });
+```
+
+---
+
+### `flow:register-card`
+
+Register a custom dashboard card metric renderer for a named card type.
+
+```typescript
 pi.events?.emit("flow:register-card", {
-  name: "my-metric",
-  factory: () => new MyCustomCard(),
+  name: string;
+  factory: () => AgentCardRenderer;
 });
 ```
 
-The `AgentCardRenderer` interface:
+**Data shape:**
+
+```typescript
+{
+  name: string;                      // Metric type name (matches agent's card.metric field)
+  factory: () => AgentCardRenderer;  // Factory that creates a new renderer instance per agent
+}
+```
+
+`AgentCardRenderer` interface (from `flow-dashboard/types.ts`):
 
 ```typescript
 interface AgentCardRenderer {
   onToolCall(toolName: string, input: any): void;
   onToolResult(toolName: string, output: any): void;
   onComplete(result: AgentResult): void;
-  renderMetric(width: number): string;  // Single metric line for the card
+  renderMetric(width: number): string;  // Returns a single metric line
 }
 ```
 
-See [extending-pi-flows.md](extending-pi-flows.md#custom-card-renderers) for a full implementation guide.
+**Behavior:** A fresh renderer instance is created for each agent card via `factory()`. The renderer receives tool call/result events as the agent runs, and `renderMetric` is called on each dashboard frame to produce the metric line shown below the agent name.
 
-### flow:register-workflow
+**Example — pi-judo's model card:**
 
-Register a multi-stage workflow definition. Workflows appear as breadcrumb navigation in the dashboard, showing which stage of a pipeline is currently active.
+```typescript
+// cards/model-card.ts
+import type { AgentCardRenderer } from "pi-flows/extensions/flow-dashboard/types.js";
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `WorkflowDefinition` (see below) |
-| **Effect** | When a flow matching a stage's `flows` array runs, the breadcrumb shows the workflow pipeline. |
+export class ModelCard implements AgentCardRenderer {
+  private queries = 0;
+  private mutations = 0;
+
+  onToolCall(toolName: string, input: any): void {
+    if (toolName !== "model_cli") return;
+    if (input?.query?.startsWith("mutation")) this.mutations++;
+    else this.queries++;
+  }
+
+  onToolResult(): void {}
+  onComplete(): void {}
+
+  renderMetric(width: number): string {
+    return `  query:${this.queries} │ mut:${this.mutations}`.slice(0, width);
+  }
+}
+
+// In activate():
+pi.events?.emit("flow:register-card", {
+  name: "model",
+  factory: () => new ModelCard(),
+});
+```
+
+Agents reference the card type in their frontmatter:
+
+```yaml
+card:
+  label: "Model"
+  metric: "model"   # ← matches the registered name
+```
+
+Built-in metric names: `default`, `files`, `tests`.
+
+---
+
+### `flow:register-workflow`
+
+Register a multi-stage workflow pipeline. When a flow belonging to a workflow runs, the dashboard displays a breadcrumb showing all stages and which one is active.
+
+```typescript
+pi.events?.emit("flow:register-workflow", WorkflowDefinition);
+```
+
+**Data shape:**
+
+```typescript
+interface WorkflowDefinition {
+  id: string;              // Unique workflow ID (e.g., "sdd")
+  stages: WorkflowStage[]; // Ordered pipeline stages
+}
+
+interface WorkflowStage {
+  name: string;           // Display name shown in breadcrumb
+  flows: string[];        // Flow/command names that trigger this stage
+  detailFn?: (ctx: any) => string;  // Optional: dynamic detail text
+}
+```
+
+**Example:**
 
 ```typescript
 pi.events?.emit("flow:register-workflow", {
-  id: "my-pipeline",
+  id: "research",
   stages: [
-    { name: "research", flows: ["my-pkg:research"] },
-    { name: "implement", flows: ["my-pkg:implement"] },
-    { name: "verify", flows: ["my-pkg:verify"] },
+    { name: "research-all", flows: ["judo:research-all"] },
+    { name: "apply",        flows: ["judo:apply"] },
+    { name: "verify",       flows: ["judo:verify"] },
   ],
 });
 ```
 
-The `WorkflowDefinition` type:
-
-```typescript
-interface WorkflowDefinition {
-  id: string;
-  stages: WorkflowStage[];
-}
-
-interface WorkflowStage {
-  name: string;          // Display name (e.g., "research", "implement")
-  flows: string[];       // Flow names that trigger this stage
-  detailFn?: (ctx: any) => string;  // Dynamic detail text (e.g., "wave 2/4")
-}
+When `/judo:apply` runs, the breadcrumb shows:
+```
+research-all → [apply] → verify
 ```
 
-### flow:register-gate
+Multiple `flow:register-workflow` events can be emitted for independent workflows.
 
-Register a prerequisite check that must pass before specific flows can run. If the check fails, the flow is blocked with a user-facing message.
+---
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `GateEntry` (see below) |
-| **Effect** | Before any matching flow runs, `check()` is called. If it returns `false`, the flow is blocked. |
+### `flow:register-gate`
+
+Register a prerequisite check that must pass before specific flows can run. If the check fails, the user sees the error message and the flow is blocked.
 
 ```typescript
 pi.events?.emit("flow:register-gate", {
-  name: "project-check",
-  check: () => existsSync(join(cwd, "model")),
-  flows: ["my-pkg:*"],          // Glob pattern matching flow names
-  message: "No project found. Run from a project root.",
+  name: string;
+  check: () => boolean;
+  flows: string[];
+  message: string;
 });
 ```
 
-The `GateEntry` type:
+**Data shape:**
 
 ```typescript
-interface GateEntry {
-  name: string;            // Unique gate identifier
-  check: () => boolean;    // Returns true if the gate passes
-  flows: string[];         // Glob patterns for flow names this gate applies to
-  message: string;         // User-facing message when gate fails
+{
+  name: string;         // Unique gate identifier (for debugging)
+  check: () => boolean; // Returns true if the gate passes
+  flows: string[];      // Flow name patterns this gate applies to (supports trailing "*")
+  message: string;      // Error shown to the user when the gate fails
 }
 ```
 
-**Glob matching:** Patterns ending with `*` match any flow name starting with the prefix (e.g., `"my-pkg:*"` matches `"my-pkg:build"`, `"my-pkg:test"`). Exact strings match only that flow name.
+**Flow name patterns:**
 
-### flow:register-guard-extension
+| Pattern | Matches |
+|---------|---------|
+| `"judo:*"` | All flows starting with `judo:` |
+| `"judo:research"` | Exactly `/judo:research` |
 
-Register an additional guard factory that is applied to every spawned agent session. Use this to add file access guards, custom tool restrictions, or any other sandboxing rules for agents dispatched by the flow engine.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ factory: ExtensionFactory }` or `{ path: string }` (legacy) |
-| **Effect** | The factory is called for every in-process agent session alongside pi-flows' built-in guard. |
-
-**Primary form — factory function (recommended):**
+**Example — pi-judo's project gate:**
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { globSync } from "node:fs";
+import { join } from "node:path";
 
+const judoEnabled = globSync(join(cwd, "model", "*.model")).length > 0;
+
+pi.events?.emit("flow:register-gate", {
+  name: "judo-project",
+  check: () => judoEnabled,
+  flows: ["judo:*"],
+  message: "No JUDO model files found (model/*.model). JUDO flows require a JUDO project.",
+});
+```
+
+---
+
+### `flow:register-guard-extension`
+
+Register an additional sandboxing guard that is loaded into every spawned agent subprocess. Guards intercept tool calls to enforce access policies.
+
+```typescript
+pi.events?.emit("flow:register-guard-extension", {
+  factory: (pi: ExtensionAPI) => void;
+});
+```
+
+**Data shape:**
+
+```typescript
+{
+  factory: (pi: ExtensionAPI) => void;  // Extension factory loaded in each agent session
+}
+```
+
+**Behavior:** The factory is called once per spawned agent session. It receives a scoped `ExtensionAPI` for that session. Typically registers a `tool_call` listener to intercept and optionally block tool execution.
+
+**Example — pi-judo's model file protection:**
+
+```typescript
+// guards.ts
+export function createModelProtectionGuard() {
+  return (event: any, ctx: any, next: () => void) => {
+    if (event.name === "write" && event.params.path?.endsWith(".model")) {
+      ctx.block("Direct .model file modification is forbidden. Use model_cli.");
+      return;
+    }
+    next();
+  };
+}
+
+// In activate():
 pi.events?.emit("flow:register-guard-extension", {
   factory: (piApi: ExtensionAPI) => {
-    piApi.on("tool_call", (event: any) => {
-      // Block access to .secret files
-      const params = event.params || event.input || {};
-      if ((params.file_path || "").endsWith(".secret")) {
-        return { block: true, reason: "Direct .secret file access is blocked." };
-      }
-      return undefined;
-    });
+    piApi.on("tool_call", createModelProtectionGuard());
   },
 });
 ```
 
-The `factory` value is an `ExtensionFactory` — a `(pi: ExtensionAPI) => void` function. It is called in-process for every agent session and can register any number of `tool_call` interceptors.
+---
 
-**Legacy form — file path (backward compatible):**
+### `flow:register-footer-segment`
+
+Add a custom segment to the status bar footer. Segments are rendered after pi-flows' built-in segments (provider, git branch, file stats, context usage).
 
 ```typescript
-// Still accepted, but factory form is preferred for in-process sessions
-pi.events?.emit("flow:register-guard-extension", {
-  path: join(__dirname, "my-subagent-guard.ts"),
+pi.events?.emit("flow:register-footer-segment", {
+  name: string;
+  render: () => string | null;
+  onRegistered?: (invalidate: () => void) => void;
 });
 ```
 
-When a `path` is given, pi-flows wraps it in an async factory that dynamically imports the file and calls its default export. The file must export a default function `(pi: ExtensionAPI) => void`.
+**Data shape:**
 
-> **Architecture note:** Agents run as in-process `createAgentSession()` calls (not separate subprocesses). Guard factories are wired into the session's extension runtime before the session starts. See [public-api.md — SDK Integration Details](public-api.md#sdk-integration-details) for how this works internally.
+```typescript
+{
+  name: string;                               // Unique segment name (re-registration replaces previous)
+  render: () => string | null;                // Returns segment text, or null to hide
+  onRegistered?: (invalidate: () => void) => void;  // Callback with a function to trigger re-render
+}
+```
 
-### flow:register-footer-segment
+**Behavior:** Segments are rendered in registration order. If `render()` returns `null`, the segment is omitted. Segments are separated by ` │ ` in the footer.
 
-Register a custom segment in the footer bar. The footer displays status information below the editor.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ name: string, render: () => string, onRegistered?: (invalidate: () => void) => void }` |
-| **Effect** | A new segment appears in the footer bar. Call `invalidate()` to trigger re-renders when your data changes. |
+**Example — pi-judo's server status segment:**
 
 ```typescript
 let invalidateFn: (() => void) | null = null;
 
 pi.events?.emit("flow:register-footer-segment", {
-  name: "my-status",
+  name: "judo-server",
   render: () => {
-    const count = getItemCount();
-    return `${count} items`;
+    const state = serverManager.getState();
+    if (state === "running") return "● server";
+    if (state === "starting") return "◐ server";
+    if (state === "error")    return "✗ server";
+    return "○ server";
   },
-  onRegistered: (invalidate: () => void) => {
-    invalidateFn = invalidate;
-  },
+  onRegistered: (invalidate) => { invalidateFn = invalidate; },
 });
 
-// Later, when your data changes:
-invalidateFn?.();  // Triggers footer re-render
+// Later, when server state changes:
+serverManager.onStateChange(() => invalidateFn?.());
 ```
 
-If you register a segment with a `name` that already exists, it replaces the existing segment.
+pi-flows itself registers the `autonomous-mode` segment:
 
-### flow:register-tool
+```typescript
+pi.events?.emit("flow:register-footer-segment", {
+  name: "autonomous-mode",
+  render: () => isAutonomousMode() ? "🤖 auto" : null,
+});
+```
 
-Register a custom tool definition that is injected into agent sessions during flow execution. Registered tools are passed as `extraCustomTools` to every agent session and are filtered to only agents that declare the tool name in their `tools:` frontmatter.
+---
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ tool: ToolDefinition }` |
-| **Effect** | The tool becomes available to any agent that declares it in its `tools:` frontmatter field. Agents without the tool name listed receive nothing. |
+### `flow:register-tool` *(deprecated)*
+
+> **Deprecated**: Tools registered via `pi.registerTool()` are now automatically discovered by the flow engine at session start. This event is no longer needed but remains functional for backward compatibility.
+
+Register a custom tool that can be used by agents in flow sessions. The tool becomes available to any agent that declares its name in the `tools:` frontmatter field.
+
+**Preferred approach** — just use `pi.registerTool()`:
+
+```typescript
+pi.registerTool({
+  name: "my_tool",
+  description: "My custom tool",
+  parameters: Type.Object({ /* ... */ }),
+  execute: async (_id, params, _signal, _onUpdate, _ctx) => { /* ... */ },
+});
+```
+
+**Legacy approach** (still works):
+
+```typescript
+pi.events?.emit("flow:register-tool", { tool: ToolDefinition });
+```
+
+**Data shape:**
+
+```typescript
+{
+  tool: ToolDefinition;  // Standard pi-coding-agent tool definition object
+}
+```
+
+A `ToolDefinition` has the same shape as tools registered via `pi.registerTool()`:
+
+```typescript
+{
+  name: string;
+  description: string;
+  parameters: TSchema;           // TypeBox schema
+  execute: (toolCallId, params, signal, onUpdate, ctx) => Promise<ToolResult>;
+}
+```
+
+**Behavior:** Registered tools are injected into every spawned agent session (`spawnAgent` call) as `extraCustomTools`. Only agents that explicitly list the tool name in their frontmatter `tools:` field can call it.
+
+**Example:**
 
 ```typescript
 import { Type } from "@sinclair/typebox";
 
-pi.events?.emit("flow:register-tool", {
-  tool: {
-    name: "model_cli",
-    description: "Run a model CLI command",
-    parameters: Type.Object({
-      command: Type.String({ description: "The CLI command to run" }),
-    }),
-    execute: async ({ command }: { command: string }) => {
-      // Your tool implementation
-      return { result: "ok" };
-    },
+const myTool = {
+  name: "model_cli",
+  description: "Query or mutate the domain model via GraphQL.",
+  parameters: Type.Object({
+    command: Type.Union([Type.Literal("query"), Type.Literal("save")]),
+    query: Type.Optional(Type.String()),
+  }),
+  execute: async (_id, params, _signal, _onUpdate, _ctx) => {
+    // ... implementation
+    return { content: [{ type: "text", text: "result" }], details: {} };
   },
-});
+};
+
+pi.events?.emit("flow:register-tool", { tool: myTool });
 ```
 
-Then agents can declare and use the tool:
+Agents declare it in frontmatter:
 
 ```yaml
-# my-agent.md
----
-name: my-agent
-tools: read, model_cli
----
+tools: read, write, model_cli
 ```
-
-> **Note:** This mechanism lets extensions expose domain-specific CLI tools, query interfaces, or any callable function to agents in flows. The tool definition format matches the pi-coding-agent `ToolDefinition` interface (TypeBox schema + execute function). Tools registered via this event are **not** available in the main session — only inside agent subprocesses dispatched by the flow engine.
 
 ---
 
 ## Runtime Events
 
-Runtime events are emitted by pi-flows during flow execution. Listen to these to react to flow lifecycle, track agent activity, or build integrations.
+Listen to these events to react to flow execution lifecycle. Use `pi.events?.on(...)` from within `activate`.
 
-### flow:run
+### `flow:complete`
 
-Programmatically trigger a flow by name. Ignored if a flow is already running.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{ flowName: string, ctx?: any }` |
-| **Effect** | Starts the named flow. No-op if another flow is currently running. |
+Fired when a flow finishes — whether successfully, with an error, or aborted by the user. Always fires exactly once per flow run.
 
 ```typescript
-pi.events?.emit("flow:run", {
-  flowName: "my-pkg:build",
-  ctx: lastCtx,  // Pass the extension context if available
-});
+pi.events?.on("flow:complete", (data: FlowResult) => { ... });
 ```
 
-### flow:complete
+**Data shape (`FlowResult`):**
 
-Fired when a flow finishes execution (success or failure). This is the primary event for reacting to flow results.
+```typescript
+interface FlowResult {
+  flowName: string;      // The flow that ran (e.g., "judo:apply")
+  status?: "success" | "error" | "aborted";
+  stepCount: number;     // Number of steps that ran
+  totalDuration: number; // Wall-clock time in milliseconds
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | pi-flows → You |
-| **Data shape** | `FlowResult` (see [Key Type Shapes](#flowresult)) |
-| **When** | After all flow steps have completed and results are collected. |
+  // Per-step result summaries (keyed by step ID)
+  results: Record<string, {
+    fullOutput: string;  // Raw agent output text
+    status: string;      // "complete" | "error" | "blocked"
+    summary: string;     // From the agent's finish() call
+    artifacts: string;   // Raw XML from <artifacts> block
+    files: string;       // Human-readable file list (e.g., "src/auth.ts (created)")
+  }>;
+
+  // Fork answers (keyed by fork step ID)
+  forks: Record<string, { answer: string; notes?: string }>;
+
+  // The result from the final step that ran
+  lastResult: AgentResult;
+}
+```
+
+**Example:**
 
 ```typescript
 pi.events?.on("flow:complete", (data: unknown) => {
   const result = data as FlowResult;
-  console.log(`Flow "${result.flowName}" completed in ${result.totalDuration}ms`);
-  console.log(`Steps: ${result.stepCount}`);
-
-  for (const [stepId, stepResult] of Object.entries(result.results)) {
-    console.log(`  ${stepId}: ${stepResult.status}`);
+  if (result.status === "success") {
+    console.log(`Flow "${result.flowName}" completed in ${result.totalDuration}ms`);
+    const researchSummary = result.results["researcher"]?.summary;
+    if (researchSummary) {
+      // Post-process or store result
+    }
   }
 });
 ```
 
-### flow:rediscover
+---
 
-Trigger re-scanning of all agent and flow directories. Any newly discovered flows are registered as slash commands.
+### `flow:subagent-tool-call`
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows |
-| **Data shape** | `{}` |
-| **Effect** | Re-runs discovery across all registered directories. New agents/flows become available. |
+Fired each time a running agent calls a tool. Use to observe agent behavior or collect metrics.
 
 ```typescript
-// After dynamically adding files to an agents directory:
-pi.events?.emit("flow:rediscover", {});
+pi.events?.on("flow:subagent-tool-call", (data) => { ... });
 ```
 
-### flow:subagent-tool-call
+**Data shape:**
 
-Fired every time an agent session calls a tool during flow execution.
+```typescript
+{
+  agentName: string;  // Name of the agent making the call (e.g., "researcher")
+  toolName: string;   // Tool being called (e.g., "bash", "model_cli")
+  input: any;         // Tool input parameters
+}
+```
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | pi-flows → You |
-| **Data shape** | `{ agentName: string, toolName: string, input: any }` |
-| **When** | During flow execution, when any agent invokes a tool (read, write, edit, bash, etc.). |
+**Example:**
 
 ```typescript
 pi.events?.on("flow:subagent-tool-call", (data: any) => {
-  const { agentName, toolName, input } = data;
-  console.log(`Agent "${agentName}" calling tool "${toolName}"`);
-});
-```
-
-### flow:subagent-tool-result
-
-Fired when a tool call returns inside an agent session.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | pi-flows → You |
-| **Data shape** | `{ agentName: string, toolName: string, output: any, isError: boolean }` |
-| **When** | After a tool call completes inside an agent session. |
-
-```typescript
-pi.events?.on("flow:subagent-tool-result", (data: any) => {
-  const { agentName, toolName, output, isError } = data;
-  if (isError) {
-    console.warn(`Tool "${toolName}" failed for agent "${agentName}"`);
+  if (data.toolName === "model_cli") {
+    trackMutation(data.agentName, data.input);
   }
 });
 ```
 
-### flow:loop-iteration
+---
 
-Fired when an `agent-loop-decision` step advances to the next iteration.
+### `flow:subagent-tool-result`
 
-| Property | Detail |
-|----------|--------|
-| **Direction** | pi-flows → You |
-| **Data shape** | `{ stepId: string, iteration: number, maxIterations: number }` |
-| **When** | When a loop decision agent decides to loop back to the `loop_target` step. |
+Fired each time a tool returns a result to the running agent.
 
 ```typescript
-pi.events?.on("flow:loop-iteration", (data: any) => {
-  const { stepId, iteration, maxIterations } = data;
-  console.log(`Loop "${stepId}": iteration ${iteration}/${maxIterations}`);
-});
+pi.events?.on("flow:subagent-tool-result", (data) => { ... });
 ```
 
-### flow:auto-decision
-
-Fired when a `fork` step is resolved automatically by an agent in autonomous mode (i.e., when `isAutonomous()` returns `true`). In normal mode, fork steps pause and prompt the user; in autonomous mode, an agent makes the decision and this event reports what was chosen.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | pi-flows → You |
-| **Data shape** | `{ forkId: string, agentName: string, chosenBranch: string, targetStepId: string }` |
-| **When** | When a fork step auto-resolves via an agent decision in autonomous mode. |
+**Data shape:**
 
 ```typescript
-pi.events?.on("flow:auto-decision", (data: any) => {
-  const { forkId, agentName, chosenBranch, targetStepId } = data;
-  console.log(`Fork "${forkId}" auto-decided by "${agentName}": ${chosenBranch} → step ${targetStepId}`);
-});
+{
+  agentName: string;  // Agent that received the result
+  toolName: string;   // Tool that returned
+  output: any;        // Tool output
+  isError?: boolean;  // true if the tool call failed
+}
 ```
 
 ---
 
-## Query Events
+### `flow:auto-decision`
 
-Query events use a synchronous emit-and-read-back pattern. You emit an object, and pi-flows mutates it synchronously to populate the response. This avoids the need for request/response event pairs.
-
-### flow:get-agents
-
-Retrieve all discovered agents.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows (synchronous) |
-| **Data shape** | Emit `{}`, read `data.agents` as `Map<string, AgentConfig>` |
-| **Effect** | The `agents` property is set on the emitted object. |
+Fired when a fork step automatically selects a branch in autonomous mode (Ctrl+A is active and the fork has an `agent:` field).
 
 ```typescript
-const query: any = {};
-pi.events.emit("flow:get-agents", query);
-const agents: Map<string, AgentConfig> = query.agents;
+pi.events?.on("flow:auto-decision", (data) => { ... });
+```
 
-for (const [name, config] of agents) {
-  console.log(`Agent: ${name} — ${config.description}`);
+**Data shape:**
+
+```typescript
+{
+  forkId: string;        // ID of the fork step that auto-decided
+  agentName: string;     // Agent that made the decision
+  chosenBranch: string;  // The selected option text
+  targetStepId: string;  // The step ID the flow will continue to
 }
 ```
-
-### flow:get-flows
-
-Retrieve all discovered flows.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows (synchronous) |
-| **Data shape** | Emit `{}`, read `data.flows` as `Map<string, FlowConfig>` |
-| **Effect** | The `flows` property is set on the emitted object. |
-
-```typescript
-const query: any = {};
-pi.events.emit("flow:get-flows", query);
-const flows: Map<string, FlowConfig> = query.flows;
-
-for (const [name, config] of flows) {
-  console.log(`Flow: ${name} — ${config.description}`);
-}
-```
-
-### flow:get-architect-tools
-
-Retrieve the tool definitions registered for the flow architect agent. These are the tools (`agent_catalog`, `agent_validate`, `agent_write`, `flow_validate`, `flow_write`, `flow_preview`) that pi-flows captures from the main session and passes as `customTools` to architect subagent sessions.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows (synchronous) |
-| **Data shape** | Emit `{}`, read `data.tools` as `any[]` (array of tool definitions) |
-| **Effect** | The `tools` property is set on the emitted object with the current architect tool definitions. |
-
-```typescript
-const toolsQuery: any = {};
-pi.events.emit("flow:get-architect-tools", toolsQuery);
-const architectTools: any[] = toolsQuery.tools;
-
-// Pass to your own architect subagent:
-await spawnAgent({
-  agent: architectAgent,
-  task,
-  extraCustomTools: architectTools,
-  // ...
-});
-```
-
-### flow:get-spawn-context
-
-Retrieve the auth storage, model registry, and extra guard factories captured from the current pi session. Use this when your extension needs to spawn agents directly (e.g., in an external slash command) and needs the same session context that the flow engine uses.
-
-| Property | Detail |
-|----------|--------|
-| **Direction** | You → pi-flows (synchronous) |
-| **Data shape** | Emit `{}`, read `data.authStorage`, `data.modelRegistry`, `data.extraGuardFactories` |
-| **Effect** | The three properties are populated on the emitted object. |
-
-```typescript
-const spawnCtx: any = {};
-pi.events.emit("flow:get-spawn-context", spawnCtx);
-const { authStorage, modelRegistry, extraGuardFactories } = spawnCtx;
-
-// Now spawn an agent with the live session's credentials:
-const result = await spawnAgent({
-  agent: myAgent,
-  task,
-  templateContext,
-  cwd: process.cwd(),
-  authStorage,
-  modelRegistry,
-  extraGuardFactories,
-});
-```
-
-> **When to use:** When your extension registers a slash command that dispatches agents directly — not through a `.flow.md` file — this event gives you the live credentials without having to capture `session_start` yourself. See also [extending-pi-flows.md — Session Context](extending-pi-flows.md#session-context).
 
 ---
 
-## Key Type Shapes
+### `flow:loop-iteration`
 
-### FlowResult
-
-Returned by `flow:complete`. Contains all results from a completed flow.
+Fired each time an `agent-loop-decision` step advances to the next iteration.
 
 ```typescript
-interface FlowResult {
-  lastResult: AgentResult;
-  results: Record<string, {
-    fullOutput: string;
-    status: string;       // "complete" | "error" | "blocked"
-    summary: string;
-    artifacts: string;
-    files: string;
-  }>;
-  forks: Record<string, { answer: string; notes?: string }>;
-  flowName: string;
-  stepCount: number;
-  totalDuration: number;              // Wall-clock milliseconds for entire flow
-  status?: "success" | "error" | "aborted"; // Overall flow outcome
+pi.events?.on("flow:loop-iteration", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{
+  stepId: string;      // ID of the loop decision step
+  iteration: number;   // Current iteration (1-based)
+  maxIterations: number; // Maximum configured iterations
 }
 ```
 
-### AgentResult
+---
 
-Result from a single agent execution.
+## Internal / Query Events
 
-```typescript
-interface AgentResult {
-  success: boolean;
-  output: string;
-  stderr: string;
-  exitCode: number | null;
-  result: ParsedResult;
-  toolCalls: ToolCallRecord[];
-  duration: number;    // ms
-  tokens: { input: number; output: number };
-  finishParams?: Record<string, any>;
-}
-```
+These events coordinate between pi-flows' own sub-extensions. **Do not emit or listen to these from external packages** — they are implementation details and may change without notice.
 
-For complete type definitions, see [public-api.md](public-api.md).
+| Event | Direction | Purpose |
+|-------|-----------|---------|
+| `flow:run` | emit → pi-flows | Programmatically run a named flow with an optional UI context |
+| `flow:rediscover` | emit → pi-flows | Trigger re-scanning of agent and flow directories |
+| `flow:get-agents` | emit with data object → pi-flows mutates | Query the current agent registry |
+| `flow:get-flows` | emit with data object → pi-flows mutates | Query the current flow registry |
+| `flow:get-architect-tools` | emit with data object → pi-flows mutates | Query architect tool definitions |
+| `flow:get-spawn-context` | emit with data object → pi-flows mutates | Query auth/model context for subagent spawning |
+| `flow:wire-dashboard` | internal | Mount a dashboard widget |
+| `flow:unwire-dashboard` | internal | Unmount a dashboard widget |
+| `flow:set-summary-context` | internal | Pass tool history to summary widget |
+| `flow:set-summary-tool-history` | internal | Pass tool history per-agent to summary widget |

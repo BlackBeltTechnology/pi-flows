@@ -64,14 +64,14 @@ interface Config {
 // -- Default custom model catalog -----------------------------------------
 
 const DEFAULT_MODELS: ModelEntry[] = [
-  { id: "cc/claude-opus-4-6", name: "Opus 4.6", reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 128000 },
-  { id: "cc/claude-sonnet-4-6", name: "Sonnet 4.6", reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 },
+  { id: "cc/claude-opus-4-6", name: "Opus 4.6", reasoning: true, input: ["text", "image"], contextWindow: 1000000, maxTokens: 128000 },
+  { id: "cc/claude-sonnet-4-6", name: "Sonnet 4.6", reasoning: true, input: ["text", "image"], contextWindow: 1000000, maxTokens: 64000 },
   { id: "cc/claude-haiku-4-5-20251001", name: "Haiku 4.5", reasoning: true, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 },
-  { id: "glm/glm-5", name: "GLM 5", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 131072 },
-  { id: "gemini/gemini-3-pro-preview", name: "Gemini 3 Pro", reasoning: false, input: ["text"], contextWindow: 1048576, maxTokens: 65536 },
+  { id: "glm/glm-5", name: "GLM 5", reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 128000 },
+  { id: "gemini/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", reasoning: false, input: ["text", "image"], contextWindow: 1048576, maxTokens: 65536 },
   { id: "openrouter/inception/mercury-2", name: "Mercury 2", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 8192 },
-  { id: "minimax/MiniMax-M2.5", name: "MiniMax M2.5", reasoning: false, input: ["text", "image"], contextWindow: 1048576, maxTokens: 131072 },
-  { id: "minimax/MiniMax-M2.1", name: "MiniMax M2.1", reasoning: false, input: ["text", "image"], contextWindow: 1048576, maxTokens: 131072 },
+  { id: "minimax/MiniMax-M2.5", name: "MiniMax M2.5", reasoning: false, input: ["text", "image"], contextWindow: 1048576, maxTokens: 8192 },
+  { id: "minimax/MiniMax-M2.1", name: "MiniMax M2.1", reasoning: false, input: ["text", "image"], contextWindow: 196608, maxTokens: 196608 },
 ];
 
 // -- Defaults -------------------------------------------------------------
@@ -288,6 +288,7 @@ export function activate(pi: ExtensionAPI) {
   pi.registerCommand("roles", {
     description: "Assign models to roles",
     handler: async (_args, ctx) => {
+      while (true) {
         // Top-level menu: Edit roles or manage presets
         const topItems: SelectItem[] = [
           { value: "__edit__", label: "Edit roles", description: "Assign models to roles" },
@@ -305,12 +306,12 @@ export function activate(pi: ExtensionAPI) {
         }
 
         const topChoice = await selectOverlay(ctx, "Model Roles", topItems);
-        if (!topChoice) return;
+        if (!topChoice) return; // Esc on top menu → exit command
 
         // -- Save current roles as preset ---
         if (topChoice === "__save_preset__") {
           const name = await ctx.ui.input("Preset name", "default");
-          if (!name) return;
+          if (!name) continue;
           if (!config.rolePresets) config.rolePresets = [];
           const existing = config.rolePresets.findIndex((p) => p.name === name);
           const preset: RolePreset = { name, roles: { ...config.roles } };
@@ -321,7 +322,7 @@ export function activate(pi: ExtensionAPI) {
           }
           saveConfig(config);
           ctx.ui.notify(`Saved preset "${name}"`, "info");
-          return;
+          continue;
         }
 
         // -- Load a preset ---
@@ -337,7 +338,7 @@ export function activate(pi: ExtensionAPI) {
             saveConfig(config);
             ctx.ui.notify(`Loaded preset "${presetName}"`, "info");
           }
-          return;
+          continue;
         }
 
         // -- Delete a preset ---
@@ -353,7 +354,7 @@ export function activate(pi: ExtensionAPI) {
             saveConfig(config);
             ctx.ui.notify(`Deleted preset "${toDelete}"`, "info");
           }
-          return;
+          continue;
         }
 
         // -- Edit roles (original behavior, filtered to available models) ---
@@ -389,7 +390,7 @@ export function activate(pi: ExtensionAPI) {
 
         if (modelItems.length === 0) {
           ctx.ui.notify("No authenticated models found. Use /login or /provider to configure.", "warning");
-          return;
+          continue;
         }
 
         await settingsOverlay(ctx, "Model Roles", [], (id: string, newValue: string) => {
@@ -420,6 +421,7 @@ export function activate(pi: ExtensionAPI) {
             }));
           },
         });
+      } // end while
     },
   });
 
@@ -549,16 +551,16 @@ export function activate(pi: ExtensionAPI) {
 
       if (choice === "__add__") {
         const name = await ctx.ui.input("Provider name", "my-proxy");
-        if (!name) return;
+        if (!name) continue;
         const baseUrl = await ctx.ui.input("Base URL", "https://.../v1");
-        if (!baseUrl) return;
+        if (!baseUrl) continue;
         const apiKey = await ctx.ui.input("API key ($ENV_VAR or literal)", "$MY_PROXY_KEY");
-        if (!apiKey) return;
+        if (!apiKey) continue;
         const api = await selectOverlay(ctx, "API Protocol", [
           { value: "openai-completions", label: "openai-completions", description: "OpenAI Chat Completions" },
           { value: "anthropic-messages", label: "anthropic-messages", description: "Anthropic Messages" },
         ]);
-        if (!api) return;
+        if (!api) continue;
 
         // Multi-select models for this provider
         const { selectedIds } = await showModelMultiSelect(ctx, config);
@@ -637,7 +639,7 @@ export function activate(pi: ExtensionAPI) {
         ctx.ui.notify(`Removed "${toRemove}"`, "info");
       }
 
-      return; // action completed, exit loop
+      continue; // action completed, loop back to provider list
       } // end while
     },
   });

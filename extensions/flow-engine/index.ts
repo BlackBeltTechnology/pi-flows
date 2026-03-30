@@ -50,7 +50,7 @@ export { discoverAll, resolvePackageRoot } from "./discovery.js";
 export { resolveModel } from "./model-roles.js";
 export { parseResult, hasArtifactElement } from "./result-parser.js";
 export { parseAgentFile, parseAgentString } from "./agent-parser.js";
-export { parseFlowFile, parseFlowString } from "./flow-parser.js";
+export { parseFlowYamlFile, parseFlowYamlString } from "./flow-parser-yaml.js";
 
 let agents = new Map<string, AgentConfig>();
 let flows = new Map<string, FlowConfig>();
@@ -185,6 +185,8 @@ export function init(pkgRoot: string, projectRoot: string): void {
   );
   agents = result.agents;
   flows = result.flows;
+  // Warnings are silently discarded — they were previously console.warn'd
+  // which corrupted TUI rendering. Available in result.warnings if needed.
 }
 
 // ---- Gate registry ---------------------------------------------------------
@@ -1295,13 +1297,46 @@ export function activate(pi: ExtensionAPI) {
     data.tools = architectToolDefs;
   });
 
-  // Allow extensions to register custom tool definitions for use in flow agent sessions.
-  // Extensions emit: pi.events.emit("flow:register-tool", { tool: toolDefinition })
+  // Tool auto-discovery state — populated at session_start when all extensions have activated.
+  const BUILTIN_SDK_TOOLS = new Set(["read", "write", "edit", "bash", "grep", "glob", "find", "ls"]);
+  const ARCHITECT_ONLY_TOOLS = new Set(["agent_catalog", "agent_validate", "agent_write", "flow_validate", "flow_write", "flow_preview"]);
+  const seenToolNames = new Set<string>();
+  let toolsCollected = false;
+
+  // Collect extension tools at session_start — all extensions have finished activating by this point.
+  // This runs AFTER all packages (pi-judo, oh-pi, etc.) have called pi.registerTool().
+  pi.on("session_start", () => {
+    if (toolsCollected) return;
+    toolsCollected = true;
+    try {
+      const allTools = pi.getAllTools();
+      for (const tool of allTools) {
+        const name = tool.name;
+        // Skip built-in SDK tools (already provided by TOOL_FACTORIES in session creation)
+        if (BUILTIN_SDK_TOOLS.has(name)) continue;
+        // Skip architect-only tools (passed separately to architect sessions)
+        if (ARCHITECT_ONLY_TOOLS.has(name)) continue;
+        // Deduplicate against tools already registered via flow:register-tool events
+        if (seenToolNames.has(name)) continue;
+        seenToolNames.add(name);
+        registeredExtensionTools.push(tool);
+      }
+    } catch {
+      // pi.getAllTools() may not be available in all environments
+    }
+  });
+
+  // Legacy: extensions can still emit flow:register-tool events (deprecated).
   // Collected tools are passed as extraCustomTools to all spawnAgent() calls in flow-execution.ts,
   // filtered to only agents that declare the tool name in their frontmatter tools: list.
   pi.events.on("flow:register-tool", (data: any) => {
     if (data?.tool) {
-      registeredExtensionTools.push(data.tool);
+      const name = data.tool.name;
+      // Deduplicate against auto-discovered tools
+      if (!seenToolNames.has(name)) {
+        seenToolNames.add(name);
+        registeredExtensionTools.push(data.tool);
+      }
     }
   });
 

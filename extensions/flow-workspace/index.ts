@@ -8,6 +8,12 @@
 // ---------------------------------------------------------------------------
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import {
+  generateSummary,
+  buildSessionContext,
+  getLatestCompactionEntry,
+  type SessionEntry,
+} from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync, rmSync, copyFileSync, mkdirSync } from "node:fs";
 import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS, STAGING_FLOWS } from "./staging.js";
 import { join } from "node:path";
@@ -29,7 +35,11 @@ function slugify(text: string): string {
     .slice(0, 50);
 }
 
-/** Extract user/assistant text messages from session entries for context. */
+/**
+ * Extract user/assistant text messages from session entries for context.
+ * Used for slug generation and as a fallback when generateArchitectContext() fails.
+ * The architect path uses generateArchitectContext() for richer structured summaries.
+ */
 function extractConversationContext(entries: any[]): string {
   const messages: string[] = [];
   for (const entry of entries) {
@@ -54,6 +64,78 @@ function extractConversationContext(entries: any[]): string {
   }
   // Return last ~10 messages for context (don't overwhelm the compact model)
   return messages.slice(-10).join("\n\n");
+}
+
+// Custom instructions for flow-architect focused summarization
+const ARCHITECT_SUMMARY_INSTRUCTIONS =
+  "Focus on: what the user wants to build or change, architectural decisions discussed, " +
+  "file structure and code patterns explored, tools and libraries mentioned, " +
+  "and any specific requirements or constraints stated.";
+
+/**
+ * Generate a structured session summary for the flow-architect using the SDK's
+ * generateSummary() with the @compact model role.
+ *
+ * Falls back to extractConversationContext() if model resolution fails, API key
+ * is missing, or generateSummary() throws.
+ *
+ * Returns null if conversation is too short (< 50 chars) to summarize.
+ */
+async function generateArchitectContext(
+  ctx: any,
+  getModelRole: ((role: string) => string | undefined) | undefined,
+): Promise<string | null> {
+  const entries: SessionEntry[] = ctx.sessionManager?.getEntries?.() ?? [];
+  if (entries.length === 0) return null;
+
+  // Build the resolved message list (handles compaction, branches, custom messages)
+  const sessionContext = buildSessionContext(entries);
+  const messages = sessionContext.messages;
+  if (messages.length === 0) return null;
+
+  // Quick check: if conversation is very short, skip summary generation
+  const fallbackContext = extractConversationContext(entries);
+  if (fallbackContext.length <= 50) return null;
+
+  try {
+    // Resolve @compact model
+    const modelId = getModelRole?.("compact");
+    if (!modelId || !ctx.modelRegistry) {
+      return fallbackContext;
+    }
+
+    const [provider, ...modelParts] = modelId.split("/");
+    const model = ctx.modelRegistry.find(provider, modelParts.join("/"));
+    if (!model) {
+      return fallbackContext;
+    }
+
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) {
+      return fallbackContext;
+    }
+
+    // Check for existing compaction summary for incremental update
+    const latestCompaction = getLatestCompactionEntry(entries);
+    const previousSummary = latestCompaction?.summary;
+
+    // Generate structured summary
+    const summary = await generateSummary(
+      messages,
+      model,
+      4096,          // reserveTokens — output capped at ~3276 tokens
+      auth.apiKey,
+      auth.headers,  // headers — forward for dynamic auth
+      undefined,     // signal — no abort for this quick call
+      ARCHITECT_SUMMARY_INSTRUCTIONS,
+      previousSummary,
+    );
+
+    return summary;
+  } catch {
+    // Fallback: any failure (API error, timeout, etc.) — use legacy extraction
+    return fallbackContext;
+  }
 }
 
 // System prompt for slug/description generation
@@ -107,14 +189,14 @@ async function handleEditFlow(
         const { readdirSync, statSync } = await import("node:fs");
         for (const entry of readdirSync(savedFlowsDir)) {
           const entryPath = join(savedFlowsDir, entry);
-          if (entry.endsWith(".flow.md")) {
-            flowFiles.push({ name: entry.replace(".flow.md", ""), path: entryPath });
+          if (entry.endsWith(".yaml")) {
+            flowFiles.push({ name: entry.replace(".yaml", ""), path: entryPath });
           } else {
             try {
               if (statSync(entryPath).isDirectory()) {
                 for (const sub of readdirSync(entryPath)) {
-                  if (sub.endsWith(".flow.md")) {
-                    const name = `${entry}:${sub.replace(".flow.md", "")}`;
+                  if (sub.endsWith(".yaml")) {
+                    const name = `${entry}:${sub.replace(".yaml", "")}`;
                     flowFiles.push({ name, path: join(entryPath, sub) });
                   }
                 }
@@ -188,41 +270,90 @@ async function handleEditFlow(
   // Ctrl+O / Ctrl+X handler during architect phase
   const KEY_CTRL_O = "\x0f";
   const KEY_CTRL_X = "\x18";
+  const KEY_UP = "\x1b[A";
+  const KEY_DOWN = "\x1b[B";
+  const KEY_ENTER = "\r";
+  const KEY_BACKSPACE_1 = "\x7f";
+  const KEY_BACKSPACE_2 = "\b";
+
+  async function openFlowDetailOverlay(content: string): Promise<void> {
+    const { parseFlowYamlString } = await import("../flow-engine/flow-parser-yaml.js");
+    const flowConfig = parseFlowYamlString(content, "<preview>");
+    const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+    await ctx.ui.custom(
+      (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+        return createFlowPreviewOverlay({
+          flow: flowConfig,
+          theme,
+          tui: tuiInstance,
+          done,
+        });
+      },
+      {
+        overlay: true,
+        overlayOptions: {
+          width: "90%",
+          maxHeight: "85%",
+          anchor: "center",
+        },
+      },
+    );
+  }
+
   const unregisterInput = ctx.ui.onTerminalInput(async (data: string) => {
     // Ctrl+X: abort the architect agent
     if (data === KEY_CTRL_X && architectAbort) {
       architectAbort.abort();
       return { consume: true } as const;
     }
+
+    // Handle navigate mode keyboard input (when selector is visible)
+    if (architectWidget && architectWidget.getPreviewSubMode?.() === "navigate" && !overlayOpen) {
+      if (data === KEY_UP) {
+        const idx = architectWidget.getSelectedFlowIndex();
+        if (idx > 0) architectWidget.setSelectedFlowIndex(idx - 1);
+        return { consume: true } as const;
+      }
+      if (data === KEY_DOWN) {
+        const idx = architectWidget.getSelectedFlowIndex();
+        architectWidget.setSelectedFlowIndex(idx + 1);
+        return { consume: true } as const;
+      }
+      if (data === KEY_BACKSPACE_1 || data === KEY_BACKSPACE_2) {
+        architectWidget.setPreviewSubMode("preview");
+        return { consume: true } as const;
+      }
+      if (data === KEY_ENTER) {
+        const flows = architectWidget.getFlowContents();
+        const idx = architectWidget.getSelectedFlowIndex();
+        const selected = flows[idx];
+        if (selected) {
+          overlayOpen = true;
+          try {
+            await openFlowDetailOverlay(selected.content);
+          } catch { /* overlay not available */ }
+          finally { overlayOpen = false; }
+          // Stay in navigate mode after closing detail overlay
+        }
+        return { consume: true } as const;
+      }
+    }
+
     // Ctrl+O: open detail overlay (tool calls) or flow preview overlay
     if (data === KEY_CTRL_O && architectWidget && !overlayOpen) {
       overlayOpen = true;
       try {
         if (architectWidget.hasFlowContent()) {
-          // Flow exists — show flow preview
-          const content = architectWidget.getFlowContent();
-          if (!content) { overlayOpen = false; return { consume: true } as const; }
-          const { parseFlowString } = await import("../flow-engine/flow-parser.js");
-          const flowConfig = parseFlowString(content, "<preview>");
-          const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
-          await ctx.ui.custom(
-            (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
-              return createFlowPreviewOverlay({
-                flow: flowConfig,
-                theme,
-                tui: tuiInstance,
-                done,
-              });
-            },
-            {
-              overlay: true,
-              overlayOptions: {
-                width: "90%",
-                maxHeight: "85%",
-                anchor: "center",
-              },
-            },
-          );
+          const flows = architectWidget.getFlowContents();
+          if (flows.length === 1) {
+            // Single flow — open detail overlay directly
+            await openFlowDetailOverlay(flows[0].content);
+          } else if (flows.length > 1) {
+            // Multiple flows — switch to navigate mode (selector)
+            architectWidget.setPreviewSubMode("navigate");
+            overlayOpen = false;
+            return { consume: true } as const;
+          }
         } else {
           // No flow yet — show architect detail (tool calls, messages)
           const entries = architectWidget.getEventLog?.() || [];
@@ -289,9 +420,9 @@ async function handleEditFlow(
     forks: {} as Record<string, any>,
   };
 
-  // Extract conversation context to give the architect awareness of what the user discussed
-  // before requesting this flow edit.
-  const editArchitectConvoContext = extractConversationContext(ctx.sessionManager?.getEntries?.() ?? []);
+  // Generate structured session summary to give the architect awareness of what the user
+  // discussed before requesting this flow edit.
+  const editArchitectContext = await generateArchitectContext(ctx, getModelRole);
 
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";
@@ -322,9 +453,9 @@ async function handleEditFlow(
       modelRegistry: spawnCtx.modelRegistry,
       extraGuardFactories: spawnCtx.extraGuardFactories,
       extraCustomTools: spawnCtx.tools,
-      contextFileContents: editArchitectConvoContext.length > 50
+      contextFileContents: editArchitectContext
         ? [
-            `## Conversation Context\n\nThe following is the recent conversation from the user's main session that led to this flow edit request. Use it to understand what the user is trying to change and why:\n\n${editArchitectConvoContext}`,
+            `## Session Summary\n\nThe following is a structured summary of the user's main session that led to this flow edit request. Use it to understand what the user is trying to change and why:\n\n${editArchitectContext}`,
           ]
         : undefined,
       signal: architectAbort.signal,
@@ -491,8 +622,8 @@ async function handleNewFlow(
         }
 
         if (model && ctx.modelRegistry) {
-          const apiKey = await ctx.modelRegistry.getApiKey(model);
-          if (apiKey) {
+          const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+          if (auth.ok) {
             const { completeSimple } = await import("@mariozechner/pi-ai");
             const response = await completeSimple(model, {
               systemPrompt: SLUG_SYSTEM_PROMPT,
@@ -501,7 +632,7 @@ async function handleNewFlow(
                 content: [{ type: "text" as const, text: convoContext }],
                 timestamp: Date.now(),
               }],
-            }, { apiKey });
+            }, { apiKey: auth.apiKey, headers: auth.headers });
 
             const text = response.content
               .filter((c: any) => c.type === "text")
@@ -569,38 +700,88 @@ async function handleNewFlow(
 
   const KEY_CTRL_O_2 = "\x0f";
   const KEY_CTRL_X_2 = "\x18";
+  const KEY_UP_2 = "\x1b[A";
+  const KEY_DOWN_2 = "\x1b[B";
+  const KEY_ENTER_2 = "\r";
+  const KEY_BACKSPACE_1_2 = "\x7f";
+  const KEY_BACKSPACE_2_2 = "\b";
+
+  async function openFlowDetailOverlay2(content: string): Promise<void> {
+    const { parseFlowYamlString } = await import("../flow-engine/flow-parser-yaml.js");
+    const flowConfig = parseFlowYamlString(content, "<preview>");
+    const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+    await ctx.ui.custom(
+      (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+        return createFlowPreviewOverlay({
+          flow: flowConfig,
+          theme,
+          tui: tuiInstance,
+          done,
+        });
+      },
+      {
+        overlay: true,
+        overlayOptions: {
+          width: "90%",
+          maxHeight: "85%",
+          anchor: "center",
+        },
+      },
+    );
+  }
+
   const unregisterInput2 = ctx.ui.onTerminalInput(async (data: string) => {
     if (data === KEY_CTRL_X_2 && architectAbort2) {
       architectAbort2.abort();
       return { consume: true } as const;
     }
+
+    // Handle navigate mode keyboard input (when selector is visible)
+    if (architectWidget && architectWidget.getPreviewSubMode?.() === "navigate" && !overlayOpen2) {
+      if (data === KEY_UP_2) {
+        const idx = architectWidget.getSelectedFlowIndex();
+        if (idx > 0) architectWidget.setSelectedFlowIndex(idx - 1);
+        return { consume: true } as const;
+      }
+      if (data === KEY_DOWN_2) {
+        const idx = architectWidget.getSelectedFlowIndex();
+        architectWidget.setSelectedFlowIndex(idx + 1);
+        return { consume: true } as const;
+      }
+      if (data === KEY_BACKSPACE_1_2 || data === KEY_BACKSPACE_2_2) {
+        architectWidget.setPreviewSubMode("preview");
+        return { consume: true } as const;
+      }
+      if (data === KEY_ENTER_2) {
+        const flows = architectWidget.getFlowContents();
+        const idx = architectWidget.getSelectedFlowIndex();
+        const selected = flows[idx];
+        if (selected) {
+          overlayOpen2 = true;
+          try {
+            await openFlowDetailOverlay2(selected.content);
+          } catch { /* overlay not available */ }
+          finally { overlayOpen2 = false; }
+          // Stay in navigate mode after closing detail overlay
+        }
+        return { consume: true } as const;
+      }
+    }
+
     if (data === KEY_CTRL_O_2 && architectWidget && !overlayOpen2) {
       overlayOpen2 = true;
       try {
         if (architectWidget.hasFlowContent()) {
-          const content = architectWidget.getFlowContent();
-          if (!content) { overlayOpen2 = false; return { consume: true } as const; }
-          const { parseFlowString } = await import("../flow-engine/flow-parser.js");
-          const flowConfig = parseFlowString(content, "<preview>");
-          const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
-          await ctx.ui.custom(
-            (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
-              return createFlowPreviewOverlay({
-                flow: flowConfig,
-                theme,
-                tui: tuiInstance,
-                done,
-              });
-            },
-            {
-              overlay: true,
-              overlayOptions: {
-                width: "90%",
-                maxHeight: "85%",
-                anchor: "center",
-              },
-            },
-          );
+          const flows = architectWidget.getFlowContents();
+          if (flows.length === 1) {
+            // Single flow — open detail overlay directly
+            await openFlowDetailOverlay2(flows[0].content);
+          } else if (flows.length > 1) {
+            // Multiple flows — switch to navigate mode (selector)
+            architectWidget.setPreviewSubMode("navigate");
+            overlayOpen2 = false;
+            return { consume: true } as const;
+          }
         } else {
           const entries = architectWidget.getEventLog?.() || [];
           if (entries.length > 0) {
@@ -666,9 +847,9 @@ async function handleNewFlow(
     forks: {} as Record<string, any>,
   };
 
-  // Extract conversation context to give the architect awareness of what led to this flow request.
-  // This is extracted here (after desc is resolved) so it's always fresh and in scope for the spawn loop.
-  const architectConvoContext = extractConversationContext(ctx.sessionManager?.getEntries?.() ?? []);
+  // Generate structured session summary to give the architect awareness of what led to this flow request.
+  // This is generated here (after desc is resolved) so it's always fresh and in scope for the spawn loop.
+  const architectContext = await generateArchitectContext(ctx, getModelRole);
 
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";
@@ -700,9 +881,9 @@ async function handleNewFlow(
       modelRegistry: spawnCtx2.modelRegistry,
       extraGuardFactories: spawnCtx2.extraGuardFactories,
       extraCustomTools: spawnCtx2.tools,
-      contextFileContents: architectConvoContext.length > 50
+      contextFileContents: architectContext
         ? [
-            `## Conversation Context\n\nThe following is the recent conversation from the user's main session that led to this flow request. Use it to understand what the user is trying to accomplish, what tools or patterns were discussed, and what they actually want the flow to do:\n\n${architectConvoContext}`,
+            `## Session Summary\n\nThe following is a structured summary of the user's main session that led to this flow request. Use it to understand what the user is trying to accomplish, what tools or patterns were discussed, and what they actually want the flow to do:\n\n${architectContext}`,
           ]
         : undefined,
       signal: architectAbort2.signal,
@@ -861,13 +1042,13 @@ async function handleNewFlow(
     // Re-discover to pick up custom agents written by architect
     pi.events.emit("flow:rediscover", {});
 
-    const { parseFlowFile } = await import("../flow-engine/flow-parser.js");
-    const flowConfig = parseFlowFile(flowPath);
+    const { parseFlowYamlFile } = await import("../flow-engine/flow-parser-yaml.js");
+    const flowConfig = parseFlowYamlFile(flowPath);
 
     let runFlowName: string;
 
     if (choice === "Save & Run") {
-      // After promotion the flow lives at custom/<safeName>.flow.md.
+      // After promotion the flow lives at custom/<safeName>.yaml.
       // Discovery derives the name as "custom:<safeName>" — that is the Map key.
       // flowConfig.name is the frontmatter name and does NOT match the Map key,
       // so we must use the filesystem-derived name here.

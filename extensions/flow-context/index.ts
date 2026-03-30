@@ -34,17 +34,17 @@ function getFlowFiles(projectRoot: string): { name: string; path: string }[] {
     try {
       for (const entry of readdirSync(savedFlowsDir)) {
         const entryPath = join(savedFlowsDir, entry);
-        if (entry.endsWith(".flow.md")) {
+        if (entry.endsWith(".yaml")) {
           // Top-level flow file
-          flowFiles.push({ name: entry.replace(".flow.md", ""), path: entryPath });
+          flowFiles.push({ name: entry.replace(".yaml", ""), path: entryPath });
         } else {
           // Check for subfolder (one level deep only)
           try {
             const stat = statSync(entryPath);
             if (stat.isDirectory()) {
               for (const sub of readdirSync(entryPath)) {
-                if (sub.endsWith(".flow.md")) {
-                  const name = `${entry}:${sub.replace(".flow.md", "")}`;
+                if (sub.endsWith(".yaml")) {
+                  const name = `${entry}:${sub.replace(".yaml", "")}`;
                   flowFiles.push({ name, path: join(entryPath, sub) });
                 }
               }

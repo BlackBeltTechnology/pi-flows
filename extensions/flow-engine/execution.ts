@@ -32,6 +32,8 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     .replace(/\$\{\{result\.([\w-]+)\.summary\}\}/g, (_, id) => ctx.results[id]?.summary ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.artifacts\}\}/g, (_, id) => ctx.results[id]?.artifacts ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.files\}\}/g, (_, id) => ctx.results[id]?.files ?? "")
+    // Catch-all for typed outputs: ${{result.STEP.anyField}}
+    .replace(/\$\{\{result\.([\w-]+)\.([\w]+)\}\}/g, (_, id, field) => ctx.results[id]?.[field] ?? "")
     .replace(/\$\{\{result\.([\w-]+)\}\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
     .replace(/\$\{\{loop\.([\w-]+)\.iteration\}\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 0))
     .replace(/\$\{\{loop\.([\w-]+)\.max\}\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0))
@@ -44,6 +46,8 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     .replace(/\{result\.([\w-]+)\.summary\}/g, (_, id) => ctx.results[id]?.summary ?? "")
     .replace(/\{result\.([\w-]+)\.artifacts\}/g, (_, id) => ctx.results[id]?.artifacts ?? "")
     .replace(/\{result\.([\w-]+)\.files\}/g, (_, id) => ctx.results[id]?.files ?? "")
+    // Catch-all for typed outputs: {result.STEP.anyField}
+    .replace(/\{result\.([\w-]+)\.([\w]+)\}/g, (_, id, field) => ctx.results[id]?.[field] ?? "")
     .replace(/\{result\.([\w-]+)\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
     .replace(/\{loop\.([\w-]+)\.iteration\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 0))
     .replace(/\{loop\.([\w-]+)\.max\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0));
@@ -241,6 +245,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     requireFinish: true,
     accessRules: agent.access,
     decisionBranches: options.decisionBranches,
+    agentOutputs: agent.outputs,
     allowAskUser: !!options.onExtensionUIRequest,
   };
 
@@ -325,6 +330,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Wire event capture
   let finishParams: any = undefined;
+  let finishToolCallId: string | undefined;
   let lastAssistantText = "";
   let lastApiError: string | undefined;
   let accumulatedTokens = { input: 0, output: 0 };
@@ -334,6 +340,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       case "tool_execution_start": {
         if (event.toolName === "finish") {
           finishParams = event.args;
+          finishToolCallId = event.toolCallId;
         }
         const tc: ToolCallRecord = {
           toolName: event.toolName,
@@ -358,6 +365,11 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
           last.isError = !!event.isError;
         }
         options.onToolResult?.(event.toolName || last?.toolName || "", output, !!event.isError);
+
+        // Abort session immediately after finish tool completes — no more LLM turns needed
+        if (finishToolCallId && event.toolCallId === finishToolCallId) {
+          session.abort();
+        }
         break;
       }
       case "message_end": {
@@ -430,8 +442,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   const duration = Date.now() - startTime;
   const aborted = options.signal?.aborted;
 
-  // Handle aborted agent
-  if (aborted) {
+  // Handle user-initiated abort (Ctrl+X / external signal).
+  // Skip this path if finish was called — the session was aborted intentionally
+  // after finish completed, and finishParams holds the real result.
+  if (aborted && !finishParams) {
     return {
       success: false,
       output: lastAssistantText || "Aborted by user",
@@ -479,6 +493,16 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       }
     : parseResult(lastAssistantText);
 
+  // Extract typed outputs from finishParams based on agent's declared outputs
+  const typedOutputs: Record<string, string> = {};
+  if (finishParams && agent.outputs) {
+    for (const output of agent.outputs) {
+      if (finishParams[output.name] !== undefined) {
+        typedOutputs[output.name] = String(finishParams[output.name]);
+      }
+    }
+  }
+
   return {
     success: parsed.status !== "error",
     output: lastAssistantText,
@@ -489,6 +513,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     duration,
     tokens: { ...accumulatedTokens },
     finishParams: finishParams ?? undefined,
+    typedOutputs: Object.keys(typedOutputs).length > 0 ? typedOutputs : undefined,
   };
 }
 

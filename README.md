@@ -86,7 +86,7 @@ Investigate the relevant code thoroughly. Call `finish` when done with your summ
 
 ### 3. Create a flow that uses it
 
-Save this to `.pi/flows/flows/my-research.flow.md`:
+Save this to `.pi/flows/flows/my-research.yaml`:
 
 ```markdown
 ---
@@ -146,7 +146,7 @@ An **agent** is an AI worker defined by a `.md` file. It has a system prompt (th
 
 ### Flows
 
-A **flow** is a pipeline of steps defined in a `.flow.md` file. Steps can run in parallel or sequence, branch on user choices or agent decisions, loop iteratively, or delegate to sub-flows.
+A **flow** is a pipeline of steps defined in a `.yaml` file. Steps can run in parallel or sequence, branch on user choices or agent decisions, loop iteratively, or delegate to sub-flows.
 
 - Flows live in `.pi/flows/flows/`
 - Each saved flow auto-registers as a `/command`
@@ -250,6 +250,7 @@ Declare these in the `tools:` field:
 | `find` | Find files in directory trees (supports glob patterns) |
 | `ls` | List directory contents |
 | `skill_read` | Read documentation files from a skill |
+| `ask_user` | Prompt the user for a selection, confirmation, or freetext input mid-execution. Requires `interactive: true` on the agent. |
 
 > **`finish` is automatic.** Every agent automatically has the `finish` tool — do not declare it. Agents *must* call `finish` as their last action to submit structured results. Any tool calls after `finish` are blocked.
 
@@ -383,7 +384,7 @@ Custom metric renderers can be registered by extension packages via `flow:regist
 
 ## Writing Flows
 
-Flows are `.flow.md` files with YAML frontmatter and `##`-delimited step sections. The step type is determined by the **`##` header prefix** — `## step-id` for agent steps, and `## type: id` for all other step types. The header text (after the prefix) is the **step ID**, used for dependency wiring (`blockedBy`), result references (`${{result.ID.*}}`), and branching.
+Flows are `.yaml` files with top-level metadata fields and a `steps` array. Each step has an `id` field and either an explicit `type` field or an inferred type based on its fields (e.g., `question` → fork, `check` → conditional, `agent` → agent step). The step `id` is used for dependency wiring (`blockedBy`), result references (`${{result.ID.*}}`), and branching.
 
 Save flows in `.pi/flows/flows/` to auto-register them as slash commands.
 
@@ -411,8 +412,8 @@ task_prompt: "What should I research and build?"
 >
 > | File path | Registered command |
 > |-----------|-------------------|
-> | `.pi/flows/flows/research.flow.md` | `/research` |
-> | `.pi/flows/flows/judo/research.flow.md` | `/judo:research` |
+> | `.pi/flows/flows/research.yaml` | `/research` |
+> | `.pi/flows/flows/judo/research.yaml` | `/judo:research` |
 >
 > Subdirectories add a colon-separated prefix (max one level deep). Keep the frontmatter `name:` in sync for clarity, but know that pi-flows always uses the filesystem-derived name.
 
@@ -542,7 +543,7 @@ The decision agent calls `finish` with `branch: "developer"` (the `loop_target` 
 Delegate execution to another flow file. The path to the sub-flow is encoded directly in the header using the `## flow-ref: path` syntax.
 
 ```
-## flow-ref: .pi/flows/flows/test-suite.flow.md
+## flow-ref: .pi/flows/flows/test-suite.yaml
 on_complete: deploy-step
 on_error: fix-step
 ```
@@ -762,7 +763,7 @@ export default function activate(pi: ExtensionAPI) {
 | Event | Purpose |
 |-------|---------|
 | `flow:register-agents-dir` | Add a directory of agent `.md` files |
-| `flow:register-flows-dir` | Add a directory of `.flow.md` files (registered as commands) |
+| `flow:register-flows-dir` | Add a directory of `.yaml` files (registered as commands) |
 | `flow:unregister-agents-dir` | Remove a previously registered agents directory |
 | `flow:unregister-flows-dir` | Remove a previously registered flows directory |
 | `flow:register-skills-dir` | Add a skills directory |

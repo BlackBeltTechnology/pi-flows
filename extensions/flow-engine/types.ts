@@ -33,6 +33,7 @@ export interface AgentConfig {
   skills?: string[]; // e.g., ["judo-backend-docs"]
   context?: string[]; // Files to inject at dispatch (bare paths resolved relative to change dir)
   inputs?: string[]; // Declared input names (contract for flow wiring)
+  outputs?: Array<{name: string, description?: string}>; // Declared output names (contract for result wiring)
   systemPrompt: string; // The body of the .md file (prompt template with {task}, {input.*}, etc.)
   output?: string; // Default output filename
   interactive?: boolean;
@@ -52,7 +53,7 @@ export interface AccessRules {
   };
 }
 
-// ---- Flow configuration (parsed from .flow.md) ----------------------------
+// ---- Flow configuration (parsed from .yaml flow files) --------------------
 
 export interface FlowConfig {
   name: string;
@@ -155,6 +156,7 @@ export interface AgentResult {
   duration: number; // ms
   tokens: { input: number; output: number };
   finishParams?: Record<string, any>; // Raw finish tool call args (if captured)
+  typedOutputs?: Record<string, string>; // Extracted typed output values from declared agent outputs
 }
 
 export interface ToolCallRecord {
@@ -220,7 +222,7 @@ export interface SubagentToolResultEvent extends SubagentEvent {
 
 export interface FlowResult {
   lastResult: AgentResult;
-  results: Record<string, { fullOutput: string; status: string; summary: string; artifacts: string; files: string }>;
+  results: Record<string, { fullOutput: string; status: string; summary: string; artifacts: string; files: string; [key: string]: string }>;
   forks: Record<string, { answer: string; notes?: string }>;
   flowName: string;
   stepCount: number;
@@ -241,6 +243,7 @@ export interface TemplateContext {
       summary: string;
       artifacts: string;
       files: string;
+      [key: string]: string; // Typed outputs from agent declarations
     }
   >;
   forks: Record<string, { answer: string; notes?: string }>;

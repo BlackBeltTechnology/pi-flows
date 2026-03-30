@@ -4,6 +4,9 @@
 // All architect-written files go to .pi/flows/.staging/ during design.
 // Files are promoted to final locations on Save, wiped on Cancel/Replan.
 // Orphaned staging dirs are cleaned up on pi startup.
+//
+// - Agents: .staging/agents/*.md → .pi/flows/agents/
+// - Flows:  .staging/flows/*.yaml → .pi/flows/flows/custom/<flowName>.yaml
 // ---------------------------------------------------------------------------
 
 import { existsSync, mkdirSync, rmSync, readdirSync, copyFileSync } from "node:fs";
@@ -41,9 +44,6 @@ export function hasStagingDir(projectRoot: string): boolean {
 /**
  * Promote staged files to their final locations and wipe staging.
  *
- * - Agents: .staging/agents/*.md → .pi/flows/agents/
- * - Flow:   .staging/flows/*.flow.md → .pi/flows/flows/custom/<flowName>.flow.md
- *
  * Returns the final flow file path, or null if no flow was staged.
  */
 export function promoteStagingToFinal(
@@ -71,11 +71,11 @@ export function promoteStagingToFinal(
   // Copy flow file — use the provided flowName for the final filename
   let finalFlowPath: string | null = null;
   if (existsSync(stagingFlows)) {
-    const flowFiles = readdirSync(stagingFlows).filter(f => f.endsWith(".flow.md"));
+    const flowFiles = readdirSync(stagingFlows).filter(f => f.endsWith(".yaml"));
     if (flowFiles.length > 0) {
       // Take the first (should only be one)
       const srcFlow = join(stagingFlows, flowFiles[0]);
-      finalFlowPath = join(finalFlows, `${flowName}.flow.md`);
+      finalFlowPath = join(finalFlows, `${flowName}.yaml`);
       copyFileSync(srcFlow, finalFlowPath);
     }
   }

@@ -229,6 +229,25 @@ export function validateAgentContent(
     }
   }
 
+  // ---- 5b. Output identifier validation -----------------------------------
+
+  if (fields.has("outputs")) {
+    const outputsEntry = fields.get("outputs")!;
+    const outputs = outputsEntry.value.split(",").map((s) => s.trim()).filter(Boolean);
+    for (const output of outputs) {
+      // Strip "name:" prefix if present (expanded format parsed as flat CSV)
+      const cleanName = output.startsWith("name:") ? output.slice(5).trim() : output;
+      if (cleanName && !/^[a-zA-Z0-9][\w-]*$/.test(cleanName)) {
+        diagnostics.push({
+          line: outputsEntry.line,
+          severity: "warning",
+          message: `Invalid output identifier "${cleanName}"`,
+          suggestion: "Output names must be alphanumeric with hyphens/underscores, starting with a letter or digit",
+        });
+      }
+    }
+  }
+
   // ---- 6. Access rule path pattern validation -----------------------------
 
   for (const [key, entry] of fields) {

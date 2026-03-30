@@ -1,13 +1,27 @@
 // ---------------------------------------------------------------------------
 // Flow Validate Tool
 //
-// Validates flow .md content without writing to disk. Returns LSP-style
+// Validates flow YAML content without writing to disk. Returns LSP-style
 // diagnostics: { line, severity, message, suggestion? }
+//
+// Uses parseFlowYamlString() as the parser. A lightweight line index provides
+// line-number attribution for diagnostics without duplicating parsing logic.
 // ---------------------------------------------------------------------------
 
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep } from "../types.js";
+import type {
+  AgentConfig,
+  FlowConfig,
+  FlowStep,
+  AgentStep,
+  ForkStep,
+  ConditionalStep,
+  AgentDecisionStep,
+  AgentLoopDecisionStep,
+  FlowRefStep,
+} from "../types.js";
+import { parseFlowYamlString } from "../flow-parser-yaml.js";
 
 // ---- Diagnostic type ------------------------------------------------------
 
@@ -16,6 +30,144 @@ export interface Diagnostic {
   severity: "error" | "warning";
   message: string;
   suggestion?: string;
+}
+
+// ---- Line index -----------------------------------------------------------
+
+/** Line locations for a single step's header and properties. */
+interface StepLineInfo {
+  headerLine: number;
+  props: Record<string, number>; // property name → line number
+}
+
+/** Line locations for frontmatter fields. */
+interface FrontmatterLineInfo {
+  openLine: number;   // line of opening ---
+  closeLine: number;  // line of closing ---
+  fields: Record<string, number>; // field name → line number
+}
+
+/** Complete line index for a flow file. */
+interface LineIndex {
+  frontmatter: FrontmatterLineInfo | null;
+  steps: Map<string, StepLineInfo>; // step ID → line info
+}
+
+/**
+ * Build a line index from YAML flow content. Scans lines once to map step IDs
+ * and property names to their source line numbers. Used solely for diagnostic
+ * attribution — no parsing of values.
+ *
+ * Handles YAML format: top-level keys as frontmatter, `- id: X` entries as
+ * step boundaries, and indented properties within each step.
+ */
+function buildLineIndex(content: string): LineIndex {
+  const lines = content.split("\n");
+  const steps = new Map<string, StepLineInfo>();
+
+  // YAML frontmatter: top-level keys before `steps:`
+  const fmFields: Record<string, number> = {};
+  let fmOpenLine = 1;
+  let stepsLine = 0;
+
+  // Step scanning state
+  let currentStepId: string | null = null;
+  let currentStepInfo: StepLineInfo | null = null;
+  let inStepsArray = false;
+  // Track nested block context for branches/inputs
+  let nestedBlock: string | null = null; // "branches" | "inputs" | null
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineNum = i + 1;
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+
+    // Top-level key detection (no indentation)
+    if (!inStepsArray) {
+      const topLevelMatch = line.match(/^(\w[\w_]*):\s*/);
+      if (topLevelMatch) {
+        if (topLevelMatch[1] === "steps") {
+          stepsLine = lineNum;
+          inStepsArray = true;
+        } else {
+          fmFields[topLevelMatch[1]] = lineNum;
+        }
+        continue;
+      }
+    }
+
+    if (!inStepsArray) continue;
+
+    // Detect step boundary: `  - id: <value>` (sequence item with id)
+    const stepIdMatch = trimmed.match(/^-\s+id:\s*(.+)$/);
+    if (stepIdMatch) {
+      // Flush previous step
+      if (currentStepId && currentStepInfo) {
+        steps.set(currentStepId, currentStepInfo);
+      }
+      currentStepId = stepIdMatch[1].trim();
+      currentStepInfo = { headerLine: lineNum, props: {} };
+      nestedBlock = null;
+      continue;
+    }
+
+    // Property tracking within a step (indented key: value)
+    if (currentStepInfo) {
+      // Direct property (e.g., `    agent: foo`, `    task: >`)
+      const propMatch = trimmed.match(/^(\w[\w_]*):\s*/);
+      if (propMatch && !trimmed.startsWith("-")) {
+        const propName = propMatch[1];
+        currentStepInfo.props[propName] = lineNum;
+        // Track if we're entering a nested block
+        if (propName === "branches" || propName === "inputs") {
+          nestedBlock = propName;
+        } else {
+          nestedBlock = null;
+        }
+        continue;
+      }
+
+      // Nested key under branches/inputs (e.g., `      "key": value`)
+      if (nestedBlock) {
+        const nestedMatch = trimmed.match(/^["']?([^"':]+)["']?\s*:\s*/);
+        if (nestedMatch) {
+          const nestedKey = nestedMatch[1].trim();
+          if (nestedBlock === "inputs") {
+            currentStepInfo.props[`input.${nestedKey}`] = lineNum;
+          } else if (nestedBlock === "branches") {
+            currentStepInfo.props[`branch.${nestedKey}`] = lineNum;
+          }
+        }
+      }
+    }
+  }
+
+  // Flush last step
+  if (currentStepId && currentStepInfo) {
+    steps.set(currentStepId, currentStepInfo);
+  }
+
+  const frontmatter: FrontmatterLineInfo = {
+    openLine: fmOpenLine,
+    closeLine: stepsLine > 0 ? stepsLine : fmOpenLine,
+    fields: fmFields,
+  };
+
+  return { frontmatter, steps };
+}
+
+/** Get line number for a step's property, falling back to the step header line. */
+function stepPropLine(idx: LineIndex, stepId: string, prop: string): number {
+  const info = idx.steps.get(stepId);
+  if (!info) return 1;
+  return info.props[prop] ?? info.headerLine;
+}
+
+/** Get line number for a step header. */
+function stepLine(idx: LineIndex, stepId: string): number {
+  return idx.steps.get(stepId)?.headerLine ?? 1;
 }
 
 // ---- Public validation function -------------------------------------------
@@ -31,195 +183,159 @@ export function validateFlowContent(
   const diagnostics: Diagnostic[] = [];
   const lines = content.split("\n");
 
-  // ---- 1. Frontmatter validation ------------------------------------------
+  // ---- 0. Build line index ------------------------------------------------
 
-  const trimmed = content.trimStart();
-  const skippedLines = content.length - trimmed.length > 0
-    ? content.slice(0, content.length - trimmed.length).split("\n").length - 1
-    : 0;
+  const idx = buildLineIndex(content);
 
-  if (!trimmed.startsWith("---")) {
+  // ---- 1. Top-level field validation ---------------------------------------
+
+  const frontmatterStartLine = idx.frontmatter?.openLine ?? 1;
+
+  // Check required top-level fields
+  if (!idx.frontmatter?.fields["name"]) {
     diagnostics.push({
-      line: 1,
+      line: frontmatterStartLine,
       severity: "error",
-      message: "Missing frontmatter. Flow files must start with ---",
-      suggestion: "Add YAML frontmatter block at the top: ---\\nname: my-flow\\ndescription: ...\\n---",
-    });
-    return { valid: false, diagnostics };
-  }
-
-  const endIndex = trimmed.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    diagnostics.push({
-      line: 1 + skippedLines,
-      severity: "error",
-      message: "Unclosed frontmatter (missing closing ---)",
-    });
-    return { valid: false, diagnostics };
-  }
-
-  const frontmatterStr = trimmed.slice(3, endIndex).trim();
-  const frontmatterStartLine = 1 + skippedLines;
-
-  // Parse frontmatter key-value pairs
-  const frontmatter: Record<string, string> = {};
-  const fmLines = frontmatterStr.split("\n");
-  for (let i = 0; i < fmLines.length; i++) {
-    const line = fmLines[i].trim();
-    if (!line || line.startsWith("#")) continue;
-    const match = line.match(/^(\w[\w_]*):\s*(.*)$/);
-    if (match) {
-      frontmatter[match[1]] = match[2].trim();
-    }
-  }
-
-  // Required frontmatter fields
-  if (!frontmatter.name) {
-    diagnostics.push({
-      line: frontmatterStartLine + 1,
-      severity: "error",
-      message: 'Missing required frontmatter field "name"',
-      suggestion: "Add name: my-flow-name to the frontmatter block",
+      message: 'Missing required field "name"',
+      suggestion: "Add name: my-flow-name at the top of the YAML file",
     });
   }
-  if (!frontmatter.description) {
+  if (!idx.frontmatter?.fields["description"]) {
     diagnostics.push({
-      line: frontmatterStartLine + 1,
+      line: frontmatterStartLine,
       severity: "error",
-      message: 'Missing required frontmatter field "description"',
-      suggestion: "Add description: A brief description to the frontmatter block",
+      message: 'Missing required field "description"',
+      suggestion: "Add description: A brief description at the top of the YAML file",
     });
   }
 
-  // ---- 2. Step header validation ------------------------------------------
+  // ---- 2. Step ID validation (pre-parse) -----------------------------------
 
-  const stepHeaders: { header: string; line: number }[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/^##\s+(.+)$/);
-    if (match) {
-      stepHeaders.push({ header: match[1].trim(), line: i + 1 });
-    }
-  }
-
-  const validPrefixes = ["fork:", "conditional:", "agent-decision:", "agent-loop-decision:", "flow-ref:"];
   const stepIds = new Set<string>();
 
-  for (const { header, line } of stepHeaders) {
-    const isSpecialStep = validPrefixes.some((p) => header.startsWith(p));
-    if (isSpecialStep) {
-      // Extract step ID from prefix
-      const colonIdx = header.indexOf(":");
-      const id = header.slice(colonIdx + 1).trim();
-      if (!id) {
-        diagnostics.push({
-          line,
-          severity: "error",
-          message: `Step header "${header}" has empty ID after prefix`,
-          suggestion: "Add an identifier after the colon, e.g., fork: choose-path",
-        });
-      } else {
-        stepIds.add(id);
-      }
+  for (const [id, info] of idx.steps) {
+    if (!id) {
+      diagnostics.push({
+        line: info.headerLine,
+        severity: "error",
+        message: "Step has empty id field",
+        suggestion: "Add an id value, e.g., id: my-step",
+      });
     } else {
-      // Agent step -- header is the step ID (agent name)
-      if (!/^[\w][\w-]*$/.test(header)) {
-        diagnostics.push({
-          line,
-          severity: "warning",
-          message: `Step header "${header}" contains unusual characters for an agent name`,
-          suggestion: "Agent step names should use alphanumeric characters and hyphens",
-        });
-      }
-      stepIds.add(header);
+      stepIds.add(id);
     }
   }
 
-  // ---- 3. Agent reference validation --------------------------------------
+  // ---- 3. Parse with canonical parser -------------------------------------
 
+  let flow: FlowConfig;
+  try {
+    flow = parseFlowYamlString(content, "<validate>");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Try to attribute the error to a step by scanning the message for step names
+    let errorLine = 1;
+    for (const [id, info] of idx.steps) {
+      if (message.includes(`"${id}"`)) {
+        errorLine = info.headerLine;
+        break;
+      }
+    }
+    diagnostics.push({
+      line: errorLine,
+      severity: "error",
+      message,
+    });
+    const hasErrors = diagnostics.some(d => d.severity === "error");
+    return { valid: !hasErrors, diagnostics };
+  }
+
+  // ---- 4. Semantic validation on parsed FlowConfig ------------------------
+
+  // Build ordered step ID list for forward/backward detection
+  const orderedStepIds = flow.steps.map(s => s.id);
+
+  // 4a. Agent reference validation
   if (getDiscoveredAgents) {
     const knownAgents = getDiscoveredAgents();
-    for (const { header, line } of stepHeaders) {
-      const isSpecialStep = validPrefixes.some((p) => header.startsWith(p));
-      if (isSpecialStep) {
-        // Check agent-decision and agent-loop-decision agent refs
-        if (header.startsWith("agent-decision:") || header.startsWith("agent-loop-decision:")) {
-          const blockStart = lines.findIndex((l, idx) => idx >= line - 1 && l.match(/^##\s/));
-          if (blockStart >= 0) {
-            for (let j = blockStart + 1; j < lines.length; j++) {
-              if (lines[j].match(/^##\s/)) break;
-              const agentMatch = lines[j].match(/^agent:\s*(.+)$/);
-              if (agentMatch) {
-                const agentName = agentMatch[1].trim();
-                if (!knownAgents.has(agentName)) {
-                  diagnostics.push({
-                    line: j + 1,
-                    severity: "warning",
-                    message: `Agent "${agentName}" referenced in ${header.split(":")[0]} is not in the catalog`,
-                  });
-                }
-              }
-            }
+
+    for (const step of flow.steps) {
+      switch (step.stepType) {
+        case "agent": {
+          const s = step as AgentStep;
+          if (!knownAgents.has(s.agent)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "agent"),
+              severity: "error",
+              message: `Agent "${s.agent}" is not in the discovered agent catalog`,
+              suggestion: "Create the agent definition with agent_write or check the name spelling",
+            });
           }
+          break;
         }
-      } else {
-        // Regular agent step — find agent: field in body
-        let agentName: string | null = null;
-        let agentLine = line;
-        for (let j = line; j < lines.length; j++) {
-          if (j > line && lines[j].match(/^##\s/)) break;
-          const agentMatch = lines[j].match(/^agent:\s*(.+)$/);
-          if (agentMatch) {
-            agentName = agentMatch[1].trim();
-            agentLine = j + 1;
-            break;
+        case "agent-decision": {
+          const s = step as AgentDecisionStep;
+          if (!knownAgents.has(s.agent)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "agent"),
+              severity: "warning",
+              message: `Agent "${s.agent}" referenced in agent-decision is not in the catalog`,
+            });
           }
+          break;
         }
-        if (!agentName) {
-          diagnostics.push({
-            line,
-            severity: "error",
-            message: `Agent step "${header}" missing required "agent" field`,
-            suggestion: `Add agent: <agent-name> to specify which agent to dispatch`,
-          });
-        } else if (!knownAgents.has(agentName)) {
-          diagnostics.push({
-            line: agentLine,
-            severity: "error",
-            message: `Agent "${agentName}" is not in the discovered agent catalog`,
-            suggestion: "Create the agent definition with agent_write or check the name spelling",
-          });
+        case "agent-loop-decision": {
+          const s = step as AgentLoopDecisionStep;
+          if (!knownAgents.has(s.agent)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "agent"),
+              severity: "warning",
+              message: `Agent "${s.agent}" referenced in agent-loop-decision is not in the catalog`,
+            });
+          }
+          break;
+        }
+        case "fork": {
+          const s = step as ForkStep;
+          if (s.agent && !knownAgents.has(s.agent)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "agent"),
+              severity: "warning",
+              message: `Fork "${s.id}" references agent "${s.agent}" which is not in the discovered catalog`,
+              suggestion: "Ensure the agent exists or will be created before the flow runs",
+            });
+          }
+          break;
         }
       }
     }
   }
 
-  // ---- 4. Parse step bodies for blockedBy, inputs, branches ---------------
-
-  const stepBlocks = parseStepBodies(lines);
-
-  // ---- 5. blockedBy reference validation ----------------------------------
-
-  for (const block of stepBlocks) {
-    if (block.blockedBy) {
-      for (const ref of block.blockedBy) {
-        if (!stepIds.has(ref)) {
-          diagnostics.push({
-            line: block.blockedByLine ?? block.line,
-            severity: "error",
-            message: `blockedBy references unknown step ID "${ref}"`,
-            suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
-          });
-        }
+  // 4b. blockedBy reference validation
+  for (const step of flow.steps) {
+    if (step.stepType !== "agent") continue;
+    const s = step as AgentStep;
+    if (!s.blockedBy) continue;
+    for (const ref of s.blockedBy) {
+      if (!stepIds.has(ref)) {
+        diagnostics.push({
+          line: stepPropLine(idx, s.id, "blockedBy"),
+          severity: "error",
+          message: `blockedBy references unknown step ID "${ref}"`,
+          suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+        });
       }
     }
   }
 
-  // ---- 6. DAG cycle detection ---------------------------------------------
-
+  // 4c. DAG cycle detection
   const adjacency = new Map<string, string[]>();
-  for (const block of stepBlocks) {
-    if (block.blockedBy) {
-      adjacency.set(block.id, block.blockedBy);
+  for (const step of flow.steps) {
+    if (step.stepType === "agent") {
+      const s = step as AgentStep;
+      if (s.blockedBy && s.blockedBy.length > 0) {
+        adjacency.set(s.id, s.blockedBy);
+      }
     }
   }
 
@@ -233,16 +349,20 @@ export function validateFlowContent(
     });
   }
 
-  // ---- 7. Input wiring validation (result.X references) -------------------
-
-  for (const block of stepBlocks) {
-    if (block.inputRefs) {
-      for (const { ref, line: refLine } of block.inputRefs) {
-        if (!stepIds.has(ref)) {
+  // 4d. Input wiring — result.X reference validation
+  for (const step of flow.steps) {
+    if (step.stepType !== "agent") continue;
+    const s = step as AgentStep;
+    if (!s.inputs) continue;
+    for (const [key, val] of Object.entries(s.inputs)) {
+      // Extract result.X references from the value
+      const refs = val.matchAll(/(?:\$\{\{|\{)result\.(\w[\w-]*)(?:\}\}|\})/g);
+      for (const m of refs) {
+        if (!stepIds.has(m[1])) {
           diagnostics.push({
-            line: refLine,
+            line: stepPropLine(idx, s.id, `input.${key}`) || stepPropLine(idx, s.id, "inputs"),
             severity: "error",
-            message: `Input reference {result.${ref}} points to unknown step ID "${ref}"`,
+            message: `Input reference {result.${m[1]}} points to unknown step ID "${m[1]}"`,
             suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
           });
         }
@@ -250,11 +370,176 @@ export function validateFlowContent(
     }
   }
 
-  // ---- 8. Unknown template variables --------------------------------------
+  // 4d2. Output wiring validation — warn on ${{result.STEP.FIELD}} when FIELD is not a declared output
+  const STANDARD_RESULT_FIELDS = new Set(["summary", "artifacts", "files", "status", "fullOutput"]);
+  for (const step of flow.steps) {
+    if (step.stepType !== "agent") continue;
+    const s = step as AgentStep;
+
+    // Collect all template strings that may contain result references
+    const templateStrings: string[] = [];
+    if (s.task) templateStrings.push(s.task);
+    if (s.inputs) {
+      for (const val of Object.values(s.inputs)) {
+        templateStrings.push(val);
+      }
+    }
+
+    for (const tpl of templateStrings) {
+      // Match ${{result.STEP.FIELD}} patterns
+      const refs = tpl.matchAll(/(?:\$\{\{|\{)result\.([\w-]+)\.([\w]+)(?:\}\}|\})/g);
+      for (const m of refs) {
+        const refStepId = m[1];
+        const refField = m[2];
+
+        // Skip standard fields — always valid
+        if (STANDARD_RESULT_FIELDS.has(refField)) continue;
+
+        // Find the referenced step's agent and check its declared outputs
+        const refStep = flow.steps.find(st => st.id === refStepId);
+        if (!refStep || refStep.stepType !== "agent") continue;
+
+        const refAgent = getDiscoveredAgents?.()?.get((refStep as AgentStep).agent);
+        if (!refAgent) continue;
+
+        const declaredOutputNames = (refAgent.outputs ?? []).map(o => o.name);
+        if (!declaredOutputNames.includes(refField)) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, "task") || stepPropLine(idx, s.id, "inputs"),
+            severity: "warning",
+            message: `result.${refStepId}.${refField} references field "${refField}" which is not a declared output of agent "${(refStep as AgentStep).agent}"`,
+            suggestion: declaredOutputNames.length > 0
+              ? `Declared outputs: ${declaredOutputNames.join(", ")}. Standard fields: summary, artifacts, files, status`
+              : `Agent "${(refStep as AgentStep).agent}" has no declared outputs. Use .summary, .artifacts, .files, or .status`,
+          });
+        }
+      }
+    }
+  }
+
+  // 4e. Branch target validation (fork + agent-decision)
+  for (const step of flow.steps) {
+    if (step.stepType === "fork") {
+      const s = step as ForkStep;
+      if (s.branches) {
+        for (const [option, target] of Object.entries(s.branches)) {
+          if (!stepIds.has(target)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, `branch.${option}`) || stepPropLine(idx, s.id, "branches"),
+              severity: "error",
+              message: `Fork branch "${option}" targets unknown step ID "${target}"`,
+              suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+            });
+          }
+        }
+      }
+    }
+    if (step.stepType === "agent-decision") {
+      const s = step as AgentDecisionStep;
+      for (const [branch, target] of Object.entries(s.branches)) {
+        if (!stepIds.has(target)) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, `branch.${branch}`) || stepPropLine(idx, s.id, "branches"),
+            severity: "error",
+            message: `Agent-decision branch "${branch}" targets unknown step ID "${target}"`,
+            suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+          });
+        }
+      }
+    }
+  }
+
+  // 4f. Agent-loop-decision target validation
+  for (const step of flow.steps) {
+    if (step.stepType !== "agent-loop-decision") continue;
+    const s = step as AgentLoopDecisionStep;
+
+    // loop_target
+    if (!stepIds.has(s.loop_target)) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "loop_target"),
+        severity: "error",
+        message: `loop_target "${s.loop_target}" references unknown step ID`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    } else {
+      // Warn if loop_target points forward
+      const blockIdx = orderedStepIds.indexOf(s.id);
+      const targetIdx = orderedStepIds.indexOf(s.loop_target);
+      if (targetIdx >= 0 && blockIdx >= 0 && targetIdx > blockIdx) {
+        diagnostics.push({
+          line: stepPropLine(idx, s.id, "loop_target"),
+          severity: "warning",
+          message: `loop_target "${s.loop_target}" points forward — expected a backward jump for a loop`,
+          suggestion: "loop_target should reference a step defined before this loop decision step",
+        });
+      }
+    }
+
+    // exit_target
+    if (!stepIds.has(s.exit_target)) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "exit_target"),
+        severity: "error",
+        message: `exit_target "${s.exit_target}" references unknown step ID`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    }
+  }
+
+  // 4g. Agent input coverage validation
+  if (getDiscoveredAgents) {
+    const knownAgents = getDiscoveredAgents();
+    for (const step of flow.steps) {
+      if (step.stepType !== "agent") continue;
+      const s = step as AgentStep;
+      const agent = knownAgents.get(s.agent);
+      if (!agent) continue;
+
+      const wiredKeys = new Set(s.inputs ? Object.keys(s.inputs) : []);
+
+      if (agent.inputs && agent.inputs.length > 0) {
+        // Warn on missing inputs
+        for (const declared of agent.inputs) {
+          if (!wiredKeys.has(declared)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "inputs") || stepLine(idx, s.id),
+              severity: "warning",
+              message: `Agent "${s.agent}" declares input "${declared}" but flow step does not wire it`,
+              suggestion: `Add to inputs: block: ${declared}: \${{result.STEP_ID.summary}}`,
+            });
+          }
+        }
+        // Warn on extra inputs
+        const declaredSet = new Set(agent.inputs);
+        for (const key of wiredKeys) {
+          if (!declaredSet.has(key)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, `input.${key}`) || stepPropLine(idx, s.id, "inputs"),
+              severity: "warning",
+              message: `Flow step provides input "${key}" but agent "${s.agent}" does not declare it`,
+              suggestion: `Declared inputs: ${agent.inputs.join(", ")}`,
+            });
+          }
+        }
+      } else if (wiredKeys.size > 0) {
+        // Agent has no declared inputs but flow provides some
+        for (const key of wiredKeys) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, `input.${key}`) || stepPropLine(idx, s.id, "inputs"),
+            severity: "warning",
+            message: `Flow step provides input "${key}" but agent "${s.agent}" does not declare any inputs`,
+          });
+        }
+      }
+    }
+  }
+
+  // ---- 5. Raw-line scans (template variables, deprecated syntax) ----------
 
   const knownPrefixes = ["result", "input", "fork", "task", "loop"];
 
-  // 8a. Primary syntax: ${{...}}
+  // 5a. Primary syntax: ${{...}}
   for (let i = 0; i < lines.length; i++) {
     const templateMatches = lines[i].matchAll(/\$\{\{([\w.]+)\}\}/g);
     for (const m of templateMatches) {
@@ -271,9 +556,8 @@ export function validateFlowContent(
     }
   }
 
-  // 8b. Deprecated single-brace syntax: {...} matching known template patterns
+  // 5b. Deprecated single-brace syntax
   for (let i = 0; i < lines.length; i++) {
-    // Match {word.word...} but exclude those already matched as ${{...}}
     const singleBraceMatches = lines[i].matchAll(/(?<!\$\{)\{([\w][\w.]*)\}(?!\})/g);
     for (const m of singleBraceMatches) {
       const varPath = m[1];
@@ -289,8 +573,7 @@ export function validateFlowContent(
     }
   }
 
-  // ---- 8c. Angle-bracket template syntax detection -------------------------
-
+  // 5c. Angle-bracket template syntax detection
   for (let i = 0; i < lines.length; i++) {
     const angleBracketMatches = lines[i].matchAll(/<([\w][\w-]*)\.(summary|artifacts|status|files|fullOutput)>/g);
     for (const m of angleBracketMatches) {
@@ -303,28 +586,10 @@ export function validateFlowContent(
     }
   }
 
-  // ---- 9. Fork branch target validation -----------------------------------
-
-  for (const block of stepBlocks) {
-    if (block.branches) {
-      for (const [option, target] of Object.entries(block.branches)) {
-        if (!stepIds.has(target)) {
-          diagnostics.push({
-            line: block.branchesLine ?? block.line,
-            severity: "error",
-            message: `Fork branch "${option}" targets unknown step ID "${target}"`,
-            suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
-          });
-        }
-      }
-    }
-  }
-
-  // ---- 9b. Deprecation warnings for allowCustom / decisionAgent ----
-
+  // 5d. Deprecation warnings for allowCustom / decisionAgent
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed === "allowCustom: true") {
+    const trimmedLine = lines[i].trim();
+    if (trimmedLine === "allowCustom: true") {
       diagnostics.push({
         line: i + 1,
         severity: "warning",
@@ -332,7 +597,7 @@ export function validateFlowContent(
         suggestion: "Replace allowCustom: true with allowNotes: true",
       });
     }
-    if (trimmed.startsWith("decisionAgent:")) {
+    if (trimmedLine.startsWith("decisionAgent:")) {
       diagnostics.push({
         line: i + 1,
         severity: "warning",
@@ -342,285 +607,15 @@ export function validateFlowContent(
     }
   }
 
-  // ---- 9c. Fork agent validation (autonomous mode) -------------------------
-
-  if (getDiscoveredAgents) {
-    const knownAgentsForFork = getDiscoveredAgents();
-    for (const block of stepBlocks) {
-      if (block.headerPrefix === "fork" && block.forkAgent) {
-        if (!knownAgentsForFork.has(block.forkAgent)) {
-          diagnostics.push({
-            line: block.forkAgentLine ?? block.line,
-            severity: "warning",
-            message: `Fork "${block.id}" references agent "${block.forkAgent}" which is not in the discovered catalog`,
-            suggestion: "Ensure the agent exists or will be created before the flow runs",
-          });
-        }
-      }
-    }
-  }
-
-  // ---- 10. Agent-loop-decision validation ----------------------------------
-
-  // Build ordered step ID list for forward/backward detection
-  const orderedStepIds = stepHeaders.map(h => {
-    const isSpecial = validPrefixes.some(p => h.header.startsWith(p));
-    return isSpecial ? h.header.slice(h.header.indexOf(":") + 1).trim() : h.header;
-  });
-
-  for (const block of stepBlocks) {
-    if (block.headerPrefix !== "agent-loop-decision") continue;
-
-    // Validate loop_target
-    if (block.loopTarget) {
-      if (!stepIds.has(block.loopTarget)) {
-        diagnostics.push({
-          line: block.loopTargetLine ?? block.line,
-          severity: "error",
-          message: `loop_target "${block.loopTarget}" references unknown step ID`,
-          suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
-        });
-      } else {
-        // Warn if loop_target points forward (not a real backward loop)
-        const blockIdx = orderedStepIds.indexOf(block.id);
-        const targetIdx = orderedStepIds.indexOf(block.loopTarget);
-        if (targetIdx >= 0 && blockIdx >= 0 && targetIdx > blockIdx) {
-          diagnostics.push({
-            line: block.loopTargetLine ?? block.line,
-            severity: "warning",
-            message: `loop_target "${block.loopTarget}" points forward — expected a backward jump for a loop`,
-            suggestion: "loop_target should reference a step defined before this loop decision step",
-          });
-        }
-      }
-    } else {
-      diagnostics.push({
-        line: block.line,
-        severity: "error",
-        message: `agent-loop-decision "${block.id}" missing required "loop_target"`,
-      });
-    }
-
-    // Validate exit_target
-    if (block.exitTarget) {
-      if (!stepIds.has(block.exitTarget)) {
-        diagnostics.push({
-          line: block.exitTargetLine ?? block.line,
-          severity: "error",
-          message: `exit_target "${block.exitTarget}" references unknown step ID`,
-          suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
-        });
-      }
-    } else {
-      diagnostics.push({
-        line: block.line,
-        severity: "error",
-        message: `agent-loop-decision "${block.id}" missing required "exit_target"`,
-      });
-    }
-
-    // Validate max_iterations
-    if (block.maxIterations) {
-      const n = parseInt(block.maxIterations, 10);
-      if (isNaN(n) || n <= 0) {
-        diagnostics.push({
-          line: block.maxIterationsLine ?? block.line,
-          severity: "error",
-          message: `max_iterations must be a positive integer, got "${block.maxIterations}"`,
-        });
-      }
-    } else {
-      diagnostics.push({
-        line: block.line,
-        severity: "error",
-        message: `agent-loop-decision "${block.id}" missing required "max_iterations"`,
-      });
-    }
-  }
-
-  // ---- 11. Agent input coverage validation ---------------------------------
-
-  if (getDiscoveredAgents) {
-    const knownAgents = getDiscoveredAgents();
-    for (const block of stepBlocks) {
-      // Only check agent steps (not fork/conditional/etc)
-      if (!validPrefixes.some((p) => block.id.startsWith(p.replace(":", "")))) {
-        const agent = knownAgents.get(block.id);
-        if (agent?.inputs && agent.inputs.length > 0) {
-          const wiredKeys = new Set(block.inputKeys ?? []);
-          // Warn on missing inputs
-          for (const declared of agent.inputs) {
-            if (!wiredKeys.has(declared)) {
-              diagnostics.push({
-                line: block.inputsLine ?? block.line,
-                severity: "warning",
-                message: `Agent "${block.id}" declares input "${declared}" but flow step does not wire it`,
-                suggestion: `Add to inputs: block: ${declared}: {result.STEP_ID.summary}`,
-              });
-            }
-          }
-          // Warn on extra inputs
-          const declaredSet = new Set(agent.inputs);
-          for (const key of block.inputKeys ?? []) {
-            if (!declaredSet.has(key)) {
-              diagnostics.push({
-                line: block.inputsLine ?? block.line,
-                severity: "warning",
-                message: `Flow step provides input "${key}" but agent "${block.id}" does not declare it`,
-                suggestion: `Declared inputs: ${agent.inputs.join(", ")}`,
-              });
-            }
-          }
-        } else if (block.inputKeys && block.inputKeys.length > 0 && agent && (!agent.inputs || agent.inputs.length === 0)) {
-          // Agent has no declared inputs but flow provides some
-          for (const key of block.inputKeys) {
-            diagnostics.push({
-              line: block.inputsLine ?? block.line,
-              severity: "warning",
-              message: `Flow step provides input "${key}" but agent "${block.id}" does not declare any inputs`,
-            });
-          }
-        }
-      }
-    }
-  }
-
   // ---- Result -------------------------------------------------------------
 
-  const hasErrors = diagnostics.some((d) => d.severity === "error");
+  const hasErrors = diagnostics.some(d => d.severity === "error");
   return { valid: !hasErrors, diagnostics };
-}
-
-// ---- Step body parsing helper ---------------------------------------------
-
-interface ParsedStepBlock {
-  id: string;
-  line: number;
-  headerPrefix?: string;
-  blockedBy?: string[];
-  blockedByLine?: number;
-  inputRefs?: { ref: string; line: number }[];
-  inputKeys?: string[];
-  inputsLine?: number;
-  branches?: Record<string, string>;
-  branchesLine?: number;
-  loopTarget?: string;
-  loopTargetLine?: number;
-  exitTarget?: string;
-  exitTargetLine?: number;
-  maxIterations?: string;
-  maxIterationsLine?: number;
-  forkAgent?: string;
-  forkAgentLine?: number;
-}
-
-function parseStepBodies(lines: string[]): ParsedStepBlock[] {
-  const blocks: ParsedStepBlock[] = [];
-  let currentId: string | null = null;
-  let currentLine = 0;
-  let currentBlock: ParsedStepBlock | null = null;
-
-  const validPrefixes = ["fork:", "conditional:", "agent-decision:", "agent-loop-decision:", "flow-ref:"];
-
-  for (let i = 0; i < lines.length; i++) {
-    const headerMatch = lines[i].match(/^##\s+(.+)$/);
-    if (headerMatch) {
-      // Flush previous block
-      if (currentBlock) blocks.push(currentBlock);
-
-      const header = headerMatch[1].trim();
-      const isSpecial = validPrefixes.some((p) => header.startsWith(p));
-      if (isSpecial) {
-        const colonIdx = header.indexOf(":");
-        currentId = header.slice(colonIdx + 1).trim();
-      } else {
-        currentId = header;
-      }
-      currentLine = i + 1;
-      currentBlock = { id: currentId, line: currentLine, headerPrefix: isSpecial ? header.slice(0, header.indexOf(":")) : undefined };
-      continue;
-    }
-
-    if (!currentBlock) continue;
-
-    // Parse blockedBy
-    const blockedByMatch = lines[i].match(/^blockedBy:\s*(.+)$/);
-    if (blockedByMatch) {
-      currentBlock.blockedBy = blockedByMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
-      currentBlock.blockedByLine = i + 1;
-    }
-
-    // Parse result.X template references (${{result.X}} and legacy {result.X})
-    const resultRefs = lines[i].matchAll(/(?:\$\{\{|\{)result\.(\w[\w-]*)(?:\}\}|\})/g);
-    for (const m of resultRefs) {
-      if (!currentBlock.inputRefs) currentBlock.inputRefs = [];
-      currentBlock.inputRefs.push({ ref: m[1], line: i + 1 });
-    }
-
-    // Parse inputs: (nested block)
-    if (lines[i].match(/^inputs:$/)) {
-      currentBlock.inputsLine = i + 1;
-      currentBlock.inputKeys = [];
-      for (let j = i + 1; j < lines.length; j++) {
-        const inputMatch = lines[j].match(/^\s{2,}(\S[\w-]*):\s*(.+)$/);
-        if (inputMatch) {
-          currentBlock.inputKeys.push(inputMatch[1]);
-        } else if (!lines[j].match(/^\s/) || lines[j].trim() === "") {
-          break;
-        }
-      }
-    }
-
-    // Parse agent: on fork steps (for autonomous mode)
-    const agentFieldMatch = lines[i].match(/^agent:\s*(.+)$/);
-    if (agentFieldMatch && currentBlock.headerPrefix === "fork") {
-      currentBlock.forkAgent = agentFieldMatch[1].trim();
-      currentBlock.forkAgentLine = i + 1;
-    }
-
-    // Parse loop_target, exit_target, max_iterations for agent-loop-decision
-    const loopTargetMatch = lines[i].match(/^loop_target:\s*(.+)$/);
-    if (loopTargetMatch) {
-      currentBlock.loopTarget = loopTargetMatch[1].trim();
-      currentBlock.loopTargetLine = i + 1;
-    }
-    const exitTargetMatch = lines[i].match(/^exit_target:\s*(.+)$/);
-    if (exitTargetMatch) {
-      currentBlock.exitTarget = exitTargetMatch[1].trim();
-      currentBlock.exitTargetLine = i + 1;
-    }
-    const maxIterationsMatch = lines[i].match(/^max_iterations:\s*(.+)$/);
-    if (maxIterationsMatch) {
-      currentBlock.maxIterations = maxIterationsMatch[1].trim();
-      currentBlock.maxIterationsLine = i + 1;
-    }
-
-    // Parse branches (nested block)
-    if (lines[i].match(/^branches:$/)) {
-      currentBlock.branchesLine = i + 1;
-      currentBlock.branches = {};
-      // Read indented lines
-      for (let j = i + 1; j < lines.length; j++) {
-        const branchMatch = lines[j].match(/^\s{2,}(\S[\w-]*):\s*(.+)$/);
-        if (branchMatch) {
-          currentBlock.branches[branchMatch[1]] = branchMatch[2].trim();
-        } else if (!lines[j].match(/^\s/) || lines[j].trim() === "") {
-          break;
-        }
-      }
-    }
-  }
-
-  // Flush last block
-  if (currentBlock) blocks.push(currentBlock);
-
-  return blocks;
 }
 
 // ---- Cycle detection (Kahn's algorithm) -----------------------------------
 
 function detectCycle(adjacency: Map<string, string[]>): string[] | null {
-  // Build in-degree map and full node set
   const nodes = new Set<string>();
   const inDeg = new Map<string, number>();
   const outEdges = new Map<string, string[]>();
@@ -629,19 +624,16 @@ function detectCycle(adjacency: Map<string, string[]>): string[] | null {
     nodes.add(node);
     for (const dep of deps) {
       nodes.add(dep);
-      // Edge: dep -> node (node is blocked by dep)
       if (!outEdges.has(dep)) outEdges.set(dep, []);
       outEdges.get(dep)!.push(node);
       inDeg.set(node, (inDeg.get(node) ?? 0) + 1);
     }
   }
 
-  // Initialize in-degree for nodes with no dependencies
   for (const node of nodes) {
     if (!inDeg.has(node)) inDeg.set(node, 0);
   }
 
-  // Kahn's algorithm
   const queue: string[] = [];
   for (const [node, deg] of inDeg) {
     if (deg === 0) queue.push(node);
@@ -658,10 +650,8 @@ function detectCycle(adjacency: Map<string, string[]>): string[] | null {
     }
   }
 
-  // If not all nodes visited, there's a cycle
   if (visited.size < nodes.size) {
-    // Find a cycle path for the diagnostic
-    const remaining = [...nodes].filter((n) => !visited.has(n));
+    const remaining = [...nodes].filter(n => !visited.has(n));
     return [...remaining, remaining[0]];
   }
 
@@ -677,9 +667,9 @@ export function registerFlowValidateTool(
   pi.registerTool({
     name: "flow_validate",
     description:
-      "Validate flow .md content without writing to disk. Returns LSP-style diagnostics with line numbers, severity, messages, and suggestions.",
+      "Validate flow YAML content without writing to disk. Returns LSP-style diagnostics with line numbers, severity, messages, and suggestions.",
     parameters: Type.Object({
-      content: Type.String({ description: "The flow .md content to validate" }),
+      content: Type.String({ description: "The flow YAML content to validate" }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const result = validateFlowContent(params.content, getDiscoveredAgents);

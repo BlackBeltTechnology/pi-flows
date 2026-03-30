@@ -23,6 +23,7 @@ export interface GuardOptions {
   requireFinish?: boolean;
   accessRules?: AccessRules;
   decisionBranches?: string[];
+  agentOutputs?: Array<{name: string, description?: string}>;
   allowAskUser?: boolean;
 }
 
@@ -97,6 +98,14 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         baseParams.branch = Type.Union(
           decisionBranches.map(b => Type.Literal(b)),
           { description: `Your decision. Must be one of: ${decisionBranches.join(", ")}` }
+        );
+      }
+
+      // Add typed output parameters from agent's declared outputs
+      const agentOutputs = options.agentOutputs ?? [];
+      for (const output of agentOutputs) {
+        baseParams[output.name] = Type.Optional(
+          Type.String({ description: output.description ?? `Output: ${output.name}` })
         );
       }
 

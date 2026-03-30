@@ -3,6 +3,7 @@ import type { FlowResult } from "../flow-engine/types.js";
 import type { DetailEntry } from "../flow-dashboard/agent-dashboard.js";
 import type { AgentCard } from "../flow-dashboard/agent-card.js";
 import { Text } from "@mariozechner/pi-tui";
+import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
@@ -165,13 +166,13 @@ export function activate(pi: ExtensionAPI) {
         const [provider, ...modelParts] = modelId.split("/");
         const model = modelRegistry.find(provider, modelParts.join("/"));
         if (model) {
-          const apiKey = await modelRegistry.getApiKey(model);
-          if (apiKey) {
+          const auth = await modelRegistry.getApiKeyAndHeaders(model);
+          if (auth.ok) {
             const { completeSimple } = await import("@mariozechner/pi-ai");
             const response = await completeSimple(model, {
               systemPrompt: SYSTEM_PROMPT,
               messages: [{ role: "user" as const, content: [{ type: "text" as const, text: buildUserMessage(fr) }], timestamp: Date.now() }],
-            }, { apiKey });
+            }, { apiKey: auth.apiKey, headers: auth.headers });
 
             // Extract text from response
             const text = response.content
@@ -262,17 +263,13 @@ export function activate(pi: ExtensionAPI) {
 
           // ── Navigate mode: agent list with card metrics ──
           if (state.mode === "navigate") {
-            const lines: string[] = [];
-            const bw = width - 2; // inner width between │ borders
-            const bi = bw - 2;    // content width inside │ + space padding
+            const bi = width - 4; // content width inside │ + space padding
 
-            // Top border
-            lines.push(theme.fg("dim", "┌" + "─".repeat(bw) + "┐"));
+            const content: string[] = [];
 
             // Header
             const navHeader = `${fr.flowName} · Select agent`;
-            lines.push(theme.fg("dim", "│ ") + theme.fg("accent", navHeader.padEnd(bi)) + theme.fg("dim", " │"));
-            lines.push(theme.fg("dim", "├" + "─".repeat(bw) + "┤"));
+            content.push(theme.fg("accent", navHeader));
 
             for (let i = 0; i < agentNames.length; i++) {
               const name = agentNames[i];
@@ -294,14 +291,16 @@ export function activate(pi: ExtensionAPI) {
                 if (eventCount > 0) metricStr = theme.fg("dim", ` · ${eventCount} events`);
               }
 
-              const agentLine = `${sel} ${sIcon} ${name}${metricStr}`;
-              lines.push(theme.fg("dim", "│ ") + agentLine.padEnd(bi) + theme.fg("dim", " │"));
+              content.push(`${sel} ${sIcon} ${name}${metricStr}`);
             }
 
-            // Footer hint
-            lines.push(theme.fg("dim", "├" + "─".repeat(bw) + "┤"));
-            lines.push(theme.fg("dim", "│ ") + theme.fg("dim", "↑↓ navigate · Enter inspect · Backspace back").padEnd(bi) + theme.fg("dim", " │"));
-            lines.push(theme.fg("dim", "└" + "─".repeat(bw) + "┘"));
+            const lines = renderBox({
+              width,
+              theme,
+              content,
+              separatorAfter: [0],
+              footer: [theme.fg("dim", "↑↓ navigate · Enter inspect · Backspace back")],
+            });
 
             // Pad to match summary box height
             while (lines.length < state.summaryBoxHeight) lines.push("");
@@ -313,47 +312,43 @@ export function activate(pi: ExtensionAPI) {
           }
 
           // ── Summary box mode (default) ──
-          const lines: string[] = [];
-
-          // Top border
-          lines.push(theme.fg("dim", "┌" + "─".repeat(width - 2) + "┐"));
+          const content: string[] = [];
+          const separators: number[] = [];
 
           // Header line
           const header = `${statusIcon} ${fr.flowName} complete · ${stats.agentCount} agents · ${stats.duration}`;
-          lines.push(theme.fg("dim", "│ ") + theme.fg("accent", header.padEnd(inner)) + theme.fg("dim", " │"));
-
-          // Separator
-          lines.push(theme.fg("dim", "├" + "─".repeat(width - 2) + "┤"));
+          content.push(theme.fg("accent", header));
+          separators.push(0);
 
           // LLM insight lines (or per-agent status if no insights)
           if (insightLines.length > 0) {
             for (const line of insightLines) {
               const trimmed = line.length > inner ? line.slice(0, inner - 1) + "…" : line;
-              lines.push(theme.fg("dim", "│ ") + trimmed.padEnd(inner) + theme.fg("dim", " │"));
+              content.push(trimmed);
             }
           } else {
             // Structured-only fallback: per-agent status
             for (const agent of stats.perAgent) {
               const icon = agent.status === "complete" ? theme.fg("success", "✓") : theme.fg("error", "✗");
               const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
-              const line = `${icon} ${agent.name}${detail}`;
-              lines.push(theme.fg("dim", "│ ") + line.padEnd(inner) + theme.fg("dim", " │"));
+              content.push(`${icon} ${agent.name}${detail}`);
             }
           }
 
           // Next step (workflow pipeline only)
           if (nextStep) {
-            lines.push(theme.fg("dim", "├" + "─".repeat(width - 2) + "┤"));
+            separators.push(content.length - 1);
             const nextLine = `Next: /${nextStep}`;
-            lines.push(theme.fg("dim", "│ ") + theme.fg("warning", nextLine.padEnd(inner)) + theme.fg("dim", " │"));
+            content.push(theme.fg("warning", nextLine));
           }
 
-          // Ctrl+O hint
-          lines.push(theme.fg("dim", "├" + "─".repeat(width - 2) + "┤"));
-          lines.push(theme.fg("dim", "│ ") + theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss").padEnd(inner) + theme.fg("dim", " │"));
-
-          // Bottom border
-          lines.push(theme.fg("dim", "└" + "─".repeat(width - 2) + "┘"));
+          const lines = renderBox({
+            width,
+            theme,
+            content,
+            separatorAfter: separators,
+            footer: [theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss")],
+          });
 
           // Track the summary box height for matching in other modes
           state.summaryBoxHeight = lines.length;
