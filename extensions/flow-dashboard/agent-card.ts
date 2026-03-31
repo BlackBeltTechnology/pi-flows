@@ -144,7 +144,7 @@ export class AgentCard {
 
     // Role subtitle line — show tokens when complete, role when running/pending
     let roleText = "";
-    if ((this.status === "complete" || this.status === "error") && (this.tokens.input > 0 || this.tokens.output > 0)) {
+    if ((this.status === "complete" || this.status === "error" || this.status === "blocked") && (this.tokens.input > 0 || this.tokens.output > 0)) {
       const tokenInfo = `↑${formatTokens(this.tokens.input)} ↓${formatTokens(this.tokens.output)}`;
       const durationSec = (this.duration / 1000).toFixed(1) + "s";
       roleText = truncate(`  ${tokenInfo} · ${durationSec}`, w - 1);
