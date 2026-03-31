@@ -111,7 +111,8 @@ export class AgentDashboard {
   onAgentComplete(agentName: string, result: AgentResult): void {
     const card = this.cards.get(agentName);
     if (card) {
-      card.status = result.success ? "complete" : "error";
+      card.status = result.result?.status === "blocked" ? "blocked"
+        : result.success ? "complete" : "error";
       card.onComplete(result);
       card.renderer.onComplete(result);
     }
@@ -226,7 +227,7 @@ export class AgentDashboard {
     // Header: flow name + finished/total agents
     {
       const total = this.cards.size;
-      const finished = Array.from(this.cards.values()).filter(c => c.status === "complete" || c.status === "error").length;
+      const finished = Array.from(this.cards.values()).filter(c => c.status === "complete" || c.status === "error" || c.status === "blocked").length;
       const label = this.workflow
         ? (this.workflow.stages[this.currentStageIndex]?.name || this.workflow.id)
         : this.flowName;

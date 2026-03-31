@@ -78,10 +78,12 @@ export class AgentCard {
     const icon = this.status === "running"
       ? SPINNER_FRAMES[this.spinFrame % SPINNER_FRAMES.length]
       : this.status === "complete" ? "✓"
+      : this.status === "blocked" ? "⚠"
       : this.status === "error" ? "✗" : "○";
 
     const statusTheme = this.status === "running" ? "accent"
       : this.status === "complete" ? "success"
+      : this.status === "blocked" ? "warning"
       : this.status === "error" ? "error" : "dim";
 
     const nameColor = this.status === "pending" ? "dim" : "accent";

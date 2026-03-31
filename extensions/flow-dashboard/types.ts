@@ -33,7 +33,7 @@ export interface AgentCardRenderer {
 }
 
 /** Agent card status. */
-export type CardStatus = "pending" | "running" | "complete" | "error";
+export type CardStatus = "pending" | "running" | "complete" | "error" | "blocked";
 
 /** Card data for tracking agent state in the dashboard. */
 export interface CardData {

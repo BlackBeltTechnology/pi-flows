@@ -214,7 +214,9 @@ export function activate(pi: ExtensionAPI) {
         }
       } else {
         for (const agent of stats.perAgent) {
-          const icon = agent.status === "complete" ? "✓" : "✗";
+          const icon = agent.status === "complete" ? "✓"
+            : agent.status === "skipped" ? "✓"
+            : (agent.status === "blocked" || agent.status === "error") ? "⚠" : "✗";
           const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
           summaryMdLines.push(`${icon} ${agent.name}${detail}`);
         }
