@@ -2,8 +2,8 @@ import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentD
 import { expandTemplateVariables, spawnAgent } from "./execution.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
-import { globSync } from "node:fs";
-import { join } from "node:path";
+import { globSync, readFileSync, existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 // ---- Flow cancellation error -----------------------------------------------
 
@@ -50,7 +50,6 @@ export interface FlowRunOptions {
   getModelRole?: (role: string) => string | undefined;
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
-  getContextFiles?: (agent: any) => string[];
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
   onAgentStarted?: (agentName: string, stepId: string) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult) => void;
@@ -381,19 +380,49 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
 
   options.onAgentStarted?.(step.agent, step.id);
 
-  // Resolve step inputs at dispatch time
+  // Resolve step inputs at dispatch time.
+  // File inputs (file:// prefix) are read from disk. Their content is stored with unique
+  // sentinel placeholders so that expandTemplateVariables never sees the raw file content
+  // (which could contain ${{}} syntax that would be incorrectly expanded).
   const resolvedInputs: Record<string, string> = {};
+  const fileInputs: Record<string, string> = {};  // sentinel → file content
   if (step.inputs) {
     const resolveCtx: TemplateContext = {
       task: ctx.task,
       inputs: {},
       results: ctx.results,
-      forks: ctx.forks,
       loopCounters: ctx.loopCounters,
       loopMaxIterations: ctx.loopMaxIterations,
     };
     for (const [name, expr] of Object.entries(step.inputs)) {
-      resolvedInputs[name] = expandTemplateVariables(expr, resolveCtx);
+      const resolved = expandTemplateVariables(expr, resolveCtx);
+      if (resolved.startsWith("file://")) {
+        const filePath = resolved.slice(7);
+        if (!filePath) {
+          return {
+            output: `File input "${name}" resolved to empty path (was: ${expr})`,
+            stderr: `file:// input "${name}" has empty path after template expansion`,
+            result: { status: "error" as const, files: [], artifacts: "", summary: "" },
+            toolCalls: [],
+          };
+        }
+        const absPath = resolve(options.cwd, filePath);
+        if (!existsSync(absPath)) {
+          return {
+            output: `File input "${name}" not found: ${absPath} (resolved from: ${expr})`,
+            stderr: `file:// input "${name}" references missing file: ${absPath}`,
+            result: { status: "error" as const, files: [], artifacts: "", summary: "" },
+            toolCalls: [],
+          };
+        }
+        const content = readFileSync(absPath, "utf-8");
+        // Use a sentinel placeholder that won't appear in normal text or be matched by template expansion
+        const sentinel = `__FILE_INPUT_${name}_${Date.now()}__`;
+        resolvedInputs[name] = sentinel;
+        fileInputs[sentinel] = content;
+      } else {
+        resolvedInputs[name] = resolved;
+      }
     }
   }
 
@@ -401,7 +430,6 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     task: ctx.task,
     inputs: resolvedInputs,
     results: ctx.results,
-    forks: ctx.forks,
     loopCounters: ctx.loopCounters,
     loopMaxIterations: ctx.loopMaxIterations,
   };
@@ -418,17 +446,15 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     }
   }
 
-  // Get context file contents
-  const contextFiles = options.getContextFiles?.(agentConfig) ?? [];
-
   // Autowire fork context if this step was branched-to from a fork
+  const preambleSections: string[] = [];
   const forkCtx = ctx.pendingForkContext?.get(step.id);
   if (forkCtx) {
     const header = forkCtx.decidedBy ? "Auto Decision" : "User Decision";
     let section = `## ${header}: ${forkCtx.forkId}\nQuestion: ${forkCtx.question}\nSelected: ${forkCtx.answer}`;
     if (forkCtx.notes) section += `\nNotes: ${forkCtx.notes}`;
     if (forkCtx.decidedBy) section += `\nDecided by: ${forkCtx.decidedBy}`;
-    contextFiles.push(section);
+    preambleSections.push(section);
     // Remove so it's only injected into the immediate branch step
     ctx.pendingForkContext!.delete(step.id);
   }
@@ -438,7 +464,8 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     task: userTask,
     templateContext: templateCtx,
     skillContents,
-    contextFileContents: contextFiles,
+    preambleSections,
+    fileInputs: Object.keys(fileInputs).length > 0 ? fileInputs : undefined,
     getModelRole: options.getModelRole,
     cwd: options.cwd,
     authStorage: options.authStorage,
@@ -459,21 +486,10 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   return result;
 }
 
-/** Fallback agent config when flow-decision is not in the agent catalog. */
-const FALLBACK_DECISION_AGENT: AgentConfig = {
-  name: "flow-decision",
-  description: "Makes autonomous decisions at fork and loop-decision points",
-  model: "@fast",
-  tools: [],
-  systemPrompt: "You are a flow decision agent. Analyze the question and options, then choose the best option. Call finish with your chosen branch and a brief summary.",
-  source: "<fallback>",
-};
-
 /**
  * Spawn the fork's decision agent to choose a branch.
  * Used by autonomous mode, __auto_decide__, and __custom_decide__ paths.
- * When the fork has no agent: field, uses the built-in `flow-decision` agent
- * (or a minimal fallback if not found in the catalog).
+ * When the fork has no agent: field, uses the built-in `flow-decision` agent.
  */
 async function spawnForkDecisionAgent(
   step: ForkStep,
@@ -483,13 +499,22 @@ async function spawnForkDecisionAgent(
 ): Promise<StepResult> {
   const agentConfig = step.agent
     ? options.getAgent(step.agent)
-    : (options.getAgent("flow-decision") ?? FALLBACK_DECISION_AGENT);
-  if (!agentConfig) return {};
+    : options.getAgent("flow-decision");
+  if (!agentConfig) {
+    return {
+      agentResult: {
+        output: `Decision agent not found: "${step.agent || 'flow-decision'}". Ensure the agent exists in the catalog.`,
+        stderr: `Decision agent "${step.agent || 'flow-decision'}" not found`,
+        result: { status: "error" as const, files: [], artifacts: "", summary: "" },
+        toolCalls: [],
+      },
+    };
+  }
 
   const branchNames = Object.keys(step.branches);
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
-    results: ctx.results, forks: ctx.forks,
+    results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   };
 
@@ -534,7 +559,7 @@ async function spawnForkDecisionAgent(
 async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   const expandedQuestion = expandTemplateVariables(step.question, {
     task: ctx.task, inputs: {},
-    results: ctx.results, forks: ctx.forks,
+    results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 
@@ -643,13 +668,13 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
 
   const decisionTask = expandTemplateVariables(step.task, {
     task: ctx.task, inputs: {},
-    results: ctx.results, forks: ctx.forks,
+    results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
-    results: ctx.results, forks: ctx.forks,
+    results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   };
 
@@ -660,14 +685,11 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
       if (content) skillContents.set(skill, content);
     }
   }
-  const contextFiles = options.getContextFiles?.(decisionConfig) ?? [];
-
   const result = await spawnAgent({
     agent: decisionConfig,
     task: decisionTask,
     templateContext: templateCtx,
     skillContents,
-    contextFileContents: contextFiles,
     getModelRole: options.getModelRole,
     cwd: options.cwd,
     authStorage: options.authStorage,
@@ -712,13 +734,13 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
 
   const decisionTask = expandTemplateVariables(step.task, {
     task: ctx.task, inputs: {},
-    results: ctx.results, forks: ctx.forks,
+    results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   }) + `\n\nThis is iteration ${iteration} of ${step.max_iterations}.`;
 
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
-    results: ctx.results, forks: ctx.forks,
+    results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   };
 
@@ -729,14 +751,11 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
       if (content) skillContents.set(skill, content);
     }
   }
-  const contextFiles = options.getContextFiles?.(decisionConfig) ?? [];
-
   const result = await spawnAgent({
     agent: decisionConfig,
     task: decisionTask,
     templateContext: templateCtx,
     skillContents,
-    contextFileContents: contextFiles,
     getModelRole: options.getModelRole,
     cwd: options.cwd,
     authStorage: options.authStorage,
@@ -757,7 +776,7 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
 async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   const expandedPath = expandTemplateVariables(step.path, {
     task: ctx.task, inputs: {},
-    results: ctx.results, forks: ctx.forks,
+    results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
   });
 
@@ -801,7 +820,7 @@ function storeResult(ctx: FlowContext, stepId: string, result: AgentResult): voi
     status: result.result.status,
     summary: result.result.summary,
     artifacts: result.result.artifacts,
-    files: result.result.files.map(f => `${f.path} (${f.action})`).join(", "),
+    files: result.result.files.map(f => f.path).join(", "),
     // Merge typed outputs from agent's declared outputs
     ...(result.typedOutputs ?? {}),
   };

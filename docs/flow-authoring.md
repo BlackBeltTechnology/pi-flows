@@ -326,7 +326,7 @@ agent: router-agent
 task: Choose the approach based on the technical context
 ```
 
-After the user picks an option, they are always prompted for optional notes (Enter to skip). Notes are accessible via `${{fork.ID.notes}}`.
+After the user picks an option, they are always prompted for optional notes (Enter to skip). Fork context (question, selected option, notes, and who decided) is **automatically injected** into the branch step's system prompt — no manual wiring needed.
 
 **Field reference:**
 
@@ -339,14 +339,6 @@ After the user picks an option, they are always prompted for optional notes (Ent
 | `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
 | `agent` | | Agent for autonomous decisions (Ctrl+A) and custom freetext routing. Required when `allowCustom` is set. |
 | `task` | | Context passed to the decision agent. Defaults to the question + options. |
-
-**Template variable access:**
-
-```yaml
-# In downstream steps:
-task: "User chose: ${{fork.choose-approach.answer}}"
-task: "Notes: ${{fork.choose-approach.notes}}"
-```
 
 **Autonomous mode:** When the user presses Ctrl+A (enabling `AUTO` in the footer), fork steps that have an `agent:` field skip the user prompt and let the named agent decide the branch automatically. Fork steps without `agent:` always prompt the user, even in autonomous mode.
 
@@ -540,10 +532,8 @@ Template variables are placeholders in `task`, `inputs`, `question`, and system 
 | `${{result.STEP-ID.summary}}` | Summary from `finish(summary:)` |
 | `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |
 | `${{result.STEP-ID.artifacts}}` | The `<artifacts>` XML block from `finish` |
-| `${{result.STEP-ID.files}}` | Human-readable file list (e.g., `src/auth.ts (created)`) |
+| `${{result.STEP-ID.files}}` | Comma-separated file paths created/modified by the step |
 | `${{result.STEP-ID.<outputName>}}` | A typed output from the agent's `outputs:` declaration |
-| `${{fork.STEP-ID.answer}}` | User's answer from a fork step |
-| `${{fork.STEP-ID.notes}}` | Optional notes the user added to a fork answer |
 | `${{loop.STEP-ID.iteration}}` | Current iteration number (1-based) in a loop step |
 | `${{loop.STEP-ID.max}}` | Maximum iterations configured for a loop step |
 

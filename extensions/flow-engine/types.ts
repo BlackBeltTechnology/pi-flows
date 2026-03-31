@@ -31,7 +31,6 @@ export interface AgentConfig {
   thinking?: string; // off, minimal, low, medium, high, xhigh
   tools: string[]; // e.g., ["read", "write", "edit", "grep", "bash"]
   skills?: string[]; // e.g., ["judo-backend-docs"]
-  context?: string[]; // PARSED BUT NOT WIRED — getContextFiles callback is never provided in index.ts
   inputs?: string[]; // Declared input names (contract for flow wiring)
   outputs?: Array<{name: string, description?: string}>; // Declared output names (contract for result wiring)
   systemPrompt: string; // The body of the .md file (prompt template with {task}, {input.*}, etc.)
@@ -244,7 +243,6 @@ export interface TemplateContext {
       [key: string]: string; // Typed outputs from agent declarations
     }
   >;
-  forks: Record<string, { answer: string; notes?: string }>;
   loopCounters?: Record<string, number>;
   loopMaxIterations?: Record<string, number>;
 }

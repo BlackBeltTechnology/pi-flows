@@ -50,7 +50,11 @@ function renderFlowPreview(flow: FlowConfig, knownAgents: Map<string, AgentConfi
         }
         if (agentStep.inputs && Object.keys(agentStep.inputs).length > 0) {
           for (const [key, val] of Object.entries(agentStep.inputs)) {
-            lines.push(`     input.${key}: ${truncate(val, 60)}`);
+            if (val.startsWith("file://")) {
+              lines.push(`     input: ${key} ← 📄 ${truncate(val.slice(7), 55)}`);
+            } else {
+              lines.push(`     input: ${key} ← ${truncate(val, 60)}`);
+            }
           }
         }
         if (agentStep.output) {

@@ -39,7 +39,6 @@ export function parseAgentString(content: string, source: string): AgentConfig {
 
   const tools = splitCsv(fields.get("tools") ?? "");
   const skills = splitCsv(fields.get("skills") ?? "") || undefined;
-  const context = parseYamlArray(fields.get("context:array") ?? "") || undefined;
   const inputs = parseYamlArray(fields.get("inputs:array") ?? "") || undefined;
   const outputs = parseOutputsArray(fields, frontmatter) || undefined;
 
@@ -78,7 +77,6 @@ export function parseAgentString(content: string, source: string): AgentConfig {
     ...(thinking !== undefined && { thinking }),
     tools,
     ...(skills !== undefined && skills.length > 0 && { skills }),
-    ...(context !== undefined && context.length > 0 && { context }),
     ...(inputs !== undefined && inputs.length > 0 && { inputs }),
     ...(outputs !== undefined && outputs.length > 0 && { outputs }),
     systemPrompt: body.trim(),

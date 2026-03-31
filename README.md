@@ -582,7 +582,7 @@ branches:
 | `agent` | Agent for autonomous decisions (Ctrl+A) and custom freetext routing. Required when `allowCustom` is set. |
 | `task` | Task description for the decision agent. Defaults to a prompt containing the question and options if omitted |
 
-After the user picks an option, they are always prompted for optional notes (Enter to skip). The user's answer is available as `${{fork.choose-approach.answer}}` and notes as `${{fork.choose-approach.notes}}`.
+After the user picks an option, they are always prompted for optional notes (Enter to skip). Fork context (question, selected option, notes, and who decided) is **automatically injected** into the branch step's system prompt — no manual wiring needed.
 
 > **`options:` format:** Options can be comma-separated inline (`options: fast, thorough`) or as a YAML list. Option text must exactly match the keys in `branches:`.
 
@@ -778,11 +778,9 @@ Use these placeholders in `task`, `inputs`, `question` fields in flow steps, and
 | `${{result.<step-id>.summary}}` | Summary text from a step's `finish` call |
 | `${{result.<step-id>.status}}` | Status: `complete`, `error`, or `blocked` |
 | `${{result.<step-id>.artifacts}}` | Structured data (XML) from a step's `finish` `artifacts` field |
-| `${{result.<step-id>.files}}` | Files touched by a step, e.g. `src/auth.ts (created), ...` |
+| `${{result.<step-id>.files}}` | Comma-separated file paths created/modified by a step |
 | `${{result.<step-id>.<outputName>}}` | A typed output value (from the agent's `outputs:` declaration) |
 | `${{input.<name>}}` | A wired input value for this step (set in the `inputs:` block) |
-| `${{fork.<step-id>.answer}}` | The user's answer from a fork step |
-| `${{fork.<step-id>.notes}}` | Optional notes the user added to a fork answer |
 | `${{loop.<step-id>.iteration}}` | Current iteration number in an agent-loop-decision step |
 | `${{loop.<step-id>.max}}` | Maximum iterations configured for a loop step |
 
@@ -797,10 +795,9 @@ task: "Implement feature: ${{task}}. Research: ${{result.researcher.summary}}"
 agent: verifier
 task: "Check iteration ${{loop.verify-loop.iteration}} of ${{loop.verify-loop.max}}: ${{result.developer.summary}}"
 
-## post-fork
-agent: writer
-task: "User chose: ${{fork.choose-approach.answer}}. Notes: ${{fork.choose-approach.notes}}"
 ```
+
+> **Fork context:** Fork decisions (question, answer, notes, who decided) are automatically injected into the branch step's system prompt. No `${{fork.*}}` wiring needed.
 
 > **Resolution order:** Template variables are expanded just before an agent is dispatched, so `${{result.X}}` is only valid if step `X` ran before the current step (enforced by `blockedBy`). Referencing a step that hasn't completed yet resolves to an empty string.
 

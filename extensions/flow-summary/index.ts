@@ -239,8 +239,8 @@ export function activate(pi: ExtensionAPI) {
       spinnerTimer = null;
     }
 
-    const hasError = stats.perAgent.some(a => a.status === "error");
-    const statusIcon = hasError ? "⚠" : "✓";
+    const hasIssue = stats.perAgent.some(a => a.status === "error" || a.status === "blocked");
+    const statusIcon = hasIssue ? "⚠" : "✓";
     const agentNames = Object.keys(fr.results);
 
     // Set summary state (accessible via direct import from flow-engine)
@@ -277,7 +277,10 @@ export function activate(pi: ExtensionAPI) {
               const sel = i === state.selectedIndex ? ">" : " ";
               const statusStr = result?.status || "unknown";
               const sIcon = statusStr === "complete" ? theme.fg("success", "✓")
-                : statusStr === "error" ? theme.fg("error", "✗") : theme.fg("dim", "○");
+                : statusStr === "skipped" ? theme.fg("dim", "✓")
+                : statusStr === "blocked" ? theme.fg("warning", "⚠")
+                : statusStr === "error" ? theme.fg("error", "⚠")
+                : theme.fg("dim", "○");
 
               // Try to get card metric from preserved cards
               let metricStr = "";
@@ -329,7 +332,11 @@ export function activate(pi: ExtensionAPI) {
           } else {
             // Structured-only fallback: per-agent status
             for (const agent of stats.perAgent) {
-              const icon = agent.status === "complete" ? theme.fg("success", "✓") : theme.fg("error", "✗");
+              const icon = agent.status === "complete" ? theme.fg("success", "✓")
+                : agent.status === "skipped" ? theme.fg("dim", "✓")
+                : agent.status === "blocked" ? theme.fg("warning", "⚠")
+                : agent.status === "error" ? theme.fg("error", "⚠")
+                : theme.fg("dim", "○");
               const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
               content.push(`${icon} ${agent.name}${detail}`);
             }

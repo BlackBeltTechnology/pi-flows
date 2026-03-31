@@ -453,7 +453,7 @@ async function handleEditFlow(
       modelRegistry: spawnCtx.modelRegistry,
       extraGuardFactories: spawnCtx.extraGuardFactories,
       extraCustomTools: spawnCtx.tools,
-      contextFileContents: editArchitectContext
+      preambleSections: editArchitectContext
         ? [
             `## Session Summary\n\nThe following is a structured summary of the user's main session that led to this flow edit request. Use it to understand what the user is trying to change and why:\n\n${editArchitectContext}`,
           ]
@@ -878,7 +878,7 @@ async function handleNewFlow(
       modelRegistry: spawnCtx2.modelRegistry,
       extraGuardFactories: spawnCtx2.extraGuardFactories,
       extraCustomTools: spawnCtx2.tools,
-      contextFileContents: architectContext
+      preambleSections: architectContext
         ? [
             `## Session Summary\n\nThe following is a structured summary of the user's main session that led to this flow request. Use it to understand what the user is trying to accomplish, what tools or patterns were discussed, and what they actually want the flow to do:\n\n${architectContext}`,
           ]

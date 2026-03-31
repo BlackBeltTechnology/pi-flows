@@ -126,7 +126,9 @@ Properties:
 
 ### Fork Step
 
-Presents a choice to the user and branches accordingly. After the user picks an option, they are always prompted for optional notes ("Enter to skip"). Notes are stored as `${{fork.ID.notes}}` and autowired into the branch step's context.
+Presents a choice to the user and branches accordingly. After the user picks an option, they are always prompted for optional notes ("Enter to skip").
+
+**Fork context is automatically injected** into the branch step's system prompt — the downstream agent receives the question, selected option, user notes, and who decided (user or agent) without any manual wiring. Do NOT use `${{fork.*}}` template variables (deprecated).
 
 ```yaml
 - id: choose-approach
@@ -141,9 +143,7 @@ Presents a choice to the user and branches accordingly. After the user picks an 
     Choose the best approach based on: ${{result.analyzer.summary}}
 ```
 
-**Notes** are always prompted after the user picks an option. Wire `${{fork.ID.notes}}` into the downstream branch step's task when you want the agent to use the user's freetext context. The answer is available as `${{fork.ID.answer}}`.
-
-**allowCustom** (optional): Appends an "Other (describe)" option. When the user selects it and types freetext, the fork's `agent:` interprets the custom text and routes to the closest branch. The custom freetext is stored as `${{fork.ID.notes}}`. **Requires `agent:` field** — the validator enforces this.
+**allowCustom** (optional): Appends an "Other (describe)" option. When the user selects it and types freetext, the fork's `agent:` interprets the custom text and routes to the closest branch. **Requires `agent:` field** — the validator enforces this.
 
 **agent** (optional): Agent to use for autonomous decisions. When autonomous mode is active (Ctrl+A), the agent auto-decides without prompting the user. Also used to route `allowCustom` freetext answers.
 
@@ -228,8 +228,6 @@ Use these in `task`, `reads`, `inputs`, and other template-aware properties:
 - `${{result.STEP_ID.artifacts}}` - Raw artifacts XML from agent result
 - `${{result.STEP_ID.files}}` - Files created/modified by the step
 - `${{result.STEP_ID.outputName}}` - Typed output from an agent's declared outputs (e.g., `${{result.reviewer.findings}}`)
-- `${{fork.ID.answer}}` - Selected option from a fork step
-- `${{fork.ID.notes}}` - User notes from a fork step
 - `${{loop.STEP_ID.iteration}}` - Current iteration count of a loop decision step
 - `${{loop.STEP_ID.max}}` - Max iterations configured for a loop decision step
 
@@ -306,6 +304,39 @@ steps:
 ```
 
 This embeds the result inline in the task text. The agent expects `${{input.design_output}}` in its system prompt — embedding in task text means the agent never receives its declared input. Always use `inputs:` instead.
+
+## File Content Injection (file:// prefix)
+
+When an agent needs the **content** of a file (not just a path string), use the `file://` prefix in the input value. The flow engine reads the file at dispatch time and injects its content directly into the agent's prompt.
+
+**Static file path:**
+```yaml
+- id: validate
+  agent: validator
+  blockedBy: [researcher]
+  task: Validate the research findings.
+  inputs:
+    report: file://research/findings.md
+    domain: template-config
+```
+
+**Dynamic file path from a previous step's output:**
+```yaml
+- id: summarize
+  agent: summarizer
+  blockedBy: [writer]
+  task: Summarize the report.
+  inputs:
+    report: file://${{result.writer.files}}
+```
+
+This is especially useful for agents with **no file-reading tools** (e.g., `tools: none` or reasoning-only agents) that still need to see file content.
+
+**⚠️ IMPORTANT — Dynamic file:// rules:**
+- When using `file://${{result.STEP.files}}`, the producing step **MUST** be listed in `blockedBy` so it runs first and creates the file before this step tries to read it.
+- `${{result.STEP.files}}` contains comma-separated paths. Use this pattern **only when the step produces a single file**. For multi-file steps, use typed outputs or static paths.
+- File content is injected **verbatim** — it is never template-expanded, so files containing `${{}}` syntax are safe.
+- If the file does not exist at dispatch time, the step fails with a clear error.
 
 # Agent Design Template
 

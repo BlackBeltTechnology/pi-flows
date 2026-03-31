@@ -20,14 +20,25 @@ import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
 import { createGuardExtension } from "./guard.js";
 
+/**
+ * Replace sentinel placeholders with actual file content.
+ * Sentinels are unique strings like `__FILE_INPUT_name_timestamp__` that were inserted
+ * during input resolution so that expandTemplateVariables would not parse the file content
+ * (which may contain ${{}} syntax).
+ */
+function replaceSentinels(text: string, sentinelMap: Record<string, string>): string {
+  for (const [sentinel, content] of Object.entries(sentinelMap)) {
+    text = text.replaceAll(sentinel, content);
+  }
+  return text;
+}
+
 // Template variable expansion
 export function expandTemplateVariables(template: string, ctx: TemplateContext): string {
   return template
     // Primary syntax: ${{...}}
     .replace(/\$\{\{task\}\}/g, ctx.task)
     .replace(/\$\{\{input\.([\w-]+)\}\}/g, (_, name) => ctx.inputs[name] ?? "")
-    .replace(/\$\{\{fork\.(\w[\w-]*)\.answer\}\}/g, (_, id) => ctx.forks[id]?.answer ?? "")
-    .replace(/\$\{\{fork\.(\w[\w-]*)\.notes\}\}/g, (_, id) => ctx.forks[id]?.notes ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.status\}\}/g, (_, id) => ctx.results[id]?.status ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.summary\}\}/g, (_, id) => ctx.results[id]?.summary ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.artifacts\}\}/g, (_, id) => ctx.results[id]?.artifacts ?? "")
@@ -55,7 +66,9 @@ export interface SpawnOptions {
   task: string;
   templateContext: TemplateContext;
   skillContents?: Map<string, string>;
-  contextFileContents?: string[];
+  preambleSections?: string[];
+  /** File inputs (file:// resolved) — injected AFTER template expansion to prevent content from being parsed */
+  fileInputs?: Record<string, string>;
   getModelRole?: (role: string) => string | undefined;
   cwd: string;
   authStorage?: AuthStorage;
@@ -169,9 +182,14 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   }
 
   // Inject context file contents
-  if (options.contextFileContents?.length) {
-    const contextSection = options.contextFileContents.join("\n\n---\n\n");
-    systemPrompt = `## Context Files\n\n${contextSection}\n\n` + systemPrompt;
+  if (options.preambleSections?.length) {
+    const preamble = options.preambleSections.join("\n\n---\n\n");
+    systemPrompt = `## Context\n\n${preamble}\n\n` + systemPrompt;
+  }
+
+  // Replace file input sentinels with actual content AFTER template expansion
+  if (options.fileInputs) {
+    systemPrompt = replaceSentinels(systemPrompt, options.fileInputs);
   }
 
   // Resolve tools from agent frontmatter
@@ -411,7 +429,12 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   options.signal?.addEventListener("abort", onAbort, { once: true });
 
   // Build user message
-  const userMessage = `Task: ${expandTemplateVariables(task, templateContext)}`;
+  let userMessage = `Task: ${expandTemplateVariables(task, templateContext)}`;
+
+  // Replace file input sentinels in user message AFTER template expansion
+  if (options.fileInputs) {
+    userMessage = replaceSentinels(userMessage, options.fileInputs);
+  }
 
   // Execute prompt with finish-retry loop.
   // The guard's agent_end → followUp retry doesn't work in-process because
@@ -508,7 +531,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   }
 
   return {
-    success: parsed.status !== "error",
+    success: parsed.status === "complete",
     output: lastAssistantText,
     stderr: "",
     exitCode: null,

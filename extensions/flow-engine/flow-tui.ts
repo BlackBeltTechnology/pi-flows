@@ -368,6 +368,11 @@ export class TuiFlowObserver implements FlowObserver {
       this.dashboard.onAgentComplete(agentName, result);
       this.renderDashboard!();
     }
+    // Notify user immediately when an agent reports "blocked"
+    if (result.result?.status === "blocked") {
+      const summary = result.result.summary || "No details provided";
+      uiCtx?.notify?.(`Agent "${agentName}" blocked: ${summary}`, "warning");
+    }
   }
 
   onToolCall(agentName: string, toolName: string, input: any): void {

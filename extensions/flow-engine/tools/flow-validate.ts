@@ -364,6 +364,8 @@ export function validateFlowContent(
     const s = step as AgentStep;
     if (!s.inputs) continue;
     for (const [key, val] of Object.entries(s.inputs)) {
+      // Skip file:// inputs — they are file paths, not step references
+      if (val.startsWith("file://")) continue;
       // Extract result.X references from the value
       const refs = val.matchAll(/(?:\$\{\{|\{)result\.(\w[\w-]*)(?:\}\}|\})/g);
       for (const m of refs) {
@@ -390,7 +392,8 @@ export function validateFlowContent(
     if (s.task) templateStrings.push(s.task);
     if (s.inputs) {
       for (const val of Object.values(s.inputs)) {
-        templateStrings.push(val);
+        // Skip file:// inputs — they are file paths, not template expressions
+        if (!val.startsWith("file://")) templateStrings.push(val);
       }
     }
 
@@ -546,21 +549,46 @@ export function validateFlowContent(
 
   // ---- 5. Raw-line scans (template variables, deprecated syntax) ----------
 
-  const knownPrefixes = ["result", "input", "fork", "task", "loop"];
+  const knownPrefixes = ["result", "input", "task", "loop"];
 
   // 5a. Primary syntax: ${{...}}
   for (let i = 0; i < lines.length; i++) {
-    const templateMatches = lines[i].matchAll(/\$\{\{([\w.]+)\}\}/g);
+    const templateMatches = lines[i].matchAll(/\$\{\{([\w.\-]+)\}\}/g);
     for (const m of templateMatches) {
       const varPath = m[1];
       const root = varPath.split(".")[0];
-      if (!knownPrefixes.includes(root)) {
+      if (root === "fork") {
         diagnostics.push({
           line: i + 1,
           severity: "warning",
-          message: `Unknown template variable "\${{${varPath}}}"`,
-          suggestion: `Known prefixes: ${knownPrefixes.join(", ")}`,
+          message: `Deprecated: \${{${varPath}}} — fork context is now autowired into branch steps`,
+          suggestion: "Remove this reference. The branch step automatically receives fork question, answer, and notes in its system prompt.",
         });
+      } else if (!knownPrefixes.includes(root)) {
+        // Check if the unrecognized root matches a step ID — likely missing "result." prefix
+        const suggestion = stepIds.has(root)
+          ? `Did you mean \${{result.${varPath}}}?`
+          : `Known prefixes: ${knownPrefixes.join(", ")}`;
+        diagnostics.push({
+          line: i + 1,
+          severity: "error",
+          message: `Template variable "\${{${varPath}}}" has unrecognized prefix "${root}" — will resolve to empty string at runtime`,
+          suggestion,
+        });
+      } else {
+        // Check for nested field access (4+ segments like result.step.artifacts.subfield)
+        const segments = varPath.split(".");
+        if (segments.length >= 4) {
+          const stepId = segments[1];
+          const deepPath = segments.slice(2).join(".");
+          const leafField = segments[segments.length - 1];
+          diagnostics.push({
+            line: i + 1,
+            severity: "error",
+            message: `Nested field access "\${{${varPath}}}" is not supported — the template engine only resolves \${{result.STEP.FIELD}}`,
+            suggestion: `Use typed outputs: declare "${leafField}" in the agent's outputs: field and reference as \${{result.${stepId}.${leafField}}}`,
+          });
+        }
       }
     }
   }
