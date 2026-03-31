@@ -9,7 +9,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
-import { getModelRole, isAutonomousMode } from "../provider-register.js";
+import { getModelRole, isAutonomousMode, setAutonomousMode } from "../provider-register.js";
 import { registerSubagentTool } from "./tool.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
 import {
@@ -383,6 +383,16 @@ export function activate(pi: ExtensionAPI) {
         registeredExtensionTools.push(data.tool);
       }
     }
+  });
+
+  // External abort (e.g., from dashboard bridge)
+  pi.events.on("flow:abort", () => {
+    if (flowManager.isRunning) flowManager.abort();
+  });
+
+  // External autonomous mode toggle (e.g., from dashboard bridge)
+  pi.events.on("flow:toggle-autonomous", () => {
+    setAutonomousMode(!isAutonomousMode());
   });
 
   // Provide spawn context for subagent sessions (flow-workspace, architect)
