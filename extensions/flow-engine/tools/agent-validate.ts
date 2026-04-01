@@ -324,6 +324,23 @@ export function validateAgentContent(
     }
   }
 
+  // ---- 8c. Declared inputs must be referenced in body ---------------------
+
+  if (fields.has("inputs")) {
+    const inputsEntry = fields.get("inputs")!;
+    const inputs = inputsEntry.value.split(",").map((s) => s.trim()).filter(Boolean);
+    for (const input of inputs) {
+      if (!bodyStr.includes(`\${{input.${input}}}`)) {
+        diagnostics.push({
+          line: inputsEntry.line,
+          severity: "warning",
+          message: `Agent declares input "${input}" but body does not contain \${{input.${input}}}`,
+          suggestion: `Add \${{input.${input}}} to the agent body so the wired value is injected into the prompt`,
+        });
+      }
+    }
+  }
+
   // ---- Result -------------------------------------------------------------
 
   const hasErrors = diagnostics.some((d) => d.severity === "error");

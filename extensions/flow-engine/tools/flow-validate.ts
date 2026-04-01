@@ -544,6 +544,22 @@ export function validateFlowContent(
           });
         }
       }
+
+      // 4g2. Cross-check: wired inputs must be referenced in agent body or step task
+      if (agent.systemPrompt && wiredKeys.size > 0) {
+        const stepTask = s.task ?? "";
+        for (const key of wiredKeys) {
+          const ref = `\${{input.${key}}}`;
+          if (!agent.systemPrompt.includes(ref) && !stepTask.includes(ref)) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, `input.${key}`) || stepPropLine(idx, s.id, "inputs"),
+              severity: "warning",
+              message: `Wired input "${key}" is not referenced as \${{input.${key}}} in agent body or step task — value will be silently lost`,
+              suggestion: `Add \${{input.${key}}} to the agent's system prompt body or this step's task text`,
+            });
+          }
+        }
+      }
     }
   }
 
