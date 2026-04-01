@@ -465,6 +465,61 @@ export class TuiFlowObserver implements FlowObserver {
 export class EventEmitObserver implements FlowObserver {
   constructor(private pi: ExtensionAPI) {}
 
+  onFlowStarted(flowName: string, flow: FlowConfig, task: string): void {
+    // Serialize minimal step metadata for external consumers (dashboards, etc.)
+    // Avoids sending full AgentConfig.systemPrompt (can be very large)
+    const steps = flow.steps.map(step => ({
+      id: step.id,
+      stepType: step.stepType,
+      agent: (step as any).agent,
+      blockedBy: (step as any).blockedBy || [],
+    }));
+    this.pi.events.emit("flow:flow-started", {
+      flowName,
+      task,
+      steps,
+      description: flow.description,
+      maxConcurrent: flow.max_concurrent,
+      autonomousMode: isAutonomousMode(),
+    });
+  }
+
+  onAgentStarted(agentName: string, stepId: string, config?: AgentConfig): void {
+    this.pi.events.emit("flow:agent-started", {
+      agentName,
+      stepId,
+      config: config ? {
+        name: config.name,
+        description: config.description,
+        model: config.model,
+        card: config.card,
+      } : undefined,
+    });
+  }
+
+  onAgentComplete(agentName: string, stepId: string, result: AgentResult): void {
+    this.pi.events.emit("flow:agent-complete", {
+      agentName,
+      stepId,
+      result: {
+        success: result.success,
+        status: result.result?.status,
+        summary: result.result?.summary,
+        files: result.result?.files?.map(f => f.path) || [],
+        tokens: result.tokens,
+        duration: result.duration,
+      },
+    });
+  }
+
+  onAssistantText(agentName: string, text: string): void {
+    this.pi.events.emit("flow:assistant-text", { agentName, text });
+  }
+
+  onThinkingText(agentName: string, text: string): void {
+    this.pi.events.emit("flow:thinking-text", { agentName, text });
+  }
+
   onToolCall(agentName: string, toolName: string, input: any): void {
     this.pi.events.emit("flow:subagent-tool-call", { agentName, toolName, input });
   }
