@@ -81,10 +81,7 @@ skills: my-skill                   # Skills this agent can reference
 inputs:                            # Named inputs from upstream steps
   - context_data
   - prior_output
-context:                           # Files auto-injected into prompt
-  - docs/architecture.md
 card:                              # Dashboard card configuration
-  type: developer                  # Card template
   metric: developer                # Metric type
   label: "My Agent"                # Display label
 architect:                         # Metadata for flow-architect
@@ -130,7 +127,7 @@ Call `finish` with your structured results when done.
 
 1. **Single responsibility** — each agent should have one clear domain
 2. **Least privilege** — declare only the tools and access the agent needs
-3. **Explicit context** — use `context:` for files the agent always needs, `inputs:` for dynamic data
+3. **Explicit inputs** — use `inputs:` for dynamic data from upstream steps
 4. **Clear boundaries** — `access:` patterns prevent agents from stepping on each other
 5. **Structured output** — agents call `finish` to submit structured results for downstream steps
 

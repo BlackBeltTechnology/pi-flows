@@ -188,10 +188,6 @@ export default function myGuard(pi: ExtensionAPI) {
 }
 ```
 
-### Context Resolvers
-
-Extensions can implement context resolvers that map bare paths from agent `context:` declarations to physical file paths. This allows agents to declare simple context paths without knowing the full filesystem structure.
-
 ### Utilities
 
 Common utility patterns for extensions:

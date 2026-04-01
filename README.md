@@ -143,15 +143,14 @@ Investigate the relevant code thoroughly. Call `finish` when done with your summ
 
 Save this to `.pi/flows/flows/my-research.yaml`:
 
-```markdown
----
+```yaml
 name: my-research
 description: Run a research pass on the codebase
----
 
-## researcher
-agent: researcher
-task: Investigate ${{task}}
+steps:
+  - id: researcher
+    agent: researcher
+    task: Investigate ${{task}}
 ```
 
 ### 4. Run the flow
@@ -283,10 +282,8 @@ Focus on clean, tested implementations. Run the existing test suite after making
 | `tools` | ✓ | Comma-separated list of tools the agent can call |
 | `thinking` | | Thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
 | `skills` | | Skill name(s) whose docs are injected into the system prompt |
-| `context` | | File paths (relative to project root) injected as read-only context |
 | `inputs` | | Named inputs this agent expects — declared as a contract for flow wiring |
 | `outputs` | | Named output values extracted from `finish` params — accessible downstream as `${{result.STEP.name}}` |
-| `output` | | Default output filename |
 | `interactive` | | Set to `true` if the agent should prompt the user mid-execution |
 | `access` | | Sandboxing rules (see [Access Control](#access-control)) |
 | `card` | | Dashboard card configuration (see [Dashboard Cards](#dashboard-cards)) |
@@ -521,53 +518,55 @@ task_prompt: "What should I research and build?"
 
 ### Agent Steps
 
-The default step type. Dispatches a named agent with a task. The `##` header text is the **step ID**. The `agent:` field is **always required** — it specifies which agent to dispatch.
+The default step type. Dispatches a named agent with a task. Each step has a unique `id` used for dependency wiring (`blockedBy`), result references (`${{result.ID.*}}`), and branching. The `agent:` field is **always required**.
 
 ```yaml
-## researcher
-agent: researcher
-task: Investigate the codebase for ${{task}}
+steps:
+  - id: researcher
+    agent: researcher
+    task: Investigate the codebase for ${{task}}
 ```
 
 When the same agent needs to run multiple times in a flow with different tasks, give each step a unique ID:
 
 ```yaml
-## create-draft
-agent: writer
-task: Write the initial draft
+steps:
+  - id: create-draft
+    agent: writer
+    task: Write the initial draft
 
-## revise-draft
-agent: writer
-task: Revise the draft based on feedback
+  - id: revise-draft
+    agent: writer
+    blockedBy: [create-draft]
+    task: Revise the draft based on feedback
 ```
 
-Wire dependencies and result references using the **step ID** (`blockedBy: create-draft`, `${{result.create-draft.summary}}`), not the agent name.
+Wire dependencies and result references using the **step ID** (`blockedBy: [create-draft]`, `${{result.create-draft.summary}}`), not the agent name.
 
 **All agent step fields:**
 
 | Field | Description |
 |-------|-------------|
+| `id` | **Required.** Unique step identifier |
 | `agent` | **Required.** Agent name to dispatch |
 | `task` | Task override (template string). If omitted, uses the flow's task |
-| `model` | Model override for this step only |
-| `blockedBy` | Step IDs (comma-separated) that must complete before this step starts |
+| `blockedBy` | Array of step IDs that must complete before this step starts |
 | `inputs` | Named inputs wired from template expressions (see [Input Wiring](#input-wiring)) |
-| `output` | Output filename override |
-| `reads` | File paths to inject as context before execution |
 | `on_complete` | Step ID to route to on success |
 | `on_error` | Step ID to route to on error |
 
 ### Fork Steps
 
-Pause execution and ask the user a question, then branch based on their answer. Fork steps use the `## fork: id` header syntax.
+Pause execution and ask the user a question, then branch based on their answer.
 
-```
-## fork: choose-approach
-question: Which approach do you prefer?
-options: Quick fix, Full refactor
-branches:
-  Quick fix: quick-fix-step
-  Full refactor: refactor-step
+```yaml
+  - id: choose-approach
+    type: fork
+    question: Which approach do you prefer?
+    options: [Quick fix, Full refactor]
+    branches:
+      Quick fix: quick-fix-step
+      Full refactor: refactor-step
 ```
 
 **All fork step fields:**
@@ -588,13 +587,14 @@ After the user picks an option, they are always prompted for optional notes (Ent
 
 ### Conditional Steps
 
-Branch based on whether a field from a previous step's result is non-empty. Conditional steps use the `## conditional: id` header syntax.
+Branch based on whether a field from a previous step's result is non-empty.
 
-```
-## conditional: check-research
-check: researcher.artifacts
-present: fill-gaps-step
-absent: proceed-to-build
+```yaml
+  - id: check-research
+    type: conditional
+    check: researcher.artifacts
+    present: fill-gaps-step
+    absent: proceed-to-build
 ```
 
 The `check` field is a `stepId.field` path. Supported fields: `artifacts` (default when no field given), `summary`, `files`, `status`. If the field's text content is non-empty, the `present` branch runs; otherwise `absent`.
@@ -607,30 +607,32 @@ The `check` field is a `stepId.field` path. Supported fields: `artifacts` (defau
 
 ### Agent Decision Steps
 
-Delegate a routing decision to an agent. The agent analyzes the situation and calls `finish` with a `branch` name. Agent decision steps use the `## agent-decision: id` header syntax.
+Delegate a routing decision to an agent. The agent analyzes the situation and calls `finish` with a `branch` name.
 
-```
-## agent-decision: route-decision
-agent: router-agent
-task: "Review the analysis and decide what to do next: ${{result.analyzer.summary}}"
-branches:
-  needs-work: fix-step
-  ready: deploy-step
+```yaml
+  - id: route-decision
+    type: agent-decision
+    agent: router-agent
+    task: "Review the analysis and decide what to do next: ${{result.analyzer.summary}}"
+    branches:
+      needs-work: fix-step
+      ready: deploy-step
 ```
 
 The decision agent must call `finish` with `branch: "needs-work"` or `branch: "ready"`. Any other branch name causes an error.
 
 ### Agent Loop Decision Steps
 
-Iterative verify/fix cycles. The agent decides on each iteration whether to loop back or exit forward. Loop decision steps use the `## agent-loop-decision: id` header syntax.
+Iterative verify/fix cycles. The agent decides on each iteration whether to loop back or exit forward.
 
-```
-## agent-loop-decision: verify-loop
-agent: verifier
-task: "Check if the implementation is correct: ${{result.developer.summary}}"
-loop_target: developer
-exit_target: finalize
-max_iterations: 3
+```yaml
+  - id: verify-loop
+    type: agent-loop-decision
+    agent: verifier
+    task: "Check if the implementation is correct: ${{result.developer.summary}}"
+    loop_target: developer
+    exit_target: finalize
+    max_iterations: 3
 ```
 
 - **`loop_target`** — Step ID to jump back to when the agent decides more work is needed
@@ -641,12 +643,14 @@ The decision agent calls `finish` with `branch: "developer"` (the `loop_target` 
 
 ### Flow Reference Steps
 
-Delegate execution to another flow file. The path to the sub-flow is encoded directly in the header using the `## flow-ref: path` syntax.
+Delegate execution to another flow file.
 
-```
-## flow-ref: .pi/flows/flows/test-suite.yaml
-on_complete: deploy-step
-on_error: fix-step
+```yaml
+  - id: run-tests
+    type: flow-ref
+    path: .pi/flows/flows/test-suite.yaml
+    on_complete: deploy-step
+    on_error: fix-step
 ```
 
 ---
@@ -686,22 +690,21 @@ on_error: fix-step
 
 ### Complete Example
 
-```markdown
----
+```yaml
 name: research-and-build
 description: Research the codebase then implement
----
 
-## researcher
-agent: researcher
-task: Investigate the codebase for ${{task}}
+steps:
+  - id: researcher
+    agent: researcher
+    task: Investigate the codebase for ${{task}}
 
-## developer
-agent: developer
-blockedBy: researcher
-inputs:
-  research_output: "${{result.researcher.summary}}"
-task: Implement based on research. Context is in ${{input.research_output}}.
+  - id: developer
+    agent: developer
+    blockedBy: [researcher]
+    inputs:
+      research_output: "${{result.researcher.summary}}"
+    task: Implement based on research. Context is in ${{input.research_output}}.
 ```
 
 ### Typed Outputs
@@ -739,31 +742,59 @@ A simpler shorthand (without descriptions): `outputs: [verdict, issues]`
 **❌ Inline everything into task** — This works but makes the task unwieldy for large outputs:
 
 ```yaml
-## developer
-agent: developer
-task: "Implement this: ${{result.researcher.summary}} ${{result.researcher.artifacts}}"
+  - id: developer
+    agent: developer
+    task: "Implement this: ${{result.researcher.summary}} ${{result.researcher.artifacts}}"
 ```
 
 **✓ Use inputs for structured data** — Cleaner, more readable, and properly separated:
 
 ```yaml
-## developer
-agent: developer
-inputs:
-  context: "${{result.researcher.summary}}"
-  files_changed: "${{result.researcher.files}}"
-task: "Implement this feature. Context: ${{input.context}}. Consider files: ${{input.files_changed}}"
+  - id: developer
+    agent: developer
+    inputs:
+      context: "${{result.researcher.summary}}"
+      files_changed: "${{result.researcher.files}}"
+    task: "Implement this feature. Context: ${{input.context}}. Consider files: ${{input.files_changed}}"
 ```
 
 **❌ Referencing undeclared inputs** — If the agent's frontmatter doesn't list an input, `${{input.X}}` expands to an empty string:
 
 ```yaml
-# Developer agent has no `inputs:` declaration
-## developer-step
-agent: developer
-inputs:
-  data: "some value"  # silently ignored in the system prompt
+  # Developer agent has no `inputs:` declaration
+  - id: developer-step
+    agent: developer
+    inputs:
+      data: "some value"  # silently ignored in the system prompt
 ```
+
+### File Content Injection (`file://` prefix)
+
+When an agent needs the **content** of a file (not just a path string), use the `file://` prefix in the input value. The flow engine reads the file at dispatch time and injects its content directly into the agent's prompt.
+
+**Static file path:**
+```yaml
+  - id: validate
+    agent: validator
+    blockedBy: [researcher]
+    inputs:
+      report: file://research/findings.md
+```
+
+**Dynamic file path from a previous step's output:**
+```yaml
+  - id: summarize
+    agent: summarizer
+    blockedBy: [writer]
+    inputs:
+      report: file://${{result.writer.files}}
+```
+
+**Rules:**
+- The producing step **MUST** be listed in `blockedBy` so the file exists at dispatch time
+- `${{result.STEP.files}}` contains comma-separated paths — use this pattern only when the step produces a single file
+- File content is injected **verbatim** and never template-expanded, so files containing `${{}}` syntax are safe
+- If the file does not exist at dispatch time, the step fails with a clear error
 
 ---
 
@@ -787,21 +818,20 @@ Use these placeholders in `task`, `inputs`, `question` fields in flow steps, and
 **Examples:**
 
 ```yaml
-## developer
-agent: developer
-task: "Implement feature: ${{task}}. Research: ${{result.researcher.summary}}"
+steps:
+  - id: developer
+    agent: developer
+    task: "Implement feature: ${{task}}. Research: ${{result.researcher.summary}}"
 
-## verifier
-agent: verifier
-task: "Check iteration ${{loop.verify-loop.iteration}} of ${{loop.verify-loop.max}}: ${{result.developer.summary}}"
-
+  - id: verifier
+    agent: verifier
+    task: "Check iteration ${{loop.verify-loop.iteration}} of ${{loop.verify-loop.max}}: ${{result.developer.summary}}"
 ```
 
 > **Fork context:** Fork decisions (question, answer, notes, who decided) are automatically injected into the branch step's system prompt. No `${{fork.*}}` wiring needed.
 
 > **Resolution order:** Template variables are expanded just before an agent is dispatched, so `${{result.X}}` is only valid if step `X` ran before the current step (enforced by `blockedBy`). Referencing a step that hasn't completed yet resolves to an empty string.
 
-> **Legacy syntax:** The `{variable}` form (without the `${{...}}` wrapper) is still accepted for backward compatibility but is deprecated. Use `${{variable}}` in all new flows and agents.
 
 ---
 

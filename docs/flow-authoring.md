@@ -69,7 +69,6 @@ Focus on clean, tested implementations. Run the existing test suite after change
 | `skills` | | csv or list | Skill names to inject into this agent's system prompt. Each skill must exist in a registered skills directory. |
 | `inputs` | | yaml list | Declared input names. These become `${{input.NAME}}` variables in the system prompt. Must be wired in the flow step's `inputs:` block. |
 | `outputs` | | yaml list | Declared output names. Values matching these names are extracted from `finish` params and accessible as `${{result.STEP.outputName}}`. Supports simple array (`[a, b]`) or expanded objects (`- name: a\n  description: ...`). |
-| `output` | | string | Default output filename (written by the agent). Overridable per step. |
 | `interactive` | | boolean | If `true`, the agent can call `ask_user` to prompt the user mid-execution. Default: `false`. |
 | `access` | | block | Sandboxing rules. Restricts `read`, `write`, and `bash`. See [Access Control](#access-control). |
 | `card` | | block | Dashboard card display configuration. See [Dashboard Cards](#dashboard-cards). |
@@ -233,60 +232,57 @@ Dispatches a named agent with an optional task override. This is the most common
 
 **Syntax:**
 
-```markdown
-## step-id
-agent: agent-name
-task: Optional task override. Supports ${{template}} variables.
-model: @fast                     # optional model override for this step only
-blockedBy: other-step, another   # comma-separated step IDs
-inputs:
-  input_name: "${{result.other-step.summary}}"
-output: result-file.md           # optional output filename override
-on_complete: next-step           # route to this step on success
-on_error: error-handler          # route to this step on failure
+```yaml
+steps:
+  - id: step-id
+    agent: agent-name
+    task: Optional task override. Supports ${{template}} variables.
+    blockedBy: [other-step, another]
+    inputs:
+      input_name: "${{result.other-step.summary}}"
+    on_complete: next-step
+    on_error: error-handler
 ```
 
 **Field reference:**
 
 | Field | Description |
 |-------|-------------|
+| `id` | **Required.** Unique step identifier. |
 | `agent` | **Required.** Agent name to dispatch. Must exist in the agent registry. |
 | `task` | Task override. If omitted, uses the flow's task (`${{task}}`). Supports template variables. |
-| `model` | Override the agent's `model` field for this step only. |
-| `blockedBy` | Comma-separated step IDs that must complete before this step starts. |
+| `blockedBy` | Array of step IDs that must complete before this step starts. |
 | `inputs` | Named input values wired from template expressions. See [Input Wiring](#input-wiring). |
-| `output` | Override the agent's default output filename. |
 | `on_complete` | Step ID to route to after this step succeeds. |
 | `on_error` | Step ID to route to if this step errors. |
 
 **Example — parallel research with sequential development:**
 
-```markdown
----
+```yaml
 name: research-and-build
 description: Research then implement
----
 
-## researcher
-agent: researcher
-task: Investigate the codebase for ${{task}}
+steps:
+  - id: researcher
+    agent: researcher
+    task: Investigate the codebase for ${{task}}
 
-## summarizer
-agent: summarizer
-task: Summarize the test coverage
+  - id: summarizer
+    agent: summarizer
+    task: Summarize the test coverage
 
-## developer
-agent: developer
-blockedBy: researcher, summarizer
-inputs:
-  research: "${{result.researcher.summary}}"
-  coverage: "${{result.summarizer.summary}}"
-task: Implement ${{task}} based on research
+  - id: developer
+    agent: developer
+    blockedBy: [researcher, summarizer]
+    inputs:
+      research: "${{result.researcher.summary}}"
+      coverage: "${{result.summarizer.summary}}"
+    task: Implement ${{task}} based on research
 
-## verifier
-agent: verifier
-blockedBy: developer
-task: Verify the implementation is correct
+  - id: verifier
+    agent: verifier
+    blockedBy: [developer]
+    task: Verify the implementation is correct
 ```
 
 `researcher` and `summarizer` run in parallel. `developer` starts only after both complete. `verifier` runs last.
@@ -295,15 +291,16 @@ task: Verify the implementation is correct
 
 Give each instance a unique step ID:
 
-```markdown
-## draft
-agent: writer
-task: Write initial draft
+```yaml
+steps:
+  - id: draft
+    agent: writer
+    task: Write initial draft
 
-## revise
-agent: writer
-blockedBy: draft
-task: Revise based on feedback: ${{result.draft.summary}}
+  - id: revise
+    agent: writer
+    blockedBy: [draft]
+    task: Revise based on feedback: ${{result.draft.summary}}
 ```
 
 ---
@@ -541,7 +538,6 @@ Template variables are placeholders in `task`, `inputs`, `question`, and system 
 
 > **Missing values resolve to empty string.** A variable that references an unrun step, an undeclared input, or a non-existent field quietly becomes `""`.
 
-> **Legacy `{variable}` syntax** (without `${{...}}`) is still accepted for backward compatibility but is deprecated. Use `${{...}}` in all new flows.
 
 ---
 
@@ -582,6 +578,34 @@ ${{input.ticket_context}}
 ```
 
 If the `inputs:` list is not declared in the agent's frontmatter, the input values are still substituted but the system prompt has no `${{input.NAME}}` to expand them into — making them silently useless. Always declare inputs in the frontmatter.
+
+### File Content Injection (`file://` prefix)
+
+When an agent needs the **content** of a file (not just a path string), use the `file://` prefix in the input value. The flow engine reads the file at dispatch time and injects its content directly into the agent's prompt.
+
+**Static file path:**
+```yaml
+  - id: validate
+    agent: validator
+    blockedBy: [researcher]
+    inputs:
+      report: file://research/findings.md
+```
+
+**Dynamic file path from a previous step's output:**
+```yaml
+  - id: summarize
+    agent: summarizer
+    blockedBy: [writer]
+    inputs:
+      report: file://${{result.writer.files}}
+```
+
+**Rules:**
+- The producing step **MUST** be listed in `blockedBy` so the file exists at dispatch time
+- `${{result.STEP.files}}` contains comma-separated paths — use this pattern only when the step produces a single file
+- File content is injected **verbatim** and never template-expanded, so files containing `${{}}` syntax are safe
+- If the file does not exist at dispatch time, the step fails with a clear error
 
 ---
 

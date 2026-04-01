@@ -44,15 +44,15 @@ export function parseAgentString(content: string, source: string): AgentConfig {
 
   const access = parseAccessBlock(fields, source);
 
-  // Parse card: block (card.type, card.label, card.metric)
-  const cardType = fields.get("card.type") ?? undefined;
+  // Parse card: block (card.label, card.metric, card.role)
   const cardLabel = fields.get("card.label")?.replace(/^["']|["']$/g, "") ?? undefined;
   const cardMetric = fields.get("card.metric") ?? undefined;
-  const card: CardConfig | undefined = (cardType || cardLabel || cardMetric)
+  const cardRole = fields.get("card.role")?.replace(/^["']|["']$/g, "") ?? undefined;
+  const card: CardConfig | undefined = (cardLabel || cardMetric || cardRole)
     ? {
-        ...(cardType && { type: cardType }),
         ...(cardLabel && { label: cardLabel }),
         ...(cardMetric && { metric: cardMetric }),
+        ...(cardRole && { role: cardRole }),
       }
     : undefined;
 

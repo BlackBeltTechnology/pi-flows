@@ -45,7 +45,6 @@ interface AgentConfig {
   thinking?: string;       // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
   tools: string[];         // e.g., ["read", "write", "edit", "bash"]
   skills?: string[];       // e.g., ["my-backend-docs"]
-  context?: string[];      // File paths injected as read-only context
   inputs?: string[];       // Declared input names (contract for flow wiring)
   outputs?: Array<{name: string, description?: string}>; // Declared output names (typed finish params)
   systemPrompt: string;    // The body of the .md file (prompt template)
@@ -78,9 +77,9 @@ interface AccessRules {
 
 ```typescript
 interface CardConfig {
-  type?: string;    // Legacy type field
   label?: string;   // Display label on the dashboard card
   metric?: string;  // Metric renderer name (matches a registered AgentCardRenderer)
+  role?: string;    // Display role override (takes priority over model role)
 }
 ```
 
@@ -139,9 +138,7 @@ interface AgentStep {
   id: string;
   agent: string;
   task?: string;
-  model?: string;
   output?: string;
-  reads?: string[];
   inputs?: Record<string, string>;   // name → template expression
   blockedBy?: string[];
   on_complete?: string;
@@ -402,7 +399,7 @@ type CardStatus = "pending" | "running" | "complete" | "error";
 
 ### `spawnAgent`
 
-Spawn an agent as a subprocess and wait for it to complete. The agent runs its system prompt with the given task and template context, calls `finish`, and the subprocess exits.
+Spawn an agent as an in-process isolated session and wait for it to complete. The agent runs its system prompt with the given task and template context, calls `finish`, and the session ends.
 
 ```typescript
 async function spawnAgent(options: SpawnOptions): Promise<AgentResult>
@@ -412,7 +409,7 @@ interface SpawnOptions {
   task: string;
   templateContext: TemplateContext;
   skillContents?: Map<string, string>;    // Pre-loaded skill content
-  contextFileContents?: string[];         // Pre-loaded context file content
+  preambleSections?: string[];            // Additional text sections prepended to the system prompt
   getModelRole?: (role: string) => string | undefined;
   cwd: string;                            // Working directory
   authStorage?: AuthStorage;

@@ -3,7 +3,7 @@ name: flow-architect
 description: Designs custom execution flows from conversation context using available agents
 model: @planning
 thinking: high
-tools: agent_catalog, agent_write, flow_write, flow_preview, read, grep, glob
+tools: agent_catalog, agent_write, flow_write, flow_preview, read, grep, find
 card:
   label: "Flow Architect"
   metric: "default"
@@ -383,7 +383,7 @@ The body of the `.md` file is the agent's system prompt. Structure it with:
 name: code-reviewer
 description: Reviews implementation for correctness, bugs, and style issues
 model: @coding
-tools: read, grep, glob
+tools: read, grep, find
 inputs:
   - implementation_summary
 outputs:
@@ -432,7 +432,7 @@ When modifying an existing flow, **always check `agent_catalog` first**. Agents 
 When no existing agent covers a need, create a custom agent definition:
 
 - Use `access:` for sandbox boundaries (minimum required scope)
-- Agents discover project files themselves using `read`/`glob`/`grep` tools — do not use `context:` (parsed but not delivered to agents)
+- Agents discover project files themselves using `read`/`find`/`grep` tools
 - Always include `${{task}}` in the agent body so it receives the user's intent
 - Set appropriate model roles:
   - `@coding` for reading, analyzing, writing, or modifying code

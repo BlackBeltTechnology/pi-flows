@@ -626,9 +626,5 @@ These events coordinate between pi-flows' own sub-extensions. **Do not emit or l
 | `flow:run` | emit → pi-flows | Programmatically run a named flow with an optional UI context |
 | `flow:rediscover` | emit → pi-flows | Trigger re-scanning of agent and flow directories |
 | `flow:get-agents` | emit with data object → pi-flows mutates | Query the current agent registry |
-| `flow:get-flows` | emit with data object → pi-flows mutates | Query the current flow registry |
 | `flow:get-spawn-context` | emit with data object → pi-flows mutates | Query spawn context (auth, model registry, extension tools) for subagent sessions |
-| `flow:wire-dashboard` | internal | Mount a dashboard widget |
-| `flow:unwire-dashboard` | internal | Unmount a dashboard widget |
-| `flow:set-summary-context` | internal | Pass tool history to summary widget |
-| `flow:set-summary-tool-history` | internal | Pass tool history per-agent to summary widget |
+| `flow:set-summary-context` | internal | Pass flow context and tool history to the summary widget |

@@ -2,14 +2,9 @@
 
 This document covers the flow step types available for authoring custom flows in pi-flows.
 
-## Flow File Formats
+## Flow File Format
 
-| Format | Extension | Purpose |
-|--------|-----------|---------|
-| Static YAML | `.flow.yaml` | Authored at package development time, version-controlled |
-| Dynamic Markdown | `.flow.md` | Generated at runtime by agents (e.g., flow-writer agents) |
-
-Both formats support the same step types and features. The Markdown format uses YAML frontmatter for metadata and `## step-id` sections for steps.
+Flows are `.yaml` files with top-level metadata and a `steps:` array. Each step has an `id` field and either an explicit `type` field or an inferred type based on its fields.
 
 ## Step Types
 
@@ -47,7 +42,6 @@ Presents options to the user and routes to one or more branches.
   question: "Which approach?"        # Displayed to user
   options: [Option A, Option B]       # Available choices
   multiSelect: false                  # true → multiple branches run
-  allowNotes: true                    # true → user can add free text
   branches:
     Option A: step-for-a              # Map option → target step
     Option B: step-for-b
@@ -57,7 +51,7 @@ Presents options to the user and routes to one or more branches.
 
 **Multi-select behavior:** Multiple branches run in parallel. Unselected branches are skipped.
 
-**allowNotes:** When `true`, user input is passed to the target step as additional context.
+After the user picks an option, they are always prompted for optional notes (Enter to skip). Fork context (question, selected option, notes, and who decided) is **automatically injected** into the branch step's system prompt.
 
 ---
 
@@ -287,37 +281,3 @@ steps:
     task: Generate report from analysis results
 ```
 
-## Generated Flows
-
-Agents can generate `.flow.md` files at runtime. These use Markdown with YAML frontmatter:
-
-```markdown
----
-name: generated-execution
-description: Generated execution plan
-max_concurrent: 3
----
-
-## step-1
-agent: researcher
-task: >
-  Investigate the current state.
-
-## step-2
-agent: developer
-task: >
-  Implement the required changes.
-blockedBy: step-1
-
-## step-3
-agent: tester
-task: >
-  Write and run tests for the changes.
-blockedBy: step-2
-```
-
-**Generation rules for flow-writer agents:**
-- One step per task
-- Dependencies expressed via `blockedBy`
-- Lifecycle agents (verifier, summarizer, etc.) are typically handled by the parent flow, not the generated flow
-- Set `max_concurrent` to control parallelism

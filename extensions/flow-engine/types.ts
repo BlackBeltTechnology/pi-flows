@@ -7,7 +7,6 @@
 // ---- Card display configuration (from agent frontmatter card: block) ------
 
 export interface CardConfig {
-  type?: string;
   label?: string;
   metric?: string;
   role?: string;
@@ -79,7 +78,6 @@ export interface AgentStep {
   id: string; // Step identifier (usually agent name)
   agent: string; // Agent name to dispatch
   task?: string; // Optional task override (template string)
-  model?: string; // Optional model override
   output?: string; // Output file
   reads?: string[]; // PARSED BUT NOT WIRED — parsed in flow-parser-yaml but never consumed in execution
   inputs?: Record<string, string>; // Named inputs wired from template expressions

@@ -2,7 +2,7 @@
 name: project-context-reader
 description: Discovers and reads project planning files, documentation, and configuration
 model: @coding
-tools: read, grep, glob
+tools: read, grep, find
 card:
   label: "Context Reader"
   metric: "files"
@@ -23,7 +23,7 @@ ${{task}}
 
 # Discovery Process
 
-Use `glob` and `grep` to find relevant project files, then `read` the important ones. Search for these in order of priority:
+Use `find` and `grep` to find relevant project files, then `read` the important ones. Search for these in order of priority:
 
 1. **Planning directory**: `.planning/` -- read all files within it (architecture decisions, conventions, task breakdowns)
 2. **Agent definitions**: `AGENTS.md` -- project-specific agent roles and responsibilities
@@ -35,7 +35,7 @@ Use `glob` and `grep` to find relevant project files, then `read` the important 
 
 # Reading Strategy
 
-- Use `glob` with patterns like `.planning/**/*`, `openspec/**/*.md`, `docs/**/*.md` to discover files
+- Use `find` with patterns like `.planning/**/*`, `openspec/**/*.md`, `docs/**/*.md` to discover files
 - Read the most important files fully (planning docs, AGENTS.md, README.md, CLAUDE.md)
 - For large directories, read file listings first, then prioritize based on relevance to the task
 - For openspec, focus on active changes (proposals, designs) rather than archived ones

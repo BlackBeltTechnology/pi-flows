@@ -73,7 +73,7 @@ The pi-flows engine discovers packages through the npm dependency graph:
 
 ## Agent Isolation Model
 
-Each agent runs as an isolated child process with controlled capabilities:
+Each agent runs as an in-process isolated session with controlled capabilities:
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -84,10 +84,10 @@ Each agent runs as an isolated child process with controlled capabilities:
 │    ├── Serialize AGENT_ALLOWED_TOOLS → env       │
 │    ├── Inject context files                      │
 │    ├── Wire inputs from upstream results         │
-│    └── Start child process                       │
+│    └── Create agent session                       │
 │                                                  │
 │  ┌────────────────────────────────────────────┐  │
-│  │ Child Process (agent)                      │  │
+│  │ Agent Session (isolated)                      │  │
 │  │                                            │  │
 │  │  ┌─────────┐  ┌──────────┐                │  │
 │  │  │ Guard   │  │ Agent    │                │  │

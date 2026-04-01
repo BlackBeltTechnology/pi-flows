@@ -108,7 +108,6 @@ function parseAgentStep(raw: any, source: string): AgentStep {
   };
 
   if (raw.task) step.task = String(raw.task);
-  if (raw.model) step.model = String(raw.model);
   if (raw.output) step.output = String(raw.output);
   if (raw.on_complete) step.on_complete = String(raw.on_complete);
   if (raw.on_error) step.on_error = String(raw.on_error);

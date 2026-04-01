@@ -18,8 +18,6 @@ tools: read, write, bash          # Tool allowlist
 skills: skill-name                # Skill bundles (comma-separated or list)
 inputs:                           # Named inputs from upstream steps
   - input_name
-context:                          # Auto-loaded context files
-  - plan/proposal.md
 card:                             # Dashboard rendering
   type: developer                 # Maps to card renderer class
   metric: developer               # Metric tracking category
@@ -51,10 +49,8 @@ Supports ${{task}} and ${{input.<name>}} interpolation.
 | `skills` | | string/list | Skill bundle names loaded via `skill_read` |
 | `inputs` | | list | Named inputs populated from upstream step results |
 | `outputs` | | list | Named output values extracted from `finish` params (typed outputs) |
-| `context` | | list | File paths auto-loaded into agent context |
 | `card` | | object | Dashboard card configuration |
-| `card.type` | | string | Card renderer name (maps to registered card renderers) |
-| `card.metric` | | string | Metric category for dashboard aggregation |
+| `card.metric` | | string | Metric renderer name (maps to registered card renderers) |
 | `card.label` | | string | Display label in the dashboard |
 | `architect` | | object | Flow-architect metadata for agent selection |
 | `architect.domain` | | string | Domain classification for the agent |
@@ -77,7 +73,7 @@ Supports ${{task}} and ${{input.<name>}} interpolation.
 
 ## Card Types
 
-Each agent's `card.type` maps to a renderer class registered by the extension or a domain package:
+Each agent's `card.metric` maps to a renderer class registered by the extension or a domain package:
 
 | Card Type | Visual | Best For |
 |-----------|--------|----------|
@@ -126,7 +122,7 @@ task: "Verdict was: ${{result.analyzer.verdict}}. Details: ${{result.analyzer.fi
 
 1. **Single responsibility** — each agent should have one clear domain
 2. **Least privilege** — declare only the tools and access the agent needs
-3. **Explicit context** — use `context:` for files the agent always needs, `inputs:` for dynamic data
+3. **Explicit inputs** — use `inputs:` for dynamic data from upstream steps
 4. **Clear boundaries** — `access:` patterns prevent agents from stepping on each other
 5. **Structured output** — agents call `finish` to produce structured results for downstream steps
 

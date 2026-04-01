@@ -110,8 +110,21 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
 
       if (segment.type === "dag") {
 
-        const result = await runDagSegment(segment.steps, maxConcurrent, ctx, options, segment.activeSteps);
-        if (result) lastResult = result;
+        const dagResult = await runDagSegment(segment.steps, maxConcurrent, ctx, options, segment.activeSteps);
+        if (dagResult.lastResult) lastResult = dagResult.lastResult;
+
+        // Handle routing from on_complete / on_error within the DAG
+        if (dagResult.routeToStepId) {
+          const targetIdx = findSegmentIndex(segments, dagResult.routeToStepId);
+          if (targetIdx >= 0) {
+            const targetSeg = segments[targetIdx];
+            if (targetSeg.type === "dag") {
+              targetSeg.activeSteps = computeActiveSteps(targetSeg.steps, dagResult.routeToStepId);
+            }
+            segmentIndex = targetIdx;
+            continue;
+          }
+        }
         segmentIndex++;
       } else {
         // Separator step (fork, conditional, agent-decision, flow-ref)
@@ -242,13 +255,19 @@ function findSegmentIndex(segments: Segment[], stepId: string): number {
 
 // ---- DAG segment execution -------------------------------------------------
 
+interface DagSegmentResult {
+  lastResult: AgentResult | null;
+  /** If set, the DAG wants to route to this step (may be inside or outside the segment) */
+  routeToStepId?: string;
+}
+
 async function runDagSegment(
   steps: AgentStep[],
   maxConcurrent: number,
   ctx: FlowContext,
   options: FlowRunOptions,
   activeSteps?: Set<string>,
-): Promise<AgentResult | null> {
+): Promise<DagSegmentResult> {
   const completed = new Set<string>();
   let lastResult: AgentResult | null = null;
   let waveNumber = 0;
@@ -290,7 +309,7 @@ async function runDagSegment(
     if (snapshot === lastSnapshot) {
       deadlockCount++;
       if (deadlockCount >= 3) {
-        return { success: false, output: "Deadlock detected in DAG segment", stderr: "", exitCode: null, result: parseResult(""), toolCalls: [], duration: 0, tokens: { input: 0, output: 0 } };
+        return { lastResult: { success: false, output: "Deadlock detected in DAG segment", stderr: "", exitCode: null, result: parseResult(""), toolCalls: [], duration: 0, tokens: { input: 0, output: 0 } } };
       }
     } else {
       deadlockCount = 0;
@@ -309,7 +328,7 @@ async function runDagSegment(
     // Execute batch in parallel
     const results = await Promise.all(batch.map(step => executeAgentStep(step, ctx, options)));
 
-    // Store results
+    // Store results and check for routing
     for (let i = 0; i < batch.length; i++) {
       const step = batch[i];
       const result = results[i];
@@ -317,11 +336,36 @@ async function runDagSegment(
       if (result) {
         lastResult = result;
         storeResult(ctx, step.id, result);
+
+        // Check on_complete / on_error routing
+        const routeTarget = result.success ? step.on_complete : step.on_error;
+        if (routeTarget) {
+          const targetInSegment = steps.some(s => s.id === routeTarget);
+          if (targetInSegment) {
+            // Route within this DAG: narrow active steps to those reachable from target
+            const reachable = computeActiveSteps(steps, routeTarget);
+            for (const s of steps) {
+              if (!reachable.has(s.id) && !completed.has(s.id)) {
+                completed.add(s.id);
+                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", artifacts: "", files: "" };
+              }
+            }
+          } else {
+            // Route outside this DAG: skip all remaining steps, signal the main loop
+            for (const s of steps) {
+              if (!completed.has(s.id)) {
+                completed.add(s.id);
+                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", artifacts: "", files: "" };
+              }
+            }
+            return { lastResult, routeToStepId: routeTarget };
+          }
+        }
       }
     }
   }
 
-  return lastResult;
+  return { lastResult };
 }
 
 // ---- Step execution --------------------------------------------------------
