@@ -40,7 +40,7 @@ pi-flows is composed of several tightly integrated sub-extensions, all loaded th
 
 | Extension | Description |
 |-----------|-------------|
-| **provider-register** | Provider management, model catalog, role assignment, autonomous mode state |
+| **provider-register** | Provider management, model auto-discovery, role assignment, autonomous mode state |
 | **file-tracker** | Tracks file modifications (edit/write) in the main session for footer stats |
 | **flow-engine** | Core orchestration: agent parsing, flow parsing, DAG execution, template expansion, tool registration |
 | **flow-dashboard** | Live TUI dashboard with agent cards, grid layout, detail overlays, card registry |
@@ -67,7 +67,7 @@ pi-flows is composed of several tightly integrated sub-extensions, all loaded th
   - [Available Tools](#available-tools)
   - [Model Roles](#model-roles)
   - [Role Presets](#role-presets)
-  - [Model Catalog](#model-catalog)
+  - [Model Discovery](#model-discovery)
   - [Access Control](#access-control)
   - [Skills Directory Format](#skills-directory-format)
   - [Dashboard Cards](#dashboard-cards)
@@ -118,7 +118,7 @@ Before running flows, assign models to roles so agents know which model to use:
 
 ```
 /provider          Add an LLM provider (Anthropic, OpenAI, etc.)
-/catalog           Browse or add custom models to the catalog (optional)
+
 /roles             Assign models to roles (@planning, @coding, @fast, etc.)
 ```
 
@@ -182,7 +182,7 @@ The Flow Architect reads your existing agents and helps you design, validate, an
 | `/flows:edit` | Modify an existing saved flow |
 | `/flows:delete` | Remove a flow and its results |
 | `/provider` | Add, list, or remove LLM providers |
-| `/catalog` | Browse, add, edit, or delete models in the model catalog |
+
 | `/roles` | Assign models to named roles |
 | `/<flow-name>` | Run a saved flow (auto-registered from `.pi/flows/`) |
 
@@ -349,53 +349,19 @@ The active preset is shown with a `✓` prefix. Manually editing any role clears
 
 > Presets are stored in `~/.pi/agent/providers.json` alongside provider credentials and role assignments.
 
-### Model Catalog
 
-The **model catalog** is the library of models available for role assignment. It is stored globally at `~/.pi/agent/providers.json` and pre-populated with common models. Use `/catalog` to manage it:
+### Model Discovery
 
-```
-/catalog
-```
+Models are **automatically discovered** from your providers. When you add or edit a provider via `/provider`, pi-flows fetches the provider's `/v1/models` endpoint and registers all available models.
 
-The catalog overlay opens with a searchable list of all known models. From here you can:
+This means:
+- No manual model catalog to maintain
+- All models your provider offers are immediately available in `/roles`
+- Adding a provider with 60+ models works out of the box
 
-| Action | How |
-|--------|-----|
-| **Browse** | Scroll or type to filter — each entry shows the model ID, display name, and capability tags (`reasoning`, `vision`, context window size) |
-| **Add** | Select `+ Add new model`, enter the provider-prefixed model ID (e.g., `openai/gpt-5`) |
-| **Edit** | Select any model to open its settings — change display name, toggle reasoning/vision support, adjust context window and max tokens |
-| **Delete** | Open a model's edit screen and choose `Delete → confirm` |
+For custom model metadata (reasoning support, context window overrides), use `~/.pi/agent/models.json` which feeds into pi core's `ModelRegistry`.
 
-**Default catalog models:**
-
-The catalog ships with these pre-populated models:
-
-| Model ID | Display Name |
-|----------|-------------|
-| `cc/claude-opus-4-6` | Opus 4.6 |
-| `cc/claude-sonnet-4-6` | Sonnet 4.6 |
-| `cc/claude-haiku-4-5-20251001` | Haiku 4.5 |
-| `glm/glm-5` | GLM 5 |
-| `gemini/gemini-3.1-pro-preview` | Gemini 3.1 Pro |
-| `openrouter/inception/mercury-2` | Mercury 2 |
-| `minimax/MiniMax-M2.5` | MiniMax M2.5 |
-| `minimax/MiniMax-M2.1` | MiniMax M2.1 |
-
-New models added via `/catalog` immediately appear in the `/roles` model selector. This is useful when your LLM provider offers models not yet in the default catalog.
-
-**Example: adding a custom OpenAI model**
-
-```
-/catalog
-→ + Add new model
-  Model ID: openai/gpt-5-mini
-→ saved to catalog
-
-/roles
-→ @fast → openai/gpt-5-mini
-```
-
-> **Config location:** All catalog changes are persisted to `~/.pi/agent/providers.json` alongside your provider credentials and role assignments.
+> **Migration note:** The `/catalog` command and static model catalog have been removed. Models now come from provider auto-discovery. Existing `models` and `modelIds` fields in `providers.json` are silently ignored.
 
 ### Access Control
 

@@ -617,6 +617,331 @@ pi.events?.on("flow:loop-iteration", (data) => { ... });
 
 ---
 
+
+### `flow:flow-started`
+
+Fired when a flow begins execution. Contains step metadata for pre-populating dashboard agent cards.
+
+```typescript
+pi.events?.on("flow:flow-started", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{
+  flowName: string;
+  task: string;
+  steps: Array<{ id: string; stepType: string; agent?: string; blockedBy: string[] }>;
+  description?: string;
+  maxConcurrent?: number;
+  autonomousMode: boolean;
+}
+```
+
+---
+
+### `flow:agent-started`
+
+Fired when an individual agent step begins execution within a flow.
+
+```typescript
+pi.events?.on("flow:agent-started", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{
+  agentName: string;
+  stepId: string;
+  config?: { name: string; description: string; model: string; card?: CardConfig };
+}
+```
+
+---
+
+### `flow:agent-complete`
+
+Fired when an individual agent step finishes execution within a flow.
+
+```typescript
+pi.events?.on("flow:agent-complete", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{
+  agentName: string;
+  stepId: string;
+  result: {
+    success: boolean;
+    status: string;
+    summary: string;
+    files: string[];
+    tokens: { input: number; output: number };
+    duration: number;
+  };
+}
+```
+
+---
+
+### `flow:assistant-text`
+
+Fired when an agent produces assistant text output during flow execution.
+
+```typescript
+pi.events?.on("flow:assistant-text", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{ agentName: string; text: string }
+```
+
+---
+
+### `flow:thinking-text`
+
+Fired when an agent produces reasoning/thinking output during flow execution.
+
+```typescript
+pi.events?.on("flow:thinking-text", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{ agentName: string; text: string }
+```
+
+---
+
+### `flow:summary-started`
+
+Fired when the summary extension begins generating the LLM summary after a flow completes.
+
+```typescript
+pi.events?.on("flow:summary-started", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{ flowName: string }
+```
+
+---
+
+### `flow:summary-ready`
+
+Fired when the summary extension completes LLM summary generation and disk persistence.
+
+```typescript
+pi.events?.on("flow:summary-ready", (data) => { ... });
+```
+
+**Data shape:**
+
+```typescript
+{
+  flowName: string;
+  flowResult: FlowResult;
+  stats: { agentCount: number; duration: string; fileCount: number; perAgent: Array<...> };
+  insightLines: string[];   // LLM-generated insight lines (empty if unavailable)
+  hasIssue: boolean;
+  nextStep: string | null;
+  agentNames: string[];
+}
+```
+
+---
+
+## Control Events
+
+Emit these events to control running flows from external consumers (dashboard, tests).
+
+### `flow:abort`
+
+Abort the currently running flow.
+
+```typescript
+pi.events.emit("flow:abort");
+```
+
+---
+
+### `flow:toggle-autonomous`
+
+Toggle autonomous mode (equivalent to Ctrl+A in TUI).
+
+```typescript
+pi.events.emit("flow:toggle-autonomous");
+```
+
+---
+
+## Management Events
+
+Event-based APIs for managing providers, roles, flows, and models programmatically. Use the synchronous mutate-data pattern: emit with a data object, the handler populates response fields.
+
+### `flow:provider-list`
+
+List all configured providers.
+
+```typescript
+const data: any = {};
+pi.events.emit("flow:provider-list", data);
+// data.providers = [{ name, baseUrl, api, hasAuth }]
+```
+
+---
+
+### `flow:provider-add`
+
+Add a new provider with auto-discovery from `/v1/models`.
+
+```typescript
+const data: any = { name: "my-proxy", baseUrl: "https://...", apiKey: "$KEY", api: "openai-completions" };
+await pi.events.emit("flow:provider-add", data);
+// data.success, data.modelsDiscovered, data.discoveryError?
+```
+
+**Side effect:** Emits `provider:changed` with `{ action: "add", name }` on success.
+
+---
+
+### `flow:provider-edit`
+
+Edit an existing provider and re-discover models.
+
+```typescript
+const data: any = { name: "my-proxy", fields: { baseUrl: "https://new.url/v1" } };
+await pi.events.emit("flow:provider-edit", data);
+// data.success, data.modelsDiscovered
+```
+
+---
+
+### `flow:provider-remove`
+
+Remove a provider.
+
+```typescript
+pi.events.emit("flow:provider-remove", { name: "my-proxy" });
+// data.success
+```
+
+---
+
+### `flow:role-get-all`
+
+Get all role assignments and presets.
+
+```typescript
+const data: any = {};
+pi.events.emit("flow:role-get-all", data);
+// data.roles, data.presets, data.activePreset
+```
+
+---
+
+### `flow:role-set`
+
+Assign a model to a role.
+
+```typescript
+pi.events.emit("flow:role-set", { role: "coding", modelId: "anthropic/claude-sonnet-4-6" });
+```
+
+---
+
+### `flow:role-preset-load` / `flow:role-preset-save` / `flow:role-preset-delete`
+
+Manage role presets.
+
+```typescript
+pi.events.emit("flow:role-preset-load", { name: "fast" });
+pi.events.emit("flow:role-preset-save", { name: "fast" });
+pi.events.emit("flow:role-preset-delete", { name: "old" });
+```
+
+---
+
+### `flow:resolve-model`
+
+Resolve a model reference (role alias or model ID) to a model object and auth credentials.
+
+```typescript
+const data: any = { modelRef: "@coding" };
+pi.events.emit("flow:resolve-model", data);
+// data.model, data.auth
+```
+
+---
+
+### `flow:get-available-models`
+
+List all models with configured authentication.
+
+```typescript
+const data: any = {};
+pi.events.emit("flow:get-available-models", data);
+// data.models = [{ provider, id, name }]
+```
+
+---
+
+### `flow:delete-request`
+
+Delete a flow and its associated files. Emits `flow:delete-result` when complete.
+
+```typescript
+pi.events.emit("flow:delete-request", { flowName: "my-flow" });
+```
+
+---
+
+### `flow:list-flows`
+
+List all discovered flows.
+
+```typescript
+const data: any = {};
+pi.events.emit("flow:list-flows", data);
+// data.flows = [{ name, description, source, taskRequired }]
+```
+
+---
+
+### `flow:get-session-entries`
+
+Get session conversation entries.
+
+```typescript
+const data: any = {};
+pi.events.emit("flow:get-session-entries", data);
+// data.entries = SessionEntry[]
+```
+
+---
+
+### `provider:changed`
+
+Notification event emitted after any provider, role, or catalog mutation.
+
+```typescript
+pi.events?.on("provider:changed", (data) => {
+  // data.action = "add" | "edit" | "remove" | "roles-updated"
+  // data.name = provider name (for add/edit/remove)
+});
+```
+
+---
+
 ## Internal / Query Events
 
 These events coordinate between pi-flows' own sub-extensions. **Do not emit or listen to these from external packages** — they are implementation details and may change without notice.

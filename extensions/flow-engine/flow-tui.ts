@@ -743,7 +743,6 @@ export function setupFlowTui(
         "  /flows:delete       Delete a flow",
         "  /provider           Manage LLM providers",
         "  /roles              Assign model roles",
-        "  /catalog            Manage model catalog",
         "",
         "  Ctrl+A              Toggle auto-routing",
         "",
