@@ -2,13 +2,10 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { FlowResult } from "../flow-engine/types.js";
 import type { DetailEntry } from "../flow-dashboard/agent-dashboard.js";
 import type { AgentCard } from "../flow-dashboard/agent-card.js";
-import { Text } from "@mariozechner/pi-tui";
-import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { getModelRole as getModelRoleFromProvider } from "../provider-register.js";
-import { setFlowWidget } from "../shared/flow-widget.js";
 
 export type SummaryMode = "summary" | "navigate";
 
@@ -32,10 +29,6 @@ interface SummaryState {
   summaryBoxHeight: number;
 }
 
-// -- Braille spinner frames ---------------------------------------------------
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_INTERVAL = 120;
-
 // -- System prompt for @compact LLM -------------------------------------------
 const SYSTEM_PROMPT = `You are a concise flow execution summarizer. Given per-agent summaries and artifacts from a completed flow, produce a brief digest.
 
@@ -55,7 +48,7 @@ function formatDuration(ms: number): string {
 }
 
 // -- Stats computation from FlowResult ----------------------------------------
-function computeStats(fr: FlowResult): { agentCount: number; duration: string; fileCount: number; perAgent: { name: string; status: string; fileCount: number }[] } {
+export function computeStats(fr: FlowResult): { agentCount: number; duration: string; fileCount: number; perAgent: { name: string; status: string; fileCount: number }[] } {
   const entries = Object.entries(fr.results);
   let totalFiles = 0;
   const perAgent: { name: string; status: string; fileCount: number }[] = [];
@@ -103,17 +96,15 @@ async function resolveNextStep(flowName: string, pkgRoot: string): Promise<strin
   }
 }
 
+// -- Helpers: get modelRegistry via event (no ctx dependency) -----------------
+function getModelRegistry(pi: ExtensionAPI): any {
+  const spawnCtx: any = {};
+  pi.events.emit("flow:get-spawn-context", spawnCtx);
+  return spawnCtx.modelRegistry ?? null;
+}
+
 // -- Extension entry point ----------------------------------------------------
 export function activate(pi: ExtensionAPI) {
-  let ui: any = null;
-  let modelRegistry: any = null;
-
-  // Capture ctx references from session_start
-  pi.on("session_start", async (_event, ctx) => {
-    ui = ctx.ui;
-    modelRegistry = ctx.modelRegistry;
-  });
-
   // Resolve package root from import.meta.url
   const __filename = fileURLToPath(import.meta.url);
   const pkgRoot = join(dirname(__filename), "..", "..");
@@ -122,46 +113,19 @@ export function activate(pi: ExtensionAPI) {
   pi.events.on("flow:complete", async (data: unknown) => {
     const fr = data as FlowResult;
     if (!fr?.flowName || !fr?.results) return;
-    if (!ui) return;
 
     const stats = computeStats(fr);
     const nextStep = await resolveNextStep(fr.flowName, pkgRoot);
 
-    // -- Phase 1: Show spinner widget -----------------------------------------
-    let spinnerFrame = 0;
-    let spinnerTimer: ReturnType<typeof setInterval> | null = null;
+    // Notify TUI that summarization is starting (TUI renders spinner if present)
+    pi.events.emit("flow:summary-started", { flowName: fr.flowName });
 
-    const setSpinnerWidget = () => {
-      setFlowWidget(ui, "flow-summary", (_tui: any, theme: any) => {
-        const text = new Text("", 0, 1);
-        return {
-          render(width: number): string[] {
-            const frame = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
-            const line = theme.fg("accent", `${frame} Summarizing...`);
-            text.setText(line);
-            return text.render(width);
-          },
-          invalidate() {
-            if (spinnerTimer) {
-              clearInterval(spinnerTimer);
-              spinnerTimer = null;
-            }
-          },
-        };
-      }, { placement: "aboveEditor" });
-    };
-
-    setSpinnerWidget();
-    spinnerTimer = setInterval(() => {
-      spinnerFrame++;
-      setSpinnerWidget();
-    }, SPINNER_INTERVAL);
-
-    // -- Phase 2: Call @compact LLM (or skip) ---------------------------------
+    // -- Phase 1: Call @compact LLM (or skip) ---------------------------------
     let insightLines: string[] = [];
 
     try {
       const modelId = getModelRoleFromProvider("compact");
+      const modelRegistry = getModelRegistry(pi);
       if (modelId && modelRegistry) {
         const [provider, ...modelParts] = modelId.split("/");
         const model = modelRegistry.find(provider, modelParts.join("/"));
@@ -189,7 +153,7 @@ export function activate(pi: ExtensionAPI) {
       // Graceful fallback: no LLM insight lines
     }
 
-    // -- Phase 2b: Persist summary to disk ------------------------------------
+    // -- Phase 2: Persist summary to disk -------------------------------------
     try {
       const resultsDir = join(process.cwd(), ".pi", "flows", "results");
       mkdirSync(resultsDir, { recursive: true });
@@ -232,20 +196,13 @@ export function activate(pi: ExtensionAPI) {
       writeFileSync(summaryPath, summaryMdLines.join("\n"), "utf-8");
       writeFileSync(jsonPath, JSON.stringify(fr, null, 2), "utf-8");
     } catch {
-      // Non-critical: don't break the summary widget if disk write fails
+      // Non-critical: don't break the summary if disk write fails
     }
 
-    // -- Phase 3: Clear spinner, render summary box ---------------------------
-    if (spinnerTimer) {
-      clearInterval(spinnerTimer);
-      spinnerTimer = null;
-    }
-
+    // -- Phase 3: Set summary state and emit ready event ----------------------
     const hasIssue = stats.perAgent.some(a => a.status === "error" || a.status === "blocked");
-    const statusIcon = hasIssue ? "⚠" : "✓";
     const agentNames = Object.keys(fr.results);
 
-    // Set summary state (accessible via direct import from flow-engine)
     setSummaryState({
       mode: "summary",
       selectedIndex: 0,
@@ -254,120 +211,16 @@ export function activate(pi: ExtensionAPI) {
       summaryBoxHeight: 0,
     });
 
-    setFlowWidget(ui, "flow-summary", (_tui: any, theme: any) => {
-      let tuiRef = _tui;
-      const text = new Text("", 0, 1);
-      return {
-        render(width: number): string[] {
-          const state = getSummaryState();
-          if (!state) return [];
-          const inner = width - 4;
-
-          // ── Navigate mode: agent list with card metrics ──
-          if (state.mode === "navigate") {
-            const bi = width - 4; // content width inside │ + space padding
-
-            const content: string[] = [];
-
-            // Header
-            const navHeader = `${fr.flowName} · Select agent`;
-            content.push(theme.fg("accent", navHeader));
-
-            for (let i = 0; i < agentNames.length; i++) {
-              const name = agentNames[i];
-              const result = fr.results[name];
-              const sel = i === state.selectedIndex ? ">" : " ";
-              const statusStr = result?.status || "unknown";
-              const sIcon = statusStr === "complete" ? theme.fg("success", "✓")
-                : statusStr === "skipped" ? theme.fg("dim", "✓")
-                : statusStr === "blocked" ? theme.fg("warning", "⚠")
-                : statusStr === "error" ? theme.fg("error", "⚠")
-                : theme.fg("dim", "○");
-
-              // Try to get card metric from preserved cards
-              let metricStr = "";
-              const card = lastCardsRef?.get(name);
-              if (card) {
-                const metric = card.renderer.renderMetric(Math.max(10, bi - name.length - 8));
-                if (metric) metricStr = theme.fg("dim", "  " + metric.trim());
-              } else {
-                // Fallback: show event count
-                const eventCount = lastEventLogRef?.get(name)?.length ?? 0;
-                if (eventCount > 0) metricStr = theme.fg("dim", ` · ${eventCount} events`);
-              }
-
-              content.push(`${sel} ${sIcon} ${name}${metricStr}`);
-            }
-
-            const lines = renderBox({
-              width,
-              theme,
-              content,
-              separatorAfter: [0],
-              footer: [theme.fg("dim", "↑↓ navigate · Enter inspect · Backspace back")],
-            });
-
-            // Pad to match summary box height
-            while (lines.length < state.summaryBoxHeight) lines.push("");
-            state.summaryBoxHeight = Math.max(state.summaryBoxHeight, lines.length);
-
-            // Use Text component for consistent width padding (same as summary mode)
-            text.setText(lines.join("\n"));
-            return text.render(width);
-          }
-
-          // ── Summary box mode (default) ──
-          const content: string[] = [];
-          const separators: number[] = [];
-
-          // Header line
-          const header = `${statusIcon} ${fr.flowName} complete · ${stats.agentCount} agents · ${stats.duration}`;
-          content.push(theme.fg("accent", header));
-          separators.push(0);
-
-          // LLM insight lines (or per-agent status if no insights)
-          if (insightLines.length > 0) {
-            for (const line of insightLines) {
-              const trimmed = line.length > inner ? line.slice(0, inner - 1) + "…" : line;
-              content.push(trimmed);
-            }
-          } else {
-            // Structured-only fallback: per-agent status
-            for (const agent of stats.perAgent) {
-              const icon = agent.status === "complete" ? theme.fg("success", "✓")
-                : agent.status === "skipped" ? theme.fg("dim", "✓")
-                : agent.status === "blocked" ? theme.fg("warning", "⚠")
-                : agent.status === "error" ? theme.fg("error", "⚠")
-                : theme.fg("dim", "○");
-              const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
-              content.push(`${icon} ${agent.name}${detail}`);
-            }
-          }
-
-          // Next step (workflow pipeline only)
-          if (nextStep) {
-            separators.push(content.length - 1);
-            const nextLine = `Next: /${nextStep}`;
-            content.push(theme.fg("warning", nextLine));
-          }
-
-          const lines = renderBox({
-            width,
-            theme,
-            content,
-            separatorAfter: separators,
-            footer: [theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss")],
-          });
-
-          // Track the summary box height for matching in other modes
-          state.summaryBoxHeight = lines.length;
-
-          text.setText(lines.join("\n"));
-          return text.render(width);
-        },
-        invalidate() { /* static content, no cleanup needed */ },
-      };
-    }, { placement: "aboveEditor" });
+    // Emit summary-ready with all computed data — TUI and dashboard listen
+    pi.events.emit("flow:summary-ready", {
+      flowName: fr.flowName,
+      flowResult: fr,
+      stats,
+      insightLines,
+      hasIssue,
+      nextStep,
+      agentNames,
+    });
   });
 
   // Receive summary context from flow-engine (tool history + preserved cards)
@@ -375,11 +228,16 @@ export function activate(pi: ExtensionAPI) {
     lastEventLogRef = data?.toolHistory || null;
     lastCardsRef = data?.cards || null;
   });
-
 }
 
 // Module-scoped refs for tool history and preserved cards
 let lastEventLogRef: Map<string, DetailEntry[]> | null = null;
 let lastCardsRef: Map<string, AgentCard> | null = null;
 
-// getSummaryState is exported at the top of this file.
+export function getLastEventLog(): Map<string, DetailEntry[]> | null {
+  return lastEventLogRef;
+}
+
+export function getLastCards(): Map<string, AgentCard> | null {
+  return lastCardsRef;
+}

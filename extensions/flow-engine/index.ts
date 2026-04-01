@@ -171,10 +171,15 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Session start: wire TUI or headless ──
 
+  let sessionManager: any = undefined;
+
   pi.on("session_start", (_event: any, ctx: any) => {
     if (ctx.modelRegistry) {
       sessionModelRegistry = ctx.modelRegistry;
       sessionAuthStorage = (ctx.modelRegistry as any).authStorage;
+    }
+    if (ctx.sessionManager) {
+      sessionManager = ctx.sessionManager;
     }
     if (ctx.hasUI) {
       // Upgrade to TUI adapter
@@ -309,10 +314,17 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Register flow commands ──
 
-  function registerFlowCommand(piApi: ExtensionAPI, name: string, flow: FlowConfig) {
+  function registerFlowCommand(piApi: ExtensionAPI, name: string) {
+    const currentFlow = flows.get(name);
     piApi.registerCommand(name, {
-      description: flow.description || `Run ${name} flow`,
+      description: currentFlow?.description || `Run ${name} flow`,
       handler: async (args, ctx) => {
+        const flow = flows.get(name);
+        if (!flow) {
+          ctx.ui.notify(`Flow "${name}" no longer exists — it may have been deleted`, "error");
+          return;
+        }
+
         if (flowManager.isRunning) {
           ctx.ui.notify(`A flow is already running (${flowManager.activeFlowName})`, "error");
           return;
@@ -337,8 +349,8 @@ export function activate(pi: ExtensionAPI) {
     });
   }
 
-  for (const [name, flow] of flows) {
-    registerFlowCommand(pi, name, flow);
+  for (const [name] of flows) {
+    registerFlowCommand(pi, name);
   }
 
   // ── Programmatic flow execution ──
@@ -358,12 +370,9 @@ export function activate(pi: ExtensionAPI) {
   });
 
   pi.events.on("flow:rediscover", () => {
-    const oldFlowNames = new Set(flows.keys());
     init(pkgRoot, projectRoot);
-    for (const [name, flow] of flows) {
-      if (!oldFlowNames.has(name)) {
-        registerFlowCommand(pi, name, flow);
-      }
+    for (const [name] of flows) {
+      registerFlowCommand(pi, name);
     }
   });
 
@@ -371,6 +380,23 @@ export function activate(pi: ExtensionAPI) {
 
   pi.events.on("flow:get-agents", (data: any) => {
     data.agents = agents;
+  });
+
+  pi.events.on("flow:get-session-entries", (data: any) => {
+    try {
+      data.entries = sessionManager?.getEntries?.() ?? [];
+    } catch {
+      data.entries = [];
+    }
+  });
+
+  pi.events.on("flow:list-flows", (data: any) => {
+    data.flows = Array.from(flows.entries()).map(([name, flow]) => ({
+      name,
+      description: flow.description || "",
+      source: flow.source || "",
+      taskRequired: flow.task_required ?? false,
+    }));
   });
 
   // External packages emit flow:register-tool with full ToolDefinition objects (with .execute())

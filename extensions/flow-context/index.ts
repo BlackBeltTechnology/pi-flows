@@ -71,15 +71,14 @@ function flowResultCompletions(resultsDir: string, prefix: string): Autocomplete
   }));
 }
 
-// -- Delete logic -----------------------------------------------------------
+// -- Delete logic (pure — no ctx.ui dependency) ------------------------------
 
-function deleteFlow(
+function deleteFlowFiles(
   pi: ExtensionAPI,
   projectRoot: string,
   flowName: string,
   flowPath: string,
-  ctx: any,
-): void {
+): { success: boolean; error?: string } {
   // Read flow before deletion to identify agent references
   let agentNames: string[] = [];
   try {
@@ -94,8 +93,7 @@ function deleteFlow(
   try {
     rmSync(flowPath);
   } catch (err: any) {
-    ctx.ui.notify(`Failed to delete flow: ${err.message}`, "error");
-    return;
+    return { success: false, error: `Failed to delete flow: ${err.message}` };
   }
 
   // Delete associated custom agents in .pi/flows/agents/
@@ -124,7 +122,7 @@ function deleteFlow(
   // Re-discover to update flow state
   pi.events.emit("flow:rediscover", {});
 
-  ctx.ui.notify(`Flow "${flowName}" deleted.`, "info");
+  return { success: true };
 }
 
 // -- Extension entry point --------------------------------------------------
@@ -132,6 +130,26 @@ function deleteFlow(
 export function activate(pi: ExtensionAPI) {
   const projectRoot = process.cwd();
   const resultsDir = join(projectRoot, ".pi", "flows", "results");
+
+  // -- Event API: flow:delete-request -----------------------------------------
+
+  pi.events.on("flow:delete-request", (data: any) => {
+    const flowName = data?.flowName;
+    if (!flowName) {
+      pi.events.emit("flow:delete-result", { success: false, flowName, error: "Missing flowName" });
+      return;
+    }
+
+    const flowFiles = getFlowFiles(projectRoot);
+    const matching = flowFiles.find(f => f.name === flowName);
+    if (!matching) {
+      pi.events.emit("flow:delete-result", { success: false, flowName, error: "Flow not found" });
+      return;
+    }
+
+    const result = deleteFlowFiles(pi, projectRoot, flowName, matching.path);
+    pi.events.emit("flow:delete-result", { ...result, flowName });
+  });
 
   // -- flow_results tool — LLM-callable access to flow results ----------------
 
@@ -335,7 +353,12 @@ export function activate(pi: ExtensionAPI) {
           return;
         }
         if (matchingFlow) {
-          deleteFlow(pi, projectRoot, name, matchingFlow.path, ctx);
+          const result = deleteFlowFiles(pi, projectRoot, name, matchingFlow.path);
+          if (result.success) {
+            ctx.ui.notify(`Flow "${name}" deleted.`, "info");
+          } else {
+            ctx.ui.notify(result.error || "Failed to delete flow", "error");
+          }
         } else if (hasResult) {
           // Only result files exist (no flow file)
           try {
@@ -411,7 +434,12 @@ export function activate(pi: ExtensionAPI) {
       }
 
       if (matchingFlow) {
-        deleteFlow(pi, projectRoot, name, matchingFlow.path, ctx);
+        const result = deleteFlowFiles(pi, projectRoot, name, matchingFlow.path);
+        if (result.success) {
+          ctx.ui.notify(`Flow "${name}" deleted.`, "info");
+        } else {
+          ctx.ui.notify(result.error || "Failed to delete flow", "error");
+        }
       } else {
         // Result-only cleanup
         try {

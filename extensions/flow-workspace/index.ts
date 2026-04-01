@@ -83,10 +83,13 @@ const ARCHITECT_SUMMARY_INSTRUCTIONS =
  * Returns null if conversation is too short (< 50 chars) to summarize.
  */
 async function generateArchitectContext(
-  ctx: any,
+  pi: ExtensionAPI,
   getModelRole: ((role: string) => string | undefined) | undefined,
 ): Promise<string | null> {
-  const entries: SessionEntry[] = ctx.sessionManager?.getEntries?.() ?? [];
+  // Get session entries via event (no ctx.sessionManager dependency)
+  const sessionData: any = {};
+  pi.events.emit("flow:get-session-entries", sessionData);
+  const entries: SessionEntry[] = sessionData.entries ?? [];
   if (entries.length === 0) return null;
 
   // Build the resolved message list (handles compaction, branches, custom messages)
@@ -99,19 +102,20 @@ async function generateArchitectContext(
   if (fallbackContext.length <= 50) return null;
 
   try {
-    // Resolve @compact model
+    // Resolve @compact model via event (no ctx.modelRegistry dependency)
     const modelId = getModelRole?.("compact");
-    if (!modelId || !ctx.modelRegistry) {
+    const spawnCtx = getSpawnContext(pi);
+    if (!modelId || !spawnCtx.modelRegistry) {
       return fallbackContext;
     }
 
     const [provider, ...modelParts] = modelId.split("/");
-    const model = ctx.modelRegistry.find(provider, modelParts.join("/"));
+    const model = spawnCtx.modelRegistry.find(provider, modelParts.join("/"));
     if (!model) {
       return fallbackContext;
     }
 
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    const auth = await spawnCtx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) {
       return fallbackContext;
     }
@@ -422,7 +426,7 @@ async function handleEditFlow(
 
   // Generate structured session summary to give the architect awareness of what the user
   // discussed before requesting this flow edit.
-  const editArchitectContext = await generateArchitectContext(ctx, getModelRole);
+  const editArchitectContext = await generateArchitectContext(pi, getModelRole);
 
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";
@@ -606,8 +610,10 @@ async function handleNewFlow(
   let desc = description?.trim() || "";
 
   if (!desc) {
-    // Try to generate from conversation context
-    const entries = ctx.sessionManager.getEntries();
+    // Try to generate from conversation context via events (no ctx.sessionManager/modelRegistry)
+    const sessionData: any = {};
+    pi.events.emit("flow:get-session-entries", sessionData);
+    const entries = sessionData.entries ?? [];
     const convoContext = extractConversationContext(entries);
 
     if (convoContext.length > 50) {
@@ -616,13 +622,14 @@ async function handleNewFlow(
       try {
         let model: any = null;
         const modelId = getModelRole?.("compact");
-        if (modelId && ctx.modelRegistry) {
+        const spawnCtx = getSpawnContext(pi);
+        if (modelId && spawnCtx.modelRegistry) {
           const [provider, ...modelParts] = modelId.split("/");
-          model = ctx.modelRegistry.find(provider, modelParts.join("/"));
+          model = spawnCtx.modelRegistry.find(provider, modelParts.join("/"));
         }
 
-        if (model && ctx.modelRegistry) {
-          const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+        if (model && spawnCtx.modelRegistry) {
+          const auth = await spawnCtx.modelRegistry.getApiKeyAndHeaders(model);
           if (auth.ok) {
             const { completeSimple } = await import("@mariozechner/pi-ai");
             const response = await completeSimple(model, {
@@ -846,7 +853,7 @@ async function handleNewFlow(
 
   // Generate structured session summary to give the architect awareness of what led to this flow request.
   // This is generated here (after desc is resolved) so it's always fresh and in scope for the spawn loop.
-  const architectContext = await generateArchitectContext(ctx, getModelRole);
+  const architectContext = await generateArchitectContext(pi, getModelRole);
 
   const { spawnAgent } = await import("../flow-engine/execution.js");
   let choice = "";

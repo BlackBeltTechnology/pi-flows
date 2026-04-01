@@ -12,13 +12,14 @@ import type { FlowManager } from "./flow-manager.js";
 import { GridComponent } from "../flow-dashboard/grid-component.js";
 import { createAgentDetailOverlay } from "../flow-dashboard/agent-detail-overlay.js";
 import { setFlowWidget } from "../shared/flow-widget.js";
-import { getSummaryState, setSummaryState } from "../flow-summary/index.js";
+import { getSummaryState, setSummaryState, getLastEventLog, getLastCards } from "../flow-summary/index.js";
+import { Text } from "@mariozechner/pi-tui";
+import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { isAutonomousMode, setAutonomousMode } from "../provider-register.js";
 
 // ---- Module-scoped state ---------------------------------------------------
 
 let activeDashboard: any = null;
-let lastFlowResult: FlowResult | null = null;
 let lastToolHistory: Map<string, any[]> | null = null;
 let lastCards: Map<string, any> | null = null;
 let uiCtx: any = null;
@@ -229,8 +230,8 @@ function registerSummaryInputHandler(): void {
       } else if (data === KEY_ENTER) {
         const name = summaryState.agentNames[summaryState.selectedIndex];
         if (name) {
-          const result = lastFlowResult?.results?.[name];
-          const entries = lastToolHistory?.get(name) || [];
+          const result = summaryState.flowResult?.results?.[name];
+          const entries = getLastEventLog()?.get(name) || [];
           openDetailOverlay(name, result?.status || "unknown", result?.summary, entries);
         }
       }
@@ -432,9 +433,6 @@ export class TuiFlowObserver implements FlowObserver {
     this.dashboard = null;
     this.renderDashboard = undefined;
 
-    // Store result and show summary
-    lastFlowResult = result;
-
     // Ensure dashboard widget is removed (safety net)
     if (activeDashboard) {
       if (uiCtx) setFlowWidget(uiCtx, "flow-dashboard", undefined);
@@ -442,15 +440,15 @@ export class TuiFlowObserver implements FlowObserver {
       activeDashboard = null;
     }
 
-    // Share tool history and preserved cards with summary widget
+    // Share tool history and preserved cards with summary extension
     // MUST happen before flow:complete is emitted (flow-summary depends on this ordering)
     this.pi.events.emit("flow:set-summary-context", {
       toolHistory: lastToolHistory,
       cards: lastCards,
     });
 
-    // Register lifecycle-scoped summary input handler
-    registerSummaryInputHandler();
+    // NOTE: Summary input handler is now registered by setupFlowTui's
+    // flow:summary-ready listener, keeping TUI concerns out of the observer.
 
     // Notify user of errors
     if (result.status === "error") {
@@ -547,6 +545,11 @@ export function getIsOverlayOpen(): boolean {
   return overlayOpen;
 }
 
+// ---- Braille spinner frames (for summary widget) --------------------------
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_INTERVAL = 120;
+
 // ---- setupFlowTui ----------------------------------------------------------
 
 /**
@@ -557,6 +560,162 @@ export function setupFlowTui(
   pi: ExtensionAPI,
   flowManager: FlowManager,
 ): void {
+  // ── Summary TUI rendering (driven by events from flow-summary) ──
+
+  let spinnerTimer: ReturnType<typeof setInterval> | null = null;
+
+  pi.events.on("flow:summary-started", () => {
+    if (!uiCtx) return;
+
+    let spinnerFrame = 0;
+    const setSpinnerWidget = () => {
+      setFlowWidget(uiCtx, "flow-summary", (_tui: any, theme: any) => {
+        const text = new Text("", 0, 1);
+        return {
+          render(width: number): string[] {
+            const frame = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
+            const line = theme.fg("accent", `${frame} Summarizing...`);
+            text.setText(line);
+            return text.render(width);
+          },
+          invalidate() {
+            if (spinnerTimer) {
+              clearInterval(spinnerTimer);
+              spinnerTimer = null;
+            }
+          },
+        };
+      }, { placement: "aboveEditor" });
+    };
+
+    setSpinnerWidget();
+    spinnerTimer = setInterval(() => {
+      spinnerFrame++;
+      setSpinnerWidget();
+    }, SPINNER_INTERVAL);
+  });
+
+  pi.events.on("flow:summary-ready", (data: any) => {
+    // Clear spinner
+    if (spinnerTimer) {
+      clearInterval(spinnerTimer);
+      spinnerTimer = null;
+    }
+    if (!uiCtx) return;
+
+    const { flowResult: fr, stats, insightLines, hasIssue, nextStep, agentNames } = data;
+    const statusIcon = hasIssue ? "⚠" : "✓";
+
+    // Register lifecycle-scoped summary input handler
+    registerSummaryInputHandler();
+
+    setFlowWidget(uiCtx, "flow-summary", (_tui: any, theme: any) => {
+      const text = new Text("", 0, 1);
+      return {
+        render(width: number): string[] {
+          const state = getSummaryState();
+          if (!state) return [];
+          const inner = width - 4;
+
+          // ── Navigate mode: agent list with card metrics ──
+          if (state.mode === "navigate") {
+            const bi = width - 4;
+            const content: string[] = [];
+
+            const navHeader = `${fr.flowName} · Select agent`;
+            content.push(theme.fg("accent", navHeader));
+
+            const lastCardsRef = getLastCards();
+            const lastEventLogRef = getLastEventLog();
+
+            for (let i = 0; i < agentNames.length; i++) {
+              const name = agentNames[i];
+              const result = fr.results[name];
+              const sel = i === state.selectedIndex ? ">" : " ";
+              const statusStr = result?.status || "unknown";
+              const sIcon = statusStr === "complete" ? theme.fg("success", "✓")
+                : statusStr === "skipped" ? theme.fg("dim", "✓")
+                : statusStr === "blocked" ? theme.fg("warning", "⚠")
+                : statusStr === "error" ? theme.fg("error", "⚠")
+                : theme.fg("dim", "○");
+
+              let metricStr = "";
+              const card = lastCardsRef?.get(name);
+              if (card) {
+                const metric = card.renderer.renderMetric(Math.max(10, bi - name.length - 8));
+                if (metric) metricStr = theme.fg("dim", "  " + metric.trim());
+              } else {
+                const eventCount = lastEventLogRef?.get(name)?.length ?? 0;
+                if (eventCount > 0) metricStr = theme.fg("dim", ` · ${eventCount} events`);
+              }
+
+              content.push(`${sel} ${sIcon} ${name}${metricStr}`);
+            }
+
+            const lines = renderBox({
+              width,
+              theme,
+              content,
+              separatorAfter: [0],
+              footer: [theme.fg("dim", "↑↓ navigate · Enter inspect · Backspace back")],
+            });
+
+            while (lines.length < state.summaryBoxHeight) lines.push("");
+            state.summaryBoxHeight = Math.max(state.summaryBoxHeight, lines.length);
+
+            text.setText(lines.join("\n"));
+            return text.render(width);
+          }
+
+          // ── Summary box mode (default) ──
+          const content: string[] = [];
+          const separators: number[] = [];
+
+          const header = `${statusIcon} ${fr.flowName} complete · ${stats.agentCount} agents · ${stats.duration}`;
+          content.push(theme.fg("accent", header));
+          separators.push(0);
+
+          if (insightLines.length > 0) {
+            for (const line of insightLines) {
+              const trimmed = line.length > inner ? line.slice(0, inner - 1) + "…" : line;
+              content.push(trimmed);
+            }
+          } else {
+            for (const agent of stats.perAgent) {
+              const icon = agent.status === "complete" ? theme.fg("success", "✓")
+                : agent.status === "skipped" ? theme.fg("dim", "✓")
+                : agent.status === "blocked" ? theme.fg("warning", "⚠")
+                : agent.status === "error" ? theme.fg("error", "⚠")
+                : theme.fg("dim", "○");
+              const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
+              content.push(`${icon} ${agent.name}${detail}`);
+            }
+          }
+
+          if (nextStep) {
+            separators.push(content.length - 1);
+            const nextLine = `Next: /${nextStep}`;
+            content.push(theme.fg("warning", nextLine));
+          }
+
+          const lines = renderBox({
+            width,
+            theme,
+            content,
+            separatorAfter: separators,
+            footer: [theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss")],
+          });
+
+          state.summaryBoxHeight = lines.length;
+
+          text.setText(lines.join("\n"));
+          return text.render(width);
+        },
+        invalidate() { /* static content, no cleanup needed */ },
+      };
+    }, { placement: "aboveEditor" });
+  });
+
   // Register keyboard handler on session_start
   pi.on("session_start", (_event: any, ctx: any) => {
     uiCtx = ctx.ui;
