@@ -15,7 +15,7 @@ import { setFlowWidget } from "../shared/flow-widget.js";
 import { getSummaryState, setSummaryState, getLastEventLog, getLastCards } from "../flow-summary/index.js";
 import { Text } from "@mariozechner/pi-tui";
 import { renderBox } from "../flow-dashboard/box-renderer.js";
-import { isAutonomousMode, setAutonomousMode } from "../provider-register.js";
+import { isAutonomousMode, setAutonomousMode } from "../role-manager.js";
 
 // ---- Module-scoped state ---------------------------------------------------
 

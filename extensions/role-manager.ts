@@ -1,0 +1,250 @@
+/**
+ * Role Manager Extension (pi-flows)
+ *
+ * Manages model role assignments (@planning, @coding, etc.) and autonomous mode.
+ * Config: ~/.pi/agent/providers.json (roles section only — preserves other fields)
+ *
+ * Commands:
+ *   /roles     - assign models to roles
+ *
+ * Event API:
+ *   flow:role-get-all / flow:role-set / flow:role-preset-load / flow:role-preset-save / flow:role-preset-delete
+ */
+
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { searchableOverlay } from "./shared/overlays.js";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+// -- Types ----------------------------------------------------------------
+
+interface RolePreset {
+  name: string;
+  roles: Record<string, string>;
+}
+
+interface RoleConfig {
+  roles: Record<string, string>;
+  rolePresets: RolePreset[];
+  activePreset: string | null;
+  autonomousMode: boolean;
+}
+
+// -- Defaults -------------------------------------------------------------
+
+const CONFIG_PATH = join(homedir(), ".pi", "agent", "providers.json");
+
+const DEFAULT_ROLES: Record<string, string> = {
+  planning: "anthropic/claude-opus-4-6",
+  coding: "anthropic/claude-sonnet-4-6",
+  compact: "anthropic/claude-haiku-4-5",
+  fast: "anthropic/claude-haiku-4-5",
+  research: "anthropic/claude-opus-4-6",
+  vision: "anthropic/claude-sonnet-4-6",
+};
+
+// -- Config I/O (roles section only — preserves other fields) -------------
+
+function loadFullConfig(): Record<string, unknown> {
+  if (existsSync(CONFIG_PATH)) {
+    try {
+      return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
+    } catch {
+      // Fall through to empty
+    }
+  }
+  return {};
+}
+
+function loadRoleConfig(): RoleConfig {
+  const raw = loadFullConfig();
+  return {
+    roles: { ...DEFAULT_ROLES, ...(raw.roles as Record<string, string> | undefined) },
+    rolePresets: Array.isArray(raw.rolePresets) ? raw.rolePresets as RolePreset[] : [],
+    activePreset: (raw.activePreset as string | null) ?? null,
+    autonomousMode: (raw.autonomousMode as boolean) ?? false,
+  };
+}
+
+function saveRoleConfig(roleConfig: RoleConfig): void {
+  mkdirSync(join(homedir(), ".pi", "agent"), { recursive: true });
+  // Read full config to preserve provider fields
+  const full = loadFullConfig();
+  full.roles = roleConfig.roles;
+  full.rolePresets = roleConfig.rolePresets;
+  full.activePreset = roleConfig.activePreset;
+  full.autonomousMode = roleConfig.autonomousMode;
+  writeFileSync(CONFIG_PATH, JSON.stringify(full, null, 2));
+}
+
+// -- Mutable state --------------------------------------------------------
+
+let currentRoles: Record<string, string> = { ...DEFAULT_ROLES };
+
+export function getModelRole(role: string): string | undefined {
+  return currentRoles[role];
+}
+
+// -- Autonomous mode state ------------------------------------------------
+
+let autonomousModeEnabled = false;
+
+export function isAutonomousMode(): boolean {
+  return autonomousModeEnabled;
+}
+
+export function setAutonomousMode(enabled: boolean): void {
+  autonomousModeEnabled = enabled;
+  const config = loadRoleConfig();
+  config.autonomousMode = enabled;
+  saveRoleConfig(config);
+}
+
+// -- Extension entry point ------------------------------------------------
+
+export function activate(pi: ExtensionAPI) {
+  const config = loadRoleConfig();
+  currentRoles = config.roles;
+  autonomousModeEnabled = config.autonomousMode;
+
+  // ── Event API: Role Management ─────────────────────────────────────
+
+  pi.events.on("flow:role-get-all", (data: any) => {
+    const cfg = loadRoleConfig();
+    data.roles = { ...cfg.roles };
+    data.presets = cfg.rolePresets ?? [];
+    data.activePreset = cfg.activePreset ?? null;
+  });
+
+  pi.events.on("flow:role-set", (data: any) => {
+    const { role, modelId } = data;
+    if (!role || !modelId) { data.success = false; return; }
+
+    config.roles[role] = modelId;
+    currentRoles = { ...config.roles };
+    config.activePreset = null;
+    saveRoleConfig(config);
+    data.success = true;
+  });
+
+  pi.events.on("flow:role-preset-load", (data: any) => {
+    const { name } = data;
+    const cfg = loadRoleConfig();
+    const preset = (cfg.rolePresets ?? []).find((p) => p.name === name);
+    if (!preset) { data.success = false; return; }
+
+    for (const [role, model] of Object.entries(preset.roles)) {
+      config.roles[role] = model;
+    }
+    currentRoles = { ...config.roles };
+    config.activePreset = name;
+    saveRoleConfig(config);
+    data.success = true;
+  });
+
+  pi.events.on("flow:role-preset-save", (data: any) => {
+    const { name } = data;
+    if (!name) { data.success = false; return; }
+
+    if (!config.rolePresets) config.rolePresets = [];
+    const existing = config.rolePresets.findIndex((p) => p.name === name);
+    const preset: RolePreset = { name, roles: { ...config.roles } };
+    if (existing >= 0) {
+      config.rolePresets[existing] = preset;
+    } else {
+      config.rolePresets.push(preset);
+    }
+    saveRoleConfig(config);
+    data.success = true;
+  });
+
+  pi.events.on("flow:role-preset-delete", (data: any) => {
+    const { name } = data;
+    if (!name || !config.rolePresets) { data.success = false; return; }
+
+    const before = config.rolePresets.length;
+    config.rolePresets = config.rolePresets.filter((p) => p.name !== name);
+    if (config.rolePresets.length === before) { data.success = false; return; }
+
+    saveRoleConfig(config);
+    data.success = true;
+  });
+
+  // ── TUI Command: /roles ────────────────────────────────────────────
+
+  pi.registerCommand("roles", {
+    description: "Assign models to roles",
+    handler: async (_args, ctx) => {
+      while (true) {
+        const options: string[] = ["Edit roles", "Save as preset"];
+        const presets = config.rolePresets ?? [];
+        for (const preset of presets) {
+          const isActive = config.activePreset === preset.name;
+          options.push(isActive ? `✓ Load: ${preset.name}` : `Load: ${preset.name}`);
+        }
+        if (presets.length > 0) options.push("Delete preset");
+
+        const topChoice = await ctx.ui.select("Model Roles", options);
+        if (!topChoice) return;
+
+        if (topChoice === "Save as preset") {
+          const name = await ctx.ui.input("Preset name", "default");
+          if (!name) continue;
+          const result: any = {};
+          pi.events.emit("flow:role-preset-save", { name, ...result });
+          ctx.ui.notify(`Saved preset "${name}"`, "info");
+          continue;
+        }
+
+        if (topChoice.startsWith("Load: ") || topChoice.startsWith("✓ Load: ")) {
+          const presetName = topChoice.replace(/^✓?\s*Load:\s*/, "");
+          const result: any = {};
+          pi.events.emit("flow:role-preset-load", { name: presetName, ...result });
+          ctx.ui.notify(`Loaded preset "${presetName}"`, "info");
+          continue;
+        }
+
+        if (topChoice === "Delete preset") {
+          const presetOptions = presets.map((p) => p.name);
+          const toDelete = await ctx.ui.select("Delete which preset?", presetOptions);
+          if (toDelete) {
+            pi.events.emit("flow:role-preset-delete", { name: toDelete });
+            ctx.ui.notify(`Deleted preset "${toDelete}"`, "info");
+          }
+          continue;
+        }
+
+        if (topChoice === "Edit roles") {
+          const modelsData: any = {};
+          pi.events.emit("flow:get-available-models", modelsData);
+          const modelItems = (modelsData.models ?? []).map((m: any) => ({
+            value: `${m.provider}/${m.id}`,
+            label: `${m.provider}/${m.id}`,
+            description: m.name,
+          }));
+
+          if (modelItems.length === 0) {
+            ctx.ui.notify("No authenticated models found. Use /login or /provider to configure.", "warning");
+            continue;
+          }
+
+          const roleOptions = Object.keys(config.roles).map((role) =>
+            `@${role} → ${config.roles[role] || "(not set)"}`
+          );
+          const roleChoice = await ctx.ui.select("Select role to edit", roleOptions);
+          if (!roleChoice) continue;
+
+          const roleName = roleChoice.split(" → ")[0].slice(1);
+
+          const modelChoice = await searchableOverlay(ctx, `Model for @${roleName}`, modelItems);
+          if (!modelChoice) continue;
+
+          const setResult: any = {};
+          pi.events.emit("flow:role-set", { role: roleName, modelId: modelChoice, ...setResult });
+          ctx.ui.notify(`@${roleName} → ${modelChoice}`, "info");
+        }
+      }
+    },
+  });
+}

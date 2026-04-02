@@ -5,7 +5,7 @@ import type { AgentCard } from "../flow-dashboard/agent-card.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
-import { getModelRole as getModelRoleFromProvider } from "../provider-register.js";
+import { getModelRole as getModelRoleFromProvider } from "../role-manager.js";
 
 export type SummaryMode = "summary" | "navigate";
 

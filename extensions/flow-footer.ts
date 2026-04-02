@@ -8,7 +8,6 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { getFileStats, onFileStatsChange } from "./file-tracker.js";
-import { getSessionInfo, getModelDisplayName } from "./provider-register.js";
 import { execSync } from "node:child_process";
 
 // ---- Footer segment registry ----------------------------------------------
@@ -41,6 +40,7 @@ export function activate(pi: ExtensionAPI) {
   const cwd = process.cwd();
   let cachedBranch = "";
   let tui: any = null;
+  let currentModel: any = null;
 
   function refreshBranch(): void {
     try {
@@ -75,7 +75,7 @@ export function activate(pi: ExtensionAPI) {
   onFileStatsChange(() => tui?.requestRender());
 
   pi.on("session_start", async (_event, ctx) => {
-    // getSessionInfo and getModelDisplayName imported at top level via single entry point.
+    currentModel = ctx.model;
 
     ctx.ui.setFooter((tuiInstance, theme, footerData) => {
       tui = tuiInstance;
@@ -90,17 +90,11 @@ export function activate(pi: ExtensionAPI) {
           const parts: string[] = [];
 
           // Provider · Model
-          if (getSessionInfo) {
-            const session = getSessionInfo();
-            if (session.provider && getModelDisplayName) {
-              const friendlyName = getModelDisplayName(session.modelId);
-              parts.push(`${session.provider} · ${friendlyName}`);
-            } else if (ctx.model) {
-              const friendlyName = getModelDisplayName?.(ctx.model.id) ?? ctx.model.id;
-              parts.push(`${ctx.model.provider} · ${friendlyName}`);
-            } else {
-              parts.push("– · –");
-            }
+          if (currentModel) {
+            const friendlyName = currentModel.name ?? currentModel.id;
+            parts.push(`${currentModel.provider} · ${friendlyName}`);
+          } else {
+            parts.push("– · –");
           }
 
           // Git branch
@@ -139,6 +133,14 @@ export function activate(pi: ExtensionAPI) {
         dispose: branchDispose,
       };
     });
+  });
+
+  // Track model changes
+  pi.on("model_select", async (_event, ctx) => {
+    if (ctx.model) {
+      currentModel = ctx.model;
+      tui?.requestRender();
+    }
   });
 
   // Refresh context usage after each LLM turn

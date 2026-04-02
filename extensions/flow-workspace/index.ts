@@ -17,7 +17,7 @@ import {
 import { existsSync, readFileSync, rmSync, copyFileSync, mkdirSync } from "node:fs";
 import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS, STAGING_FLOWS } from "./staging.js";
 import { join } from "node:path";
-import { getModelRole } from "../provider-register.js";
+import { getModelRole } from "../role-manager.js";
 import { setFlowWidget } from "../shared/flow-widget.js";
 import { unregisterSummaryInputHandler } from "../flow-engine/flow-tui.js";
 

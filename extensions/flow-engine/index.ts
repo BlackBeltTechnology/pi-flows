@@ -9,7 +9,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
-import { getModelRole, isAutonomousMode, setAutonomousMode } from "../provider-register.js";
+import { getModelRole, isAutonomousMode, setAutonomousMode } from "../role-manager.js";
 import { registerSubagentTool } from "./tool.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
 import {

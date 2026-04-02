@@ -12,7 +12,7 @@ import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { CheckboxSelectList } from "../shared/checkbox-select-list.js";
 import { FlowCancelledError } from "./flow-execution.js";
-import { isAutonomousMode, setAutonomousMode } from "../provider-register.js";
+import { isAutonomousMode, setAutonomousMode } from "../role-manager.js";
 
 // ---- Ask-user bridge queue ------------------------------------------------
 

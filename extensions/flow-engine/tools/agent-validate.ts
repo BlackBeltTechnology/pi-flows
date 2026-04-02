@@ -197,7 +197,7 @@ export function validateAgentContent(
     }
 
     // Only role aliases (@role) are allowed — not bare model IDs.
-    // Roles are resolved at runtime via the provider-register module.
+    // Roles are resolved at runtime via the role-manager module.
     if (modelValue.startsWith("@")) {
       const role = modelValue.split(":")[0]; // strip thinking suffix if present
       if (!KNOWN_MODEL_ROLES.has(role)) {
