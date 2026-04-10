@@ -110,9 +110,9 @@ export class FlowManager {
       getSkillContent: (skillName) => config.getSkillContent(skillName),
       askUser: (question, type, askOptions, extra) =>
         ioAdapter.askUser(question, type as any, askOptions, { ...extra, signal: abortController.signal }),
-      onAgentStarted: (agentName: string, stepId: string) => {
+      onAgentStarted: (agentName: string, stepId: string, resolvedModel?: string) => {
         const agentConfig = config.getAgents().get(agentName);
-        for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig);
+        for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig, resolvedModel);
       },
       onAgentComplete: (agentName: string, stepId: string, result: any) => {
         for (const obs of observers) obs.onAgentComplete?.(agentName, stepId, result);

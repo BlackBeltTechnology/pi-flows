@@ -12,7 +12,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { searchableOverlay } from "./shared/overlays.js";
+import { emitPromptAndAwait } from "./flow-engine/flow-prompt.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -171,80 +171,107 @@ export function activate(pi: ExtensionAPI) {
     data.success = true;
   });
 
-  // ── TUI Command: /roles ────────────────────────────────────────────
+  // ── Event-driven roles management ──────────────────────────────────
+
+  pi.events.on("flow:roles-manage-request", async () => {
+    while (true) {
+      const cfg = loadRoleConfig();
+      const options: string[] = ["Edit roles", "Save as preset"];
+      const presets = cfg.rolePresets ?? [];
+      for (const preset of presets) {
+        const isActive = cfg.activePreset === preset.name;
+        options.push(isActive ? `✓ Load: ${preset.name}` : `Load: ${preset.name}`);
+      }
+      if (presets.length > 0) options.push("Delete preset");
+
+      const topResult = await emitPromptAndAwait(pi, {
+        pipeline: "flow-mgmt",
+        type: "select",
+        question: "Model Roles",
+        options,
+      });
+      if (topResult.cancelled || !topResult.answer) return;
+      const topChoice = topResult.answer;
+
+      if (topChoice === "Save as preset") {
+        const nameResult = await emitPromptAndAwait(pi, {
+          pipeline: "flow-mgmt",
+          type: "input",
+          question: "Preset name",
+          defaultValue: "default",
+        });
+        if (nameResult.cancelled || !nameResult.answer) continue;
+        pi.events.emit("flow:role-preset-save", { name: nameResult.answer });
+        pi.events.emit("flow:notify", { message: `Saved preset "${nameResult.answer}"`, level: "info" });
+        continue;
+      }
+
+      if (topChoice.startsWith("Load: ") || topChoice.startsWith("✓ Load: ")) {
+        const presetName = topChoice.replace(/^✓?\s*Load:\s*/, "");
+        pi.events.emit("flow:role-preset-load", { name: presetName });
+        pi.events.emit("flow:notify", { message: `Loaded preset "${presetName}"`, level: "info" });
+        continue;
+      }
+
+      if (topChoice === "Delete preset") {
+        const presetOptions = presets.map((p) => p.name);
+        const deleteResult = await emitPromptAndAwait(pi, {
+          pipeline: "flow-mgmt",
+          type: "select",
+          question: "Delete which preset?",
+          options: presetOptions,
+        });
+        if (!deleteResult.cancelled && deleteResult.answer) {
+          pi.events.emit("flow:role-preset-delete", { name: deleteResult.answer });
+          pi.events.emit("flow:notify", { message: `Deleted preset "${deleteResult.answer}"`, level: "info" });
+        }
+        continue;
+      }
+
+      if (topChoice === "Edit roles") {
+        const modelsData: any = {};
+        pi.events.emit("flow:get-available-models", modelsData);
+        const modelOptions = (modelsData.models ?? []).map((m: any) => `${m.provider}/${m.id}`);
+
+        if (modelOptions.length === 0) {
+          pi.events.emit("flow:notify", { message: "No authenticated models found. Use /login or /provider to configure.", level: "warning" });
+          continue;
+        }
+
+        const currentCfg = loadRoleConfig();
+        const roleOptions = Object.keys(currentCfg.roles).map((role) =>
+          `@${role} → ${currentCfg.roles[role] || "(not set)"}`
+        );
+        const roleResult = await emitPromptAndAwait(pi, {
+          pipeline: "flow-mgmt",
+          type: "select",
+          question: "Select role to edit",
+          options: roleOptions,
+        });
+        if (roleResult.cancelled || !roleResult.answer) continue;
+
+        const roleName = roleResult.answer.split(" → ")[0].slice(1);
+
+        const modelResult = await emitPromptAndAwait(pi, {
+          pipeline: "flow-mgmt",
+          type: "select",
+          question: `Model for @${roleName}`,
+          options: modelOptions,
+        });
+        if (modelResult.cancelled || !modelResult.answer) continue;
+
+        pi.events.emit("flow:role-set", { role: roleName, modelId: modelResult.answer });
+        pi.events.emit("flow:notify", { message: `@${roleName} → ${modelResult.answer}`, level: "info" });
+      }
+    }
+  });
+
+  // ── TUI Command: /roles (thin wrapper) ─────────────────────────────
 
   pi.registerCommand("roles", {
     description: "Assign models to roles",
-    handler: async (_args, ctx) => {
-      while (true) {
-        const options: string[] = ["Edit roles", "Save as preset"];
-        const presets = config.rolePresets ?? [];
-        for (const preset of presets) {
-          const isActive = config.activePreset === preset.name;
-          options.push(isActive ? `✓ Load: ${preset.name}` : `Load: ${preset.name}`);
-        }
-        if (presets.length > 0) options.push("Delete preset");
-
-        const topChoice = await ctx.ui.select("Model Roles", options);
-        if (!topChoice) return;
-
-        if (topChoice === "Save as preset") {
-          const name = await ctx.ui.input("Preset name", "default");
-          if (!name) continue;
-          const result: any = {};
-          pi.events.emit("flow:role-preset-save", { name, ...result });
-          ctx.ui.notify(`Saved preset "${name}"`, "info");
-          continue;
-        }
-
-        if (topChoice.startsWith("Load: ") || topChoice.startsWith("✓ Load: ")) {
-          const presetName = topChoice.replace(/^✓?\s*Load:\s*/, "");
-          const result: any = {};
-          pi.events.emit("flow:role-preset-load", { name: presetName, ...result });
-          ctx.ui.notify(`Loaded preset "${presetName}"`, "info");
-          continue;
-        }
-
-        if (topChoice === "Delete preset") {
-          const presetOptions = presets.map((p) => p.name);
-          const toDelete = await ctx.ui.select("Delete which preset?", presetOptions);
-          if (toDelete) {
-            pi.events.emit("flow:role-preset-delete", { name: toDelete });
-            ctx.ui.notify(`Deleted preset "${toDelete}"`, "info");
-          }
-          continue;
-        }
-
-        if (topChoice === "Edit roles") {
-          const modelsData: any = {};
-          pi.events.emit("flow:get-available-models", modelsData);
-          const modelItems = (modelsData.models ?? []).map((m: any) => ({
-            value: `${m.provider}/${m.id}`,
-            label: `${m.provider}/${m.id}`,
-            description: m.name,
-          }));
-
-          if (modelItems.length === 0) {
-            ctx.ui.notify("No authenticated models found. Use /login or /provider to configure.", "warning");
-            continue;
-          }
-
-          const roleOptions = Object.keys(config.roles).map((role) =>
-            `@${role} → ${config.roles[role] || "(not set)"}`
-          );
-          const roleChoice = await ctx.ui.select("Select role to edit", roleOptions);
-          if (!roleChoice) continue;
-
-          const roleName = roleChoice.split(" → ")[0].slice(1);
-
-          const modelChoice = await searchableOverlay(ctx, `Model for @${roleName}`, modelItems);
-          if (!modelChoice) continue;
-
-          const setResult: any = {};
-          pi.events.emit("flow:role-set", { role: roleName, modelId: modelChoice, ...setResult });
-          ctx.ui.notify(`@${roleName} → ${modelChoice}`, "info");
-        }
-      }
+    handler: async () => {
+      pi.events.emit("flow:roles-manage-request", {});
     },
   });
 }

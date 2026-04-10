@@ -46,6 +46,7 @@ export class AgentCard {
   public spinFrame = 0;
   public modelRole = "";
   public cardRole = "";  // From CardConfig.role (takes priority over modelRole for display)
+  public resolvedModel = "";  // Concrete resolved model ID (e.g., "anthropic/claude-opus-4-6")
   public label = "";
   public blockedByNames: string[] = [];
   public tokens: { input: number; output: number } = { input: 0, output: 0 };
@@ -142,18 +143,33 @@ export class AgentCard {
       return border(styled);
     });
 
-    // Role subtitle line — show tokens when complete, role when running/pending
+    // Role subtitle line — show tokens when complete, resolved model when running/pending
+    // Strip provider prefix for display (e.g., "anthropic/claude-opus-4-6" → "claude-opus-4-6")
+    const displayModel = this.resolvedModel
+      ? (this.resolvedModel.split("/").pop() ?? this.resolvedModel)
+      : "";
+    const rawModel = this.modelRole; // raw model field from agent config (e.g., "@planning")
+    const hasAlias = rawModel.startsWith("@");
+
     let roleText = "";
     if ((this.status === "complete" || this.status === "error" || this.status === "blocked") && (this.tokens.input > 0 || this.tokens.output > 0)) {
       const tokenInfo = `↑${formatTokens(this.tokens.input)} ↓${formatTokens(this.tokens.output)}`;
       const durationSec = (this.duration / 1000).toFixed(1) + "s";
       roleText = truncate(`  ${tokenInfo} · ${durationSec}`, w - 1);
+    } else if (displayModel) {
+      roleText = truncate("  " + displayModel, w - 1);
     } else if (displayRole) {
       roleText = truncate("  " + displayRole, w - 1);
     }
     const roleLine = roleText
       ? border(" " + theme.fg("dim", roleText))
       : border("");
+
+    // Alias line — show dim alias below role line when model uses a role alias
+    const aliasText = hasAlias ? truncate("  " + rawModel, w - 1) : "";
+    const aliasLine = aliasText
+      ? border(" " + theme.fg("muted", aliasText))
+      : null;
 
     // Build header content with optional right-aligned iteration badge
     const headerLeft = " " + iconStr + " " + nameStr;
@@ -171,8 +187,9 @@ export class AgentCard {
       top,
       border(headerContent),
       roleLine,
-      border(bodyLine0),
     ];
+    if (aliasLine) result.push(aliasLine);
+    result.push(border(bodyLine0));
     result.push(...toolRendered, bot);
 
     // Debug assertion: verify all lines have exactly `width` visible characters

@@ -29,19 +29,13 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
         if (params.allowCustom) options.push("Other (describe)");
 
         if (params.multiSelect) {
-          // Multi-select via shared checkbox overlay (dynamic import to avoid static pi-tui dep)
-          const { checkboxOverlay } = await import("../../shared/overlays.js");
-          const checkboxItems = options.map((opt: string) => ({
-            value: opt,
-            label: opt,
-          }));
-
-          const result: any = await checkboxOverlay(ctx, params.question, checkboxItems, {
-            overlayMode: true,
-            hints: ["Space: toggle  Enter: confirm  Esc: cancel"],
-          });
-
-          answer = result.type === "selected" ? result.ids : [];
+          // Multi-select via per-option confirm (works through ui-proxy for dashboard)
+          const selected: string[] = [];
+          for (const opt of options) {
+            const yes = await ctx.ui.confirm(`${params.question}\n  Include "${opt}"?`);
+            if (yes) selected.push(opt);
+          }
+          answer = selected;
         } else {
           answer = await ctx.ui.select(params.question, options);
         }

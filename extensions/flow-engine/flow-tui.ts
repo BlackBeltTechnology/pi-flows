@@ -16,6 +16,7 @@ import { getSummaryState, setSummaryState, getLastEventLog, getLastCards } from 
 import { Text } from "@mariozechner/pi-tui";
 import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { isAutonomousMode, setAutonomousMode } from "../role-manager.js";
+import { join } from "node:path";
 
 // ---- Module-scoped state ---------------------------------------------------
 
@@ -211,6 +212,7 @@ function registerSummaryInputHandler(): void {
         unregisterSummaryInputHandler();
         setSummaryState(null);
         requestRender();
+        pi.events?.emit("flow:summary-dismissed", {});
         return { consume: true };
       }
       return undefined;
@@ -357,9 +359,9 @@ export class TuiFlowObserver implements FlowObserver {
     }
   }
 
-  onAgentStarted(agentName: string, _stepId: string, config?: AgentConfig): void {
+  onAgentStarted(agentName: string, _stepId: string, config?: AgentConfig, resolvedModel?: string): void {
     if (this.dashboard) {
-      this.dashboard.onAgentStarted(agentName, config);
+      this.dashboard.onAgentStarted(agentName, config, resolvedModel);
       this.renderDashboard!();
     }
   }
@@ -479,13 +481,15 @@ export class EventEmitObserver implements FlowObserver {
       description: flow.description,
       maxConcurrent: flow.max_concurrent,
       autonomousMode: isAutonomousMode(),
+      source: flow.source,
     });
   }
 
-  onAgentStarted(agentName: string, stepId: string, config?: AgentConfig): void {
+  onAgentStarted(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string): void {
     this.pi.events.emit("flow:agent-started", {
       agentName,
       stepId,
+      resolvedModel,
       config: config ? {
         name: config.name,
         description: config.description,
@@ -547,8 +551,7 @@ export function getIsOverlayOpen(): boolean {
 
 // ---- Braille spinner frames (for summary widget) --------------------------
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const SPINNER_INTERVAL = 120;
+
 
 // ---- setupFlowTui ----------------------------------------------------------
 
@@ -560,50 +563,295 @@ export function setupFlowTui(
   pi: ExtensionAPI,
   flowManager: FlowManager,
 ): void {
-  // ── Summary TUI rendering (driven by events from flow-summary) ──
+  // ── Legacy prompt request/response handler REMOVED ──
+  // Previously listened for flow:prompt-request and presented via proxied uiCtx,
+  // causing duplicate prompts on the dashboard. Now handled by TuiPromptAdapter
+  // registered with the PromptBus (see tui-prompt-adapter.ts).
 
-  let spinnerTimer: ReturnType<typeof setInterval> | null = null;
+  // ── Architect TUI adapter (driven by events from flow-workspace) ──
+  // Mounts/unmounts the architect widget, handles keyboard, overlays,
+  // and maps typed lifecycle events to TUI notifications.
 
-  pi.events.on("flow:summary-started", () => {
+  let architectWidget: any = null;
+  let widgetTuiRef: any = null;
+  let architectOverlayOpen = false;
+  let unsubArchitectInput: (() => void) | null = null;
+
+  function architectRender() {
+    widgetTuiRef?.requestRender();
+  }
+
+  async function openArchitectFlowOverlay(content: string) {
     if (!uiCtx) return;
-
-    let spinnerFrame = 0;
-    const setSpinnerWidget = () => {
-      setFlowWidget(uiCtx, "flow-summary", (_tui: any, theme: any) => {
-        const text = new Text("", 0, 1);
-        return {
-          render(width: number): string[] {
-            const frame = SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
-            const line = theme.fg("accent", `${frame} Summarizing...`);
-            text.setText(line);
-            return text.render(width);
+    architectOverlayOpen = true;
+    try {
+      const { parseFlowYamlString } = await import("./flow-parser-yaml.js");
+      const flowConfig = parseFlowYamlString(content, "<preview>");
+      const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+      await uiCtx.custom(
+        (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
+          return createFlowPreviewOverlay({
+            flow: flowConfig,
+            theme,
+            tui: tuiInstance,
+            done,
+          });
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "90%",
+            maxHeight: "85%",
+            anchor: "center",
           },
-          invalidate() {
-            if (spinnerTimer) {
-              clearInterval(spinnerTimer);
-              spinnerTimer = null;
+        },
+      );
+    } catch { /* overlay not available */ }
+    finally { architectOverlayOpen = false; }
+  }
+
+  async function mountArchitectWidget(resolveAgentType?: (name: string) => "built-in" | "local") {
+    if (!uiCtx) return;
+    // Clear stale summary input handler so it doesn't steal keybinds from architect
+    unregisterSummaryInputHandler();
+    try {
+      const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
+      architectWidget = createArchitectWidget({ resolveAgentType });
+      const wrappedFactory = (t: any, theme: any) => {
+        widgetTuiRef = t;
+        return architectWidget.factory(t, theme);
+      };
+      setFlowWidget(uiCtx, "flow-architect", wrappedFactory);
+      architectWidget.setUpdateCallback(architectRender);
+
+      // Inject architect widget as prompt handler for TUI adapter
+      pi.events.emit("prompt:set-architect-handler", {
+        handler: (id: string, type: "select" | "input", question: string, options?: string[], signal?: AbortSignal) => {
+          return architectWidget.showPrompt(id, type, question, options, signal);
+        },
+      });
+    } catch { /* widget not available */ }
+  }
+
+  function unmountArchitectWidget() {
+    if (architectWidget) {
+      architectWidget.dispose();
+      architectWidget = null;
+      // Clear the architect prompt handler from TUI adapter
+      pi.events.emit("prompt:set-architect-handler", { handler: null });
+    }
+    if (uiCtx) {
+      setFlowWidget(uiCtx, "flow-architect", undefined);
+      widgetTuiRef?.requestRender(true);
+    }
+    if (unsubArchitectInput) {
+      unsubArchitectInput();
+      unsubArchitectInput = null;
+    }
+  }
+
+  function registerArchitectKeyboard(piRef: ExtensionAPI) {
+    if (!uiCtx) return;
+    // Unsubscribe previous handler if any
+    if (unsubArchitectInput) {
+      unsubArchitectInput();
+      unsubArchitectInput = null;
+    }
+    unsubArchitectInput = uiCtx.onTerminalInput((data: string) => {
+      // Ctrl+X: abort the architect agent (always takes priority)
+      if (data === KEY_CTRL_X) {
+        piRef.events.emit("flow:architect-abort", {});
+        return { consume: true };
+      }
+
+      // Handle inline prompt input (highest priority after abort)
+      if (architectWidget?.hasActivePrompt?.()) {
+        if (architectWidget.handlePromptInput(data)) {
+          architectRender();
+          return { consume: true };
+        }
+      }
+
+      // Handle navigate mode keyboard input
+      if (architectWidget && architectWidget.getPreviewSubMode?.() === "navigate" && !architectOverlayOpen) {
+        if (data === KEY_UP) {
+          const idx = architectWidget.getSelectedFlowIndex();
+          if (idx > 0) architectWidget.setSelectedFlowIndex(idx - 1);
+        } else if (data === KEY_DOWN) {
+          const idx = architectWidget.getSelectedFlowIndex();
+          architectWidget.setSelectedFlowIndex(idx + 1);
+        } else if (data === KEY_BACKSPACE_1 || data === KEY_BACKSPACE_2) {
+          architectWidget.setPreviewSubMode("preview");
+        } else if (data === KEY_ENTER) {
+          const flows = architectWidget.getFlowContents();
+          const idx = architectWidget.getSelectedFlowIndex();
+          const selected = flows[idx];
+          if (selected) {
+            (async () => {
+              await openArchitectFlowOverlay(selected.content);
+            })();
+          }
+        }
+        return { consume: true };
+      }
+
+      // Ctrl+O: open detail overlay or flow preview overlay
+      if (data === KEY_CTRL_O && architectWidget && !architectOverlayOpen) {
+        (async () => {
+          architectOverlayOpen = true;
+          try {
+            if (architectWidget.hasFlowContent()) {
+              const flows = architectWidget.getFlowContents();
+              if (flows.length === 1) {
+                await openArchitectFlowOverlay(flows[0].content);
+              } else if (flows.length > 1) {
+                architectWidget.setPreviewSubMode("navigate");
+                architectOverlayOpen = false;
+                return;
+              }
+            } else {
+              const entries = architectWidget.getEventLog?.() || [];
+              if (entries.length > 0) {
+                await openDetailOverlay("flow-architect", "running", undefined, entries);
+              }
             }
-          },
-        };
-      }, { placement: "aboveEditor" });
-    };
+          } catch { /* overlay not available */ }
+          finally { architectOverlayOpen = false; }
+        })();
+        return { consume: true };
+      }
+      return undefined;
+    });
+  }
 
-    setSpinnerWidget();
-    spinnerTimer = setInterval(() => {
-      spinnerFrame++;
-      setSpinnerWidget();
-    }, SPINNER_INTERVAL);
+  // Build resolveAgentType using discovered agents
+  function getResolveAgentType(piRef: ExtensionAPI): ((name: string) => "built-in" | "local") {
+    const agentsQuery: any = {};
+    piRef.events.emit("flow:get-agents", agentsQuery);
+    const discoveredAgentsMap: Map<string, any> = agentsQuery.agents ?? new Map();
+    const piLocalPrefix = join(process.cwd(), ".pi");
+    return (agentName: string): "built-in" | "local" => {
+      const config = discoveredAgentsMap.get(agentName);
+      if (config?.source && config.source.startsWith(piLocalPrefix)) return "local";
+      return "built-in";
+    };
+  }
+
+  // Architect lifecycle: started
+  pi.events.on("flow:architect-started", async (data: unknown) => {
+    if (!uiCtx) return;
+    const resolveAgentType = getResolveAgentType(pi);
+    await mountArchitectWidget(resolveAgentType);
+    registerArchitectKeyboard(pi);
+    // Set architect model info if provided
+    const { resolvedModel, modelAlias } = (data || {}) as { resolvedModel?: string; modelAlias?: string };
+    if (architectWidget && resolvedModel) {
+      architectWidget.setModel(resolvedModel, modelAlias || "");
+    }
   });
 
-  pi.events.on("flow:summary-ready", (data: any) => {
-    // Clear spinner
-    if (spinnerTimer) {
-      clearInterval(spinnerTimer);
-      spinnerTimer = null;
+  // Architect lifecycle: tool call
+  pi.events.on("flow:architect-tool-call", (data: unknown) => {
+    if (!architectWidget) return;
+    const { toolName, input } = data as { toolName: string; input: any };
+    architectWidget.onToolCall(toolName, input);
+    architectRender();
+  });
+
+  // Architect lifecycle: tool result
+  pi.events.on("flow:architect-tool-result", (data: unknown) => {
+    if (!architectWidget) return;
+    const { toolName, output, isError } = data as { toolName: string; output: any; isError: boolean };
+    architectWidget.onToolResult(toolName, output, isError);
+    architectRender();
+  });
+
+  // Architect lifecycle: text
+  pi.events.on("flow:architect-text", (data: unknown) => {
+    if (!architectWidget) return;
+    const { kind, text } = data as { kind: string; text: string };
+    if (kind === "assistant") architectWidget.onAssistantText?.(text);
+    else if (kind === "thinking") architectWidget.onThinkingText?.(text);
+  });
+
+  // Architect lifecycle: preview ready
+  pi.events.on("flow:architect-preview", (_data: unknown) => {
+    architectWidget?.setReady?.();
+    architectRender();
+  });
+
+  // Architect lifecycle: complete
+  pi.events.on("flow:architect-complete", (_data: unknown) => {
+    unmountArchitectWidget();
+  });
+
+  // Architect lifecycle: error (architect failed but may retry)
+  // Don't unmount — the orchestrator may offer retry prompt
+
+  // Architect lifecycle: replan — reset widget for new iteration
+  pi.events.on("flow:architect-replan", (_data: unknown) => {
+    unmountArchitectWidget();
+    // Widget will be re-mounted on next flow:architect-started
+  });
+
+  // Typed lifecycle events → TUI notifications
+  pi.events.on("flow:architect-context-generating", (_data: unknown) => {
+    uiCtx?.notify("Analyzing conversation...", "info");
+  });
+
+  pi.events.on("flow:architect-init-error", (data: unknown) => {
+    const { reason } = data as { reason: string };
+    if (reason === "agent-not-found") {
+      uiCtx?.notify("Could not load flow-architect agent.", "error");
+    } else if (reason === "already-running") {
+      uiCtx?.notify("Architect already running.", "warning");
+    } else if (reason === "no-flows") {
+      uiCtx?.notify("No flows found to edit.", "info");
+    } else {
+      uiCtx?.notify(`Architect error: ${reason}`, "error");
     }
+  });
+
+  pi.events.on("flow:architect-cancelled", (_data: unknown) => {
+    uiCtx?.notify("Cancelled.", "warning");
+    unmountArchitectWidget();
+  });
+
+  pi.events.on("flow:architect-saved", (data: unknown) => {
+    const d = data as { flowName: string; commandName?: string; mode?: string };
+    if (d.mode === "edit") {
+      uiCtx?.notify(`Flow "${d.flowName}" updated.`, "info");
+    } else {
+      uiCtx?.notify(`Flow saved as "${d.flowName}" — available as /${d.commandName || d.flowName}`, "info");
+    }
+  });
+
+  pi.events.on("flow:architect-run-handoff", (data: unknown) => {
+    const { flowName } = data as { flowName: string };
+    uiCtx?.notify(`Running flow: "${flowName}"...`, "info");
+  });
+
+  pi.events.on("flow:architect-error", (data: unknown) => {
+    const d = data as { phase?: string; error?: string; summary?: string };
+    if (d.phase === "save") {
+      uiCtx?.notify(`Failed to save flow: ${d.error}`, "error");
+    }
+    // Other errors (architect failure) don't need a separate notify —
+    // the orchestrator will emit a prompt-request for retry/cancel
+  });
+
+  // Generic fallback notification
+  pi.events.on("flow:notify", (data: unknown) => {
+    const { message, level } = data as { message: string; level?: string };
+    uiCtx?.notify(message, (level as any) || "info");
+  });
+
+  // ── Summary TUI rendering (driven by events from flow-summary) ──
+
+  pi.events.on("flow:summary-ready", (data: any) => {
     if (!uiCtx) return;
 
-    const { flowResult: fr, stats, insightLines, hasIssue, nextStep, agentNames } = data;
+    const { flowResult: fr, stats, hasIssue, nextStep, agentNames } = data;
     const statusIcon = hasIssue ? "⚠" : "✓";
 
     // Register lifecycle-scoped summary input handler
@@ -675,20 +923,20 @@ export function setupFlowTui(
           content.push(theme.fg("accent", header));
           separators.push(0);
 
-          if (insightLines.length > 0) {
-            for (const line of insightLines) {
-              const trimmed = line.length > inner ? line.slice(0, inner - 1) + "…" : line;
-              content.push(trimmed);
-            }
-          } else {
-            for (const agent of stats.perAgent) {
-              const icon = agent.status === "complete" ? theme.fg("success", "✓")
-                : agent.status === "skipped" ? theme.fg("dim", "✓")
-                : agent.status === "blocked" ? theme.fg("warning", "⚠")
-                : agent.status === "error" ? theme.fg("error", "⚠")
-                : theme.fg("dim", "○");
-              const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
-              content.push(`${icon} ${agent.name}${detail}`);
+          for (const agent of stats.perAgent) {
+            const icon = agent.status === "complete" ? theme.fg("success", "✓")
+              : agent.status === "skipped" ? theme.fg("dim", "✓")
+              : agent.status === "blocked" ? theme.fg("warning", "⚠")
+              : agent.status === "error" ? theme.fg("error", "⚠")
+              : theme.fg("dim", "○");
+            const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
+            content.push(`${icon} ${agent.name}${detail}`);
+            // Show truncated finish summary if available
+            const agentSummary = fr.results[agent.name]?.summary;
+            if (agentSummary) {
+              const maxLen = inner - 4;
+              const trimmed = agentSummary.length > maxLen ? agentSummary.slice(0, maxLen - 1) + "…" : agentSummary;
+              content.push(theme.fg("dim", `  ${trimmed}`));
             }
           }
 
@@ -716,6 +964,18 @@ export function setupFlowTui(
     }, { placement: "aboveEditor" });
   });
 
+  // ── Dashboard-initiated dismiss: clear TUI summary widget ──
+  pi.events.on("flow:summary-dismissed", () => {
+    if (!uiCtx) return;
+    const state = getSummaryState();
+    if (state) {
+      setFlowWidget(uiCtx, "flow-summary", undefined);
+      unregisterSummaryInputHandler();
+      setSummaryState(null);
+      requestRender();
+    }
+  });
+
   // Register keyboard handler on session_start
   pi.on("session_start", (_event: any, ctx: any) => {
     uiCtx = ctx.ui;
@@ -741,7 +1001,6 @@ export function setupFlowTui(
         "  /flows:new          Design & run a new flow",
         "  /flows:edit         Edit an existing flow",
         "  /flows:delete       Delete a flow",
-        "  /provider           Manage LLM providers",
         "  /roles              Assign model roles",
         "",
         "  Ctrl+A              Toggle auto-routing",
@@ -757,6 +1016,7 @@ export function setupFlowTui(
       // Global: Ctrl+A toggles autonomous mode anytime
       if (data === KEY_CTRL_A) {
         setAutonomousMode(!isAutonomousMode());
+        pi.events.emit("flow:autonomous-mode-changed", { enabled: isAutonomousMode() });
         requestRender();
         invalidateAutoFooter?.();
         return { consume: true };

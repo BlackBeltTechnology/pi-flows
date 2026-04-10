@@ -20,13 +20,16 @@ import {
 import { registerAgentCatalogTool } from "./tools/agent-catalog.js";
 import { registerAgentWriteTool } from "./tools/agent-write.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
-import { registerFlowPreviewTool } from "./tools/flow-preview.js";
 import { existsSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { FlowManager } from "./flow-manager.js";
 import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
+import { emitPromptAndAwait } from "./flow-prompt.js";
 import { TuiFlowObserver, EventEmitObserver, setupFlowTui, getIsOverlayOpen } from "./flow-tui.js";
+import { registerTuiPromptAdapter } from "./tui-prompt-adapter.js";
+import { registerArchitectUIAdapter } from "./architect-ui-adapter.js";
+import { listenForPromptBus } from "./prompt-bus-access.js";
 
 // Re-export public API
 export type {
@@ -183,7 +186,7 @@ export function activate(pi: ExtensionAPI) {
     }
     if (ctx.hasUI) {
       // Upgrade to TUI adapter
-      flowManager.setIOAdapter(new TuiFlowIOAdapter(ctx.ui, getIsOverlayOpen));
+      flowManager.setIOAdapter(new TuiFlowIOAdapter(ctx.ui, getIsOverlayOpen, pi));
       // Add TUI observer (must be before EventEmitObserver for correct ordering)
       // We insert at position 0 so TuiFlowObserver.onFlowComplete runs first
       // (emits flow:set-summary-context before EventEmitObserver emits flow:complete)
@@ -202,6 +205,62 @@ export function activate(pi: ExtensionAPI) {
   // ── TUI keyboard/widget wiring ──
 
   setupFlowTui(pi, flowManager);
+
+  // ── PromptBus setup ──
+  // Listen for the bus request function from the dashboard bridge
+  listenForPromptBus(pi);
+
+  // ── PromptBus TUI + Architect adapter registration ──
+  // Register the prompt:ctx-originals listener early (during activate) so it
+  // exists before the dashboard bridge's session_start handler emits the event.
+  // The actual adapter registration + bus wiring happens on session_start when
+  // ctx.hasUI is true, but the event listener must be in place before that.
+  //
+  // NOTE: registerArchitectUIAdapter MUST happen in session_start (not activate)
+  // because it emits "prompt:register-adapter" which the bridge's session_start
+  // handler listens for. The event bus is fire-and-forget — emitting during
+  // activate would fire before the listener exists.
+  {
+    let architectAdapterRegistered = false;
+    let tuiAdapterRegistered = false;
+    let pendingOriginals: any = null;
+
+    // Listen early — before session_start — to capture originals from bridge
+    pi.events?.on("prompt:ctx-originals", (originals: any) => {
+      pendingOriginals = originals;
+    });
+
+    pi.on("session_start", (_ev: any, ctx: any) => {
+      // Architect adapter: claims architect-* prompts with widget-bar component.
+      // Registered for ALL sessions (including headless) — it doesn't need ctx.ui,
+      // it just tells the dashboard how to render the prompt.
+      if (!architectAdapterRegistered) {
+        architectAdapterRegistered = true;
+        registerArchitectUIAdapter(pi);
+      }
+
+      // TUI adapter: presents prompts in the terminal — only when TUI is available
+      if (ctx.hasUI && !tuiAdapterRegistered) {
+        tuiAdapterRegistered = true;
+
+        const adapter = registerTuiPromptAdapter(pi);
+        // If originals were already captured before registration, inject them now
+        if (pendingOriginals) {
+          adapter.captureOriginals(pendingOriginals);
+          pendingOriginals = null;
+        }
+
+        // Listen for architect widget prompt handler injection
+        pi.events?.on("prompt:set-architect-handler", (data: any) => {
+          if (typeof data?.handler === "function") {
+            adapter.setArchitectHandler(data.handler);
+          } else if (data?.handler === null) {
+            adapter.setArchitectHandler(null as any);
+          }
+        });
+      }
+    });
+  }
 
   // ── Event listeners for dependent package registration ──
 
@@ -310,7 +369,6 @@ export function activate(pi: ExtensionAPI) {
   registerAgentCatalogTool(subagentOnlyPi as any, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
   registerAgentWriteTool(subagentOnlyPi as any);
   registerFlowWriteTool(subagentOnlyPi as any, () => agents);
-  registerFlowPreviewTool(subagentOnlyPi as any, () => agents);
 
   // ── Register flow commands ──
 
@@ -318,30 +376,34 @@ export function activate(pi: ExtensionAPI) {
     const currentFlow = flows.get(name);
     piApi.registerCommand(name, {
       description: currentFlow?.description || `Run ${name} flow`,
-      handler: async (args, ctx) => {
+      handler: async (args) => {
         const flow = flows.get(name);
         if (!flow) {
-          ctx.ui.notify(`Flow "${name}" no longer exists — it may have been deleted`, "error");
+          pi.events.emit("flow:notify", { message: `Flow "${name}" no longer exists — it may have been deleted`, level: "error" });
           return;
         }
 
         if (flowManager.isRunning) {
-          ctx.ui.notify(`A flow is already running (${flowManager.activeFlowName})`, "error");
+          pi.events.emit("flow:notify", { message: `A flow is already running (${flowManager.activeFlowName})`, level: "error" });
           return;
         }
 
         const gateMsg = checkGate(name);
         if (gateMsg) {
-          ctx.ui.notify(gateMsg, "error");
+          pi.events.emit("flow:notify", { message: gateMsg, level: "error" });
           return;
         }
 
         let task = args || "";
         if (flow.task_required && !task.trim()) {
           const prompt = flow.task_prompt || `Describe what you want ${name} to do:`;
-          const answer = await ctx.ui.input(prompt, "");
-          if (!answer?.trim()) return;
-          task = answer.trim();
+          const result = await emitPromptAndAwait(pi, {
+            pipeline: "flow-run",
+            type: "input",
+            question: prompt,
+          });
+          if (result.cancelled || !result.answer?.trim()) return;
+          task = result.answer.trim();
         }
 
         await flowManager.start({ flow, flowName: name, task });
@@ -419,6 +481,7 @@ export function activate(pi: ExtensionAPI) {
   // External autonomous mode toggle (e.g., from dashboard bridge)
   pi.events.on("flow:toggle-autonomous", () => {
     setAutonomousMode(!isAutonomousMode());
+    pi.events.emit("flow:autonomous-mode-changed", { enabled: isAutonomousMode() });
   });
 
   // Provide spawn context for subagent sessions (flow-workspace, architect)

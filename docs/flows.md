@@ -1,172 +1,390 @@
 # Flow Reference
 
-This document covers the flow step types available for authoring custom flows in pi-flows.
+Complete reference for authoring flows in pi-flows. Covers all step types with syntax, field references, and practical examples.
+
+---
 
 ## Flow File Format
 
-Flows are `.yaml` files with top-level metadata and a `steps:` array. Each step has an `id` field and either an explicit `type` field or an inferred type based on its fields.
+Flows are `.yaml` files with YAML frontmatter followed by step definitions. Each step has a unique `id` and is connected to other steps via `blockedBy` declarations to form a directed acyclic graph (DAG).
+
+**Location:** `.pi/flows/flows/<name>.yaml` or a package-registered flows directory.
+
+---
+
+## Flow Frontmatter
+
+```yaml
+---
+name: research-and-build
+description: Research the codebase then implement changes
+max_concurrent: 2
+task_required: true
+task_prompt: "What feature should I research and implement?"
+---
+```
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `name` | ✓ | Flow identifier — for documentation; the slash command is derived from the file path |
+| `description` | ✓ | What the flow does (shown in command list and dashboard) |
+| `max_concurrent` | | Maximum agents running in parallel (default: `4`) |
+| `task_required` | | When `true`, prompts the user for a task if none was provided |
+| `task_prompt` | | Custom prompt text shown when asking for a task |
+
+> **Command name = file path, not `name:` field.** The slash command is derived from the file path:
+>
+> | File path | Command |
+> |-----------|---------|
+> | `.pi/flows/flows/research.yaml` | `/research` |
+> | `.pi/flows/flows/my-domain/apply.yaml` | `/my-domain:apply` |
+
+---
 
 ## Step Types
 
+Steps form a DAG based on `blockedBy` declarations. pi-flows schedules steps that have no pending dependencies in parallel, respecting `max_concurrent`.
+
 ### Agent Step (default)
 
-Spawns an AI agent as an isolated child process.
+Dispatches a named agent with a task. This is the most common step type.
+
+**Syntax:**
 
 ```yaml
-- id: my-step
-  agent: agent-name           # Agent to run
-  task: >                     # Task description (supports interpolation)
-    Do something specific.
-    Context: ${{result.prior-step.summary}}
-  blockedBy: [step-a, step-b] # Wait for these steps to complete
-  inputs:                     # Named inputs passed to agent
-    data: "${{result.step-a.artifacts}}"
+steps:
+  - id: my-step
+    agent: agent-name
+    task: Optional task override with ${{template}} variables
+    blockedBy: [step-a, step-b]
+    inputs:
+      input_name: "${{result.step-a.summary}}"
+    on_complete: next-step
+    on_error: error-handler
 ```
 
-**Lifecycle:**
-1. Wait until all `blockedBy` steps complete
-2. Resolve interpolation (`${{result.*}}` and `${{task}}`)
-3. Spawn agent process with resolved task and inputs
-4. Agent executes, produces `<result>` output
-5. Result stored in `ctx.results[step-id]`
+**Field reference:**
+
+| Field | Description |
+|-------|-------------|
+| `id` | **Required.** Unique step identifier |
+| `agent` | **Required.** Agent name to dispatch |
+| `task` | Task override (template string). If omitted, uses the flow's task |
+| `blockedBy` | Array of step IDs that must complete before this step starts |
+| `inputs` | Named inputs wired from template expressions |
+| `on_complete` | Step ID to route to on success |
+| `on_error` | Step ID to route to on error |
+
+**Example — parallel research with fan-in:**
+
+```yaml
+name: multi-research
+description: Research multiple domains in parallel
+
+steps:
+  - id: backend-research
+    agent: researcher
+    task: Investigate backend patterns for ${{task}}
+
+  - id: frontend-research
+    agent: researcher
+    task: Investigate frontend patterns for ${{task}}
+
+  - id: synthesizer
+    agent: synthesizer
+    blockedBy: [backend-research, frontend-research]
+    inputs:
+      backend: "${{result.backend-research.summary}}"
+      frontend: "${{result.frontend-research.summary}}"
+    task: Synthesize findings from both research passes
+```
 
 ---
 
 ### Fork Step
 
-Presents options to the user and routes to one or more branches.
+Pause execution and present options to the user. The selected option determines which branch runs.
+
+**Syntax:**
 
 ```yaml
-- id: choose
-  type: fork
-  question: "Which approach?"        # Displayed to user
-  options: [Option A, Option B]       # Available choices
-  multiSelect: false                  # true → multiple branches run
-  branches:
-    Option A: step-for-a              # Map option → target step
-    Option B: step-for-b
+  - id: choose-approach
+    type: fork
+    question: "Which approach do you prefer?"
+    options: [Quick fix, Full refactor]
+    branches:
+      Quick fix: quick-fix-step
+      Full refactor: refactor-step
+    allowCustom: true
+    agent: router-agent
 ```
 
-**Single-select behavior:** Routes to one branch; steps reachable only from non-selected branches are skipped (synthetic "skipped" results stored for dependency satisfaction).
+**Field reference:**
 
-**Multi-select behavior:** Multiple branches run in parallel. Unselected branches are skipped.
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `question` | ✓ | Question displayed to the user |
+| `options` | ✓ | Comma-separated or YAML list of choices |
+| `branches` | ✓ | Map of option text → step ID |
+| `allowCustom` | | Appends "Other (describe)" option. Custom freetext routes through the fork's `agent`. Requires `agent`. |
+| `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
+| `agent` | | Agent for autonomous decisions (Ctrl+A) and custom freetext routing. Required when `allowCustom` is set. |
+| `task` | | Task description for the decision agent. Defaults to question + options. |
 
-After the user picks an option, they are always prompted for optional notes (Enter to skip). Fork context (question, selected option, notes, and who decided) is **automatically injected** into the branch step's system prompt.
+**Behavior:**
+
+- **Single-select:** Routes to one branch. Unselected branches are skipped (synthetic "skipped" results stored).
+- **Multi-select:** Multiple branches run in parallel.
+- **After selection:** User is prompted for optional notes (Enter to skip). Fork context is **automatically injected** into the branch step's system prompt.
+
+**Autonomous mode:** When Ctrl+A is active, fork steps with an `agent:` field skip the user prompt and let the agent decide automatically. Forks without `agent:` always prompt the user.
 
 ---
 
 ### Conditional Step
 
-Automatically routes based on whether a prior step's result field is non-empty.
+Branch based on whether a field from a previous step's result is non-empty.
+
+**Syntax:**
 
 ```yaml
-- id: check
-  type: conditional
-  check: step-id.field              # Format: <step-id>.<field-name>
-  present: target-when-present      # Route if field is non-empty
-  absent: target-when-absent        # Route if field is empty/missing
+  - id: check-research
+    type: conditional
+    check: researcher.artifacts
+    present: process-artifacts
+    absent: skip-to-build
 ```
 
-**Resolution logic:**
-1. Parse `check` — extract step ID (everything before last `.`) and field name (last segment)
-2. Look up `ctx.results[stepId]`
-3. If result exists and `result[field].trim().length > 0` → route to `present`
-4. Otherwise → route to `absent`
+**Field reference:**
 
-Common patterns:
-- `check: step.artifacts` — check if step produced structured artifacts
-- `check: step.summary` — check if step produced a summary (always true for completed steps)
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `check` | ✓ | `stepId` or `stepId.field` to check. Field defaults to `artifacts` if omitted. |
+| `present` | ✓ | Step ID to route to if the field is non-empty |
+| `absent` | ✓ | Step ID to route to if the field is empty or the step has no result |
+
+**Supported fields:**
+
+| Field | Checks |
+|-------|--------|
+| `artifacts` | The `<artifacts>` block from `finish` (default) |
+| `summary` | The `<summary>` from `finish` |
+| `files` | The files list from `finish` |
+| `status` | The status field (`"complete"`, `"error"`, etc.) |
 
 ---
 
-### Agent Loop Decision
+### Agent Decision Step
 
-A decision agent evaluates results and chooses to loop or exit.
+Delegate a routing decision to an agent. The agent analyzes the context and calls `finish` with a `branch` name.
+
+**Syntax:**
 
 ```yaml
-- id: verify-loop
-  type: agent-loop-decision
-  agent: flow-decision              # Built-in decision agent
-  task: >
-    Evaluate: ${{result.verifier.summary}}
-    If issues remain, choose "loop". If all good, choose "exit".
-  loop_target: fix-step             # Jump back on "loop"
-  exit_target: done-step            # Proceed on "exit"
-  max_iterations: 3                 # Safety limit (prevents infinite loops)
+  - id: route-decision
+    type: agent-decision
+    agent: router-agent
+    task: "Review and decide: ${{result.analyzer.summary}}"
+    branches:
+      needs-work: fix-step
+      ready: deploy-step
 ```
 
-**Execution:**
-1. Spawn the decision agent with the task
-2. Agent outputs either "loop" or "exit"
-3. Loop → re-execute from `loop_target`
-4. Exit → proceed to `exit_target`
-5. If `max_iterations` reached → force exit
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `agent` | ✓ | Agent name — must call `finish` with a valid `branch` |
+| `task` | ✓ | Task for the decision agent. Supports template variables. |
+| `branches` | ✓ | Map of branch names → step IDs |
+
+**Agent finish call:**
+
+```
+finish(summary="Quality is sufficient.", branch="ready")
+```
+
+If the agent returns a `branch` not in `branches`, the flow errors.
 
 ---
 
-### Flow Reference
+### Agent Loop Decision Step
 
-Executes a sub-flow and propagates results back to the parent.
+Iterative verify/fix cycles. The agent decides on each iteration whether to loop back or exit.
+
+**Syntax:**
 
 ```yaml
-- id: sub-execution
-  type: flow-ref
-  path: .pi/flows/flows/sub-flow.yaml   # Path to sub-flow (supports globs)
-  on_complete: next-step                 # Resume here after sub-flow
+  - id: verify-loop
+    type: agent-loop-decision
+    agent: verifier
+    task: "Check iteration ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}: ${{result.developer.summary}}"
+    loop_target: developer
+    exit_target: finalize
+    max_iterations: 3
 ```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `agent` | ✓ | Decision agent — calls `finish(branch:)` with `loop_target` or `exit_target` |
+| `task` | ✓ | Task for the decision agent. Supports loop template variables. |
+| `loop_target` | ✓ | Step ID to jump back to for more work |
+| `exit_target` | ✓ | Step ID to continue to when satisfied |
+| `max_iterations` | ✓ | Safety cap — forces exit when exceeded |
+
+**How the agent decides:**
+
+```
+# Continue looping:
+finish(summary="Tests still failing.", branch="developer")
+
+# Exit the loop:
+finish(summary="All tests passing.", branch="finalize")
+```
+
+The `branch` value must exactly match either `loop_target` or `exit_target`.
+
+**Full loop example:**
+
+```yaml
+steps:
+  - id: developer
+    agent: developer
+    task: Implement ${{task}}
+
+  - id: verify-loop
+    type: agent-loop-decision
+    agent: verifier
+    task: >
+      Check implementation (attempt ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}).
+      Developer output: ${{result.developer.summary}}
+    loop_target: developer
+    exit_target: finalize
+    max_iterations: 3
+
+  - id: finalize
+    agent: summarizer
+    task: Summarize the completed implementation
+```
+
+---
+
+### Flow Reference Step
+
+Delegate execution to another flow file. The sub-flow runs to completion before continuing.
+
+**Syntax:**
+
+```yaml
+  - id: run-tests
+    type: flow-ref
+    path: .pi/flows/flows/test-suite.yaml
+    on_complete: deploy-step
+    on_error: fix-step
+```
+
+**Field reference:**
+
+| Field | Description |
+|-------|-------------|
+| `path` | **Required.** Path to the sub-flow `.yaml` file |
+| `on_complete` | Step ID to route to after sub-flow completes |
+| `on_error` | Step ID to route to if sub-flow errors |
 
 **Result propagation:**
 - Sub-flow agent results are flat-merged into the parent's result context
-- The flow-ref step ID itself stores the last agent's result
+- The flow-ref step ID stores the last agent's result
 - Downstream steps can reference sub-flow agents: `${{result.sub-agent-id.summary}}`
 
 ---
 
-## Result Interpolation
+## Template Variable Reference
 
-### Syntax
+Template variables are placeholders in `task`, `inputs`, and `question` fields. They are expanded just before an agent is dispatched.
 
-```
-${{result.<step-id>.<field>}}
-```
+| Variable | Resolves To |
+|----------|-------------|
+| `${{task}}` | The task passed when the flow was invoked |
+| `${{input.NAME}}` | A wired input value (from the `inputs:` block) |
+| `${{result.STEP-ID}}` | Full raw output from a completed step |
+| `${{result.STEP-ID.summary}}` | Summary from `finish(summary:)` |
+| `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |
+| `${{result.STEP-ID.artifacts}}` | The `<artifacts>` XML block from `finish` |
+| `${{result.STEP-ID.files}}` | Comma-separated file paths created/modified |
+| `${{result.STEP-ID.<outputName>}}` | A typed output from the agent's `outputs:` declaration |
+| `${{loop.STEP-ID.iteration}}` | Current iteration (1-based) in a loop step |
+| `${{loop.STEP-ID.max}}` | Maximum iterations configured for a loop |
 
-Available fields:
-- `summary` — text summary from the agent
-- `artifacts` — structured XML artifact data
-- `files` — list of files created/modified
+> **Resolution order:** Variables are expanded at dispatch time. `${{result.X}}` is only valid if step `X` has already completed (guaranteed when `X` is in `blockedBy`).
 
-### Usage in task text
+> **Missing values resolve to empty string.** Referencing an unrun step, undeclared input, or non-existent field becomes `""`.
 
-```yaml
-task: >
-  Use the findings from research:
-  ${{result.research-step.summary}}
-  
-  Check these artifacts:
-  ${{result.research-step.artifacts}}
-```
+---
 
-### Usage in inputs
+## Input Wiring
 
-```yaml
-inputs:
-  prior_work: "${{result.research-step.summary}}"
-  model_data: "${{result.model-step.artifacts}}"
-```
+Inputs wire specific data from one step to another as named variables, separate from the task text.
 
-### Common mistake
+### Declare on the agent
 
 ```yaml
-# ✗ WRONG — angle brackets
+# agents/developer.md
 inputs:
-  data: "<step.summary>"
-
-# ✓ CORRECT — double curly braces  
-inputs:
-  data: "${{result.step.summary}}"
+  - research_output
+  - ticket_context
 ```
 
-Flow validation catches angle-bracket syntax and suggests the correct format.
+### Wire in the flow step
+
+```yaml
+  - id: developer
+    agent: developer
+    blockedBy: [researcher]
+    inputs:
+      research_output: "${{result.researcher.summary}}"
+      ticket_context: "${{result.ticket-fetch.artifacts}}"
+```
+
+### Reference in the system prompt
+
+```markdown
+Research context:
+${{input.research_output}}
+
+Ticket context:
+${{input.ticket_context}}
+```
+
+If `inputs:` is not declared in the agent's frontmatter, the input values are substituted but the system prompt has no `${{input.NAME}}` to expand them into.
+
+### File Content Injection (`file://` prefix)
+
+When an agent needs the **content** of a file (not just a path), use the `file://` prefix:
+
+```yaml
+  - id: validate
+    agent: validator
+    blockedBy: [researcher]
+    inputs:
+      report: file://research/findings.md
+```
+
+**Dynamic path from previous step:**
+
+```yaml
+  - id: summarize
+    agent: summarizer
+    blockedBy: [writer]
+    inputs:
+      report: file://${{result.writer.files}}
+```
+
+**Rules:**
+- The producing step **MUST** be in `blockedBy` so the file exists at dispatch time
+- File content is injected **verbatim** (never template-expanded)
+- If the file doesn't exist, the step fails with a clear error
 
 ---
 
@@ -177,6 +395,7 @@ Flow validation catches angle-bracket syntax and suggests the correct format.
 ```yaml
 name: research-and-build
 description: Research, plan, then implement
+
 steps:
   - id: research
     agent: researcher
@@ -195,69 +414,12 @@ steps:
     task: Implement the plan. Details: ${{input.plan}}
 ```
 
-### Parallel Research with Fan-In
-
-```yaml
-name: multi-domain-research
-description: Research multiple domains in parallel
-steps:
-  - id: backend-research
-    agent: backend-researcher
-    task: Investigate backend patterns for ${{task}}
-
-  - id: frontend-research
-    agent: frontend-researcher
-    task: Investigate frontend patterns for ${{task}}
-
-  - id: summarizer
-    agent: summarizer
-    blockedBy: [backend-research, frontend-research]
-    inputs:
-      backend: "${{result.backend-research.summary}}"
-      frontend: "${{result.frontend-research.summary}}"
-    task: Synthesize research findings
-```
-
-### Verify-Fix Loop
-
-```yaml
-name: implement-and-verify
-description: Implement with verification loop
-steps:
-  - id: implement
-    agent: developer
-    task: Implement ${{task}}
-
-  - id: verify
-    agent: verifier
-    blockedBy: [implement]
-    task: Build and verify the implementation
-
-  - id: fix
-    agent: developer
-    blockedBy: [verify]
-    inputs:
-      issues: "${{result.verify.artifacts}}"
-    task: Fix the issues found during verification
-
-  - id: verify-loop
-    type: agent-loop-decision
-    agent: flow-decision
-    task: "Evaluate: ${{result.verify.summary}}"
-    loop_target: fix
-    exit_target: done
-    max_iterations: 3
-
-  - id: done
-    agent: summarizer
-    task: Summarize the completed work
-```
-
 ### Interactive Branching
 
 ```yaml
 name: flexible-workflow
 description: User-driven workflow selection
+
 steps:
   - id: choose
     type: fork
@@ -281,3 +443,31 @@ steps:
     task: Generate report from analysis results
 ```
 
+### Verify-Fix Loop
+
+```yaml
+name: implement-and-verify
+description: Implement with verification loop
+
+steps:
+  - id: implement
+    agent: developer
+    task: Implement ${{task}}
+
+  - id: verify
+    agent: verifier
+    blockedBy: [implement]
+    task: Verify the implementation
+
+  - id: verify-loop
+    type: agent-loop-decision
+    agent: flow-decision
+    task: "Evaluate: ${{result.verify.summary}}"
+    loop_target: implement
+    exit_target: done
+    max_iterations: 3
+
+  - id: done
+    agent: summarizer
+    task: Summarize the completed work
+```

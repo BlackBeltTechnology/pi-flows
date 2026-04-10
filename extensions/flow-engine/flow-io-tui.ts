@@ -6,6 +6,7 @@
 // auto-decide injection, notes prompt, etc.)
 // ---------------------------------------------------------------------------
 
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { FlowIOAdapter, AskUserExtra, AskUserResult } from "./flow-io.js";
 import type { SelectItem } from "@mariozechner/pi-tui";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
@@ -27,12 +28,14 @@ class AskUserQueue {
   private queue: AskUserQueueEntry[] = [];
   private processing = false;
   private ui: any = null;
+  private pi: ExtensionAPI | null = null;
   private isOverlayOpen: () => boolean = () => false;
   private aborted = false;
 
-  setUI(ui: any, isOverlayOpen: () => boolean) {
+  setUI(ui: any, isOverlayOpen: () => boolean, pi?: ExtensionAPI) {
     this.ui = ui;
     this.isOverlayOpen = isOverlayOpen;
+    this.pi = pi ?? null;
   }
 
   enqueue(entry: AskUserQueueEntry) {
@@ -78,6 +81,9 @@ class AskUserQueue {
       const pendingHint = this.queue.length > 0 ? ` (${this.queue.length} more pending)` : "";
       const decoratedTitle = `[${agentName}] ${request.title || request.message || ""}${pendingHint}`;
 
+      // flow:prompt-request emission REMOVED — ctx.ui methods now route
+      // through the PromptBus automatically, so dashboard sees all prompts.
+
       try {
         if (method === "select") {
           const answer = await this.ui.select(decoratedTitle, request.options || []);
@@ -112,17 +118,24 @@ class AskUserQueue {
 
 export class TuiFlowIOAdapter implements FlowIOAdapter {
   private queue = new AskUserQueue();
+  private pi: ExtensionAPI | null;
 
   constructor(
     private ui: any,
     private isOverlayOpen: () => boolean,
+    pi?: ExtensionAPI,
   ) {
-    this.queue.setUI(ui, isOverlayOpen);
+    this.pi = pi ?? null;
+    this.queue.setUI(ui, isOverlayOpen, pi);
   }
+
+  // emitPromptRequest REMOVED — no longer needed.
+  // ctx.ui methods are now PromptBus wrappers, so ui.select/input/confirm
+  // automatically route through the bus to both TUI and dashboard.
 
   onFlowStart(): void {
     this.queue.reset();
-    this.queue.setUI(this.ui, this.isOverlayOpen);
+    this.queue.setUI(this.ui, this.isOverlayOpen, this.pi ?? undefined);
   }
 
   onFlowEnd(): void {
@@ -162,6 +175,7 @@ export class TuiFlowIOAdapter implements FlowIOAdapter {
 
     // ── Multi-select: checkbox overlay ──
     if ((type === "multiselect" || extra?.multiSelect) && options) {
+      // ctx.ui calls now route through PromptBus automatically
       if (ui.custom) {
         const selected: string[] = await ui.custom((tui: any, t: any, _kb: any, done: (val: string[]) => void) => {
           const checkboxItems: SelectItem[] = options.map((opt) => ({
@@ -233,6 +247,8 @@ export class TuiFlowIOAdapter implements FlowIOAdapter {
           })
         : allOptions;
 
+      // ctx.ui.select now routes through PromptBus — no dual-emit or race needed.
+      // The bus handles TUI + dashboard delivery and first-response-wins.
       const answer = await ui.select(question, displayOptions, { signal });
       if (answer === undefined) throw new FlowCancelledError();
 

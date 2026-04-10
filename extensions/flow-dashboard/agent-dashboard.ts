@@ -86,7 +86,7 @@ export class AgentDashboard {
     }
   }
 
-  onAgentStarted(agentName: string, agentConfig?: AgentConfig): void {
+  onAgentStarted(agentName: string, agentConfig?: AgentConfig, resolvedModel?: string): void {
     if (!this.eventLog.has(agentName)) this.eventLog.set(agentName, []);
     let card = this.cards.get(agentName);
     if (!card) {
@@ -96,6 +96,7 @@ export class AgentDashboard {
       card.modelRole = agentConfig?.model || "";
       card.cardRole = agentConfig?.card?.role || "";
       card.label = agentConfig?.card?.label || "";
+      card.resolvedModel = resolvedModel || "";
       this.cards.set(agentName, card);
       // Recompute expected rows and flag for full TUI re-render
       this.updateExpectedGridRows();
@@ -103,6 +104,7 @@ export class AgentDashboard {
     } else {
       card.status = "running";
       if (agentConfig?.model) card.modelRole = agentConfig.model;
+      if (resolvedModel) card.resolvedModel = resolvedModel;
     }
     this.syncGrid();
     this.startSpinner();

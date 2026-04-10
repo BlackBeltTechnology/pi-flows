@@ -82,6 +82,8 @@ export interface SpawnOptions {
   onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void;
   decisionBranches?: string[];
   signal?: AbortSignal;
+  /** Pre-resolved model ID — when provided, skips resolveModel() call. */
+  resolvedModelId?: string;
 }
 
 /**
@@ -168,8 +170,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     };
   }
 
-  // Resolve model
-  const { modelId, thinking } = resolveModel(agent.model, agent.thinking, getModelRole);
+  // Resolve model (skip if pre-resolved)
+  const { modelId, thinking } = options.resolvedModelId
+    ? { modelId: options.resolvedModelId, thinking: agent.thinking }
+    : resolveModel(agent.model, agent.thinking, getModelRole);
 
   // Build system prompt: expand template variables in agent body
   let systemPrompt = expandTemplateVariables(agent.systemPrompt, templateContext);

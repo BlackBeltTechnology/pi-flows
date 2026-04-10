@@ -1,5 +1,6 @@
 import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult } from "./types.js";
 import { expandTemplateVariables, spawnAgent } from "./execution.js";
+import { resolveModel } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
 import { globSync, readFileSync, existsSync } from "node:fs";
@@ -51,7 +52,7 @@ export interface FlowRunOptions {
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
-  onAgentStarted?: (agentName: string, stepId: string) => void;
+  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult) => void;
   onToolCall?: (agentName: string, toolName: string, input: any) => void;
   onToolResult?: (agentName: string, toolName: string, output: any, isError: boolean) => void;
@@ -422,7 +423,16 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     return errorResult;
   }
 
-  options.onAgentStarted?.(step.agent, step.id);
+  // Resolve model early so it's available for onAgentStarted observers
+  let resolvedModelId: string | undefined;
+  try {
+    const { modelId } = resolveModel(agentConfig.model, agentConfig.thinking, options.getModelRole);
+    resolvedModelId = modelId;
+  } catch {
+    // Model resolution failed — will be caught again inside spawnAgent
+  }
+
+  options.onAgentStarted?.(step.agent, step.id, resolvedModelId);
 
   // Resolve step inputs at dispatch time.
   // File inputs (file:// prefix) are read from disk. Their content is stored with unique
@@ -524,6 +534,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond)
       : undefined,
     signal: options.signal,
+    resolvedModelId,
   });
 
   options.onAgentComplete?.(step.agent, step.id, result);

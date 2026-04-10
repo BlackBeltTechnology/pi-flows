@@ -183,16 +183,6 @@ export function renderDetailView(
   // ── Build content lines (virtual document) ──
   const contentLines: string[] = [];
 
-  // Summary block (full text, word-wrapped, scrollable)
-  if (data.summary) {
-    contentLines.push("  " + fg("dim", "Summary:"));
-    const summaryWrapped = wordWrap(data.summary, Math.max(10, inner - 4));
-    for (const sl of summaryWrapped) {
-      contentLines.push("    " + sl);
-    }
-    contentLines.push("");
-  }
-
   // Track which content-line indices correspond to each entry (for scroll targeting)
   const entryStartLines: number[] = [];
 
@@ -245,6 +235,16 @@ export function renderDetailView(
           contentLines.push(("      " + l).slice(0, width));
         }
       }
+    }
+  }
+
+  // Summary block at the bottom (after tool history)
+  if (data.summary) {
+    contentLines.push("");
+    contentLines.push("  " + fg("dim", "Summary:"));
+    const summaryWrapped = wordWrap(data.summary, Math.max(10, inner - 4));
+    for (const sl of summaryWrapped) {
+      contentLines.push("    " + sl);
     }
   }
 
@@ -310,11 +310,6 @@ export function computeExpandedContentLines(
   const inner = width - 4;
   let total = 0;
 
-  // Account for summary block
-  if (summary) {
-    total += 1 + wordWrap(summary, Math.max(10, inner - 4)).length + 1; // label + wrapped lines + blank
-  }
-
   for (let i = 0; i < filtered.length; i++) {
     const e = filtered[i];
     if (e.kind === "text") {
@@ -332,5 +327,11 @@ export function computeExpandedContentLines(
       }
     }
   }
+
+  // Account for summary block at the bottom
+  if (summary) {
+    total += 1 + 1 + wordWrap(summary, Math.max(10, inner - 4)).length; // blank + label + wrapped lines
+  }
+
   return total;
 }

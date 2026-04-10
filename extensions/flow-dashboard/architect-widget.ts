@@ -3,13 +3,13 @@
 //
 // Full-width TUI component rendered above the editor during the Flow
 // Architect's design phase.  Tracks tool calls (agent_catalog, agent_write,
-// flow_write, flow_preview) and renders a live-updating
+// flow_write) and renders a live-updating
 // box showing:
 //   - Spinner + flow name header
 //   - Agent list (built-in vs custom, with creation progress)
 //   - DAG visualization of flow steps
 //   - Status bar with current activity
-//   - Preview mode when flow_preview is called
+//   - Preview mode when flow_write succeeds
 // ---------------------------------------------------------------------------
 
 import { Text, visibleWidth } from "@mariozechner/pi-tui";
@@ -77,6 +77,16 @@ interface ParsedFlowEntry {
 
 // ---- Internal state --------------------------------------------------------
 
+/** Pending prompt shown inline in the widget */
+interface WidgetPrompt {
+  id: string;
+  type: "select" | "input";
+  question: string;
+  options?: string[];
+  selectedIndex: number;  // For select type: which option is highlighted
+  inputValue: string;     // For input type: current text
+}
+
 interface ArchitectState {
   mode: WidgetMode;
   previewSubMode: PreviewSubMode;
@@ -94,6 +104,10 @@ interface ArchitectState {
   flowWritten: boolean;
   previewApproval: string; // e.g., "Awaiting approval..."
   lastToolCall: { toolName: string; inputPreview: string } | null;
+  architectModel: string;       // Resolved model ID (e.g., "anthropic/claude-opus-4-6")
+  architectModelAlias: string;  // Raw model alias (e.g., "@planning")
+  /** Inline prompt (Save/Replan/Cancel, input questions) */
+  prompt: WidgetPrompt | null;
 }
 
 // ---- Flow content parser (uses canonical YAML parser) ---------------------
@@ -248,10 +262,15 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   setSelectedFlowIndex(index: number): void;
   getFlowCount(): number;
   getEventLog(): any[];
+  setModel(resolvedModel: string, modelAlias: string): void;
+  showPrompt(id: string, type: "select" | "input", question: string, options?: string[], signal?: AbortSignal): Promise<string | undefined>;
+  clearPrompt(): void;
+  handlePromptInput(data: string): boolean;
+  hasActivePrompt(): boolean;
   dispose(): void;
 } {
   const resolveAgentType = opts?.resolveAgentType;
-  // Stash flow contents for overlay — accumulates across flow_write/flow_preview calls
+  // Stash flow contents for overlay — accumulates across flow_write calls
   const flowContents: Array<{ name: string; content: string }> = [];
 
   // Catalog metadata — stored separately from state.agents to avoid cluttering the display
@@ -278,6 +297,9 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     flowWritten: false,
     previewApproval: "Awaiting approval...",
     lastToolCall: null,
+    architectModel: "",
+    architectModelAlias: "",
+    prompt: null,
   };
 
   let spinTimer: ReturnType<typeof setInterval> | null = null;
@@ -412,62 +434,6 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         break;
       }
 
-      case "flow_preview":
-        // Parse and accumulate flow content
-        if (input?.content) {
-          const parsed = parseFlowForWidget(input.content);
-          const flowName = parsed.name || "unnamed";
-
-          // Upsert into flowContents
-          const existingIdx = flowContents.findIndex((f) => f.name === flowName);
-          if (existingIdx >= 0) {
-            flowContents[existingIdx].content = input.content;
-          } else {
-            flowContents.push({ name: flowName, content: input.content });
-          }
-
-          // Upsert into parsedFlows
-          const parsedEntry: ParsedFlowEntry = {
-            name: flowName,
-            description: parsed.description,
-            maxConcurrent: parsed.maxConcurrent,
-            steps: parsed.steps,
-          };
-          const existingParsed = state.parsedFlows.findIndex((f) => f.name === flowName);
-          if (existingParsed >= 0) {
-            state.parsedFlows[existingParsed] = parsedEntry;
-          } else {
-            state.parsedFlows.push(parsedEntry);
-          }
-        }
-        // Parse preview content to update DAG if available
-        if (input?.content) {
-          const parsed = parseFlowForWidget(input.content);
-          if (parsed.name) state.flowName = parsed.name;
-          if (parsed.description) state.flowDescription = parsed.description;
-          state.dagSteps = parsed.steps;
-
-          // Register agents from flow steps — use agent name (not step id)
-          for (const step of parsed.steps) {
-            const agentName = step.agentName || step.id;
-            step.sourceType = catalogAgentTypes.get(agentName)
-              || state.agents.find((a) => a.name === agentName)?.type
-              || "built-in";
-            if (!state.agents.find((a) => a.name === agentName)) {
-              state.agents.push({
-                name: agentName,
-                type: step.sourceType as "built-in" | "local" | "custom",
-                status: "done",
-              });
-            }
-          }
-        }
-        // Transition to preview mode
-        state.mode = "preview";
-        state.previewSubMode = "preview";
-        state.previewApproval = "Awaiting approval\u2026";
-        break;
-
       default:
         // Non-architect tools (read, grep, glob, bash) → show researching status
         if (!state.statusLeft || state.statusLeft === "Researching\u2026") {
@@ -563,14 +529,6 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         break;
       }
 
-      case "flow_preview":
-        // Preview result includes user's choice — keep in preview mode
-        if (isError) {
-          state.previewApproval = "Preview failed";
-        }
-        // Keep spinner running — setReady() will stop it when the approval prompt is ready
-        break;
-
       default:
         // Non-architect tool completed — clear "Researching…" if it was set
         if (state.statusLeft === "Researching\u2026") {
@@ -622,8 +580,22 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           bord("\u2502") + headerText + " ".repeat(Math.max(0, w - headerVis)) + bord("\u2502"),
         );
 
-        // Empty line
-        lines.push(bord("\u2502") + " ".repeat(w) + bord("\u2502"));
+        // Model info line (or empty line if no model yet)
+        if (state.architectModel) {
+          const displayModel = state.architectModel.split("/").pop() ?? state.architectModel;
+          const hasAlias = state.architectModelAlias.startsWith("@");
+          const modelStr = hasAlias
+            ? ` ${theme.fg("dim", displayModel)}  ${theme.fg("muted", state.architectModelAlias)}`
+            : ` ${theme.fg("dim", displayModel)}`;
+          const modelVis = hasAlias
+            ? 1 + displayModel.length + 2 + state.architectModelAlias.length
+            : 1 + displayModel.length;
+          lines.push(
+            bord("\u2502") + modelStr + " ".repeat(Math.max(0, w - modelVis)) + bord("\u2502"),
+          );
+        } else {
+          lines.push(bord("\u2502") + " ".repeat(w) + bord("\u2502"));
+        }
 
         // -- Agents section ---------------------------------------------------
         if (state.agents.length > 0) {
@@ -825,8 +797,36 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           }
         }
 
-        const hintParts = ["Ctrl+X stop", "Ctrl+O inspect"];
-        if (flows.length > 1) hintParts[1] = "Ctrl+O inspect flows";
+        // -- Inline prompt (Save/Replan/Cancel or input) -----------------------
+        if (state.prompt) {
+          separators.push(content.length - 1);
+          content.push(theme.fg("accent", ` ${state.prompt.question}`));
+
+          if (state.prompt.type === "select" && state.prompt.options) {
+            for (let oi = 0; oi < state.prompt.options.length; oi++) {
+              const opt = state.prompt.options[oi];
+              const selected = oi === state.prompt.selectedIndex;
+              const marker = selected ? theme.fg("accent", ">") : " ";
+              const label = selected ? theme.fg("accent", opt) : theme.fg("muted", opt);
+              content.push(`   ${marker} ${label}`);
+            }
+          } else if (state.prompt.type === "input") {
+            const cursor = theme.fg("accent", "\u2588");
+            content.push(`   ${theme.fg("muted", ">")} ${state.prompt.inputValue}${cursor}`);
+          }
+        }
+
+        const hintParts: string[] = [];
+        if (state.prompt) {
+          if (state.prompt.type === "select") {
+            hintParts.push("\u2191\u2193 select", "Enter confirm", "1-9 quick select");
+          } else {
+            hintParts.push("Enter submit", "Esc cancel");
+          }
+        } else {
+          hintParts.push("Ctrl+X stop", "Ctrl+O inspect");
+          if (flows.length > 1) hintParts[1] = "Ctrl+O inspect flows";
+        }
 
         const boxLines = renderBox({
           width,
@@ -929,5 +929,158 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     return eventLog;
   }
 
-  return { factory, setUpdateCallback, onToolCall, onToolResult, setReady, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getFlowContents, setPreviewSubMode, getPreviewSubMode, getSelectedFlowIndex, setSelectedFlowIndex, getFlowCount, getEventLog, dispose };
+  function setModel(resolvedModel: string, modelAlias: string): void {
+    state.architectModel = resolvedModel;
+    state.architectModelAlias = modelAlias;
+  }
+
+  // -- Inline prompt support ------------------------------------------------
+
+  /** Callback invoked when the user answers the prompt in the widget */
+  let promptResolveFn: ((answer: string | undefined) => void) | null = null;
+
+  /**
+   * Show an inline prompt in the widget (replaces ctx.ui.select/input).
+   * Returns a promise that resolves with the answer, or undefined if dismissed.
+   */
+  function showPrompt(
+    id: string,
+    type: "select" | "input",
+    question: string,
+    options?: string[],
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
+    state.prompt = {
+      id,
+      type,
+      question,
+      options,
+      selectedIndex: 0,
+      inputValue: "",
+    };
+    invalidateFn?.();
+    onUpdate?.();
+
+    return new Promise<string | undefined>((resolve) => {
+      promptResolveFn = resolve;
+
+      if (signal) {
+        const onAbort = () => {
+          if (state.prompt?.id === id) {
+            state.prompt = null;
+            promptResolveFn = null;
+            invalidateFn?.();
+            onUpdate?.();
+          }
+          resolve(undefined);
+        };
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
+  }
+
+  /** Clear the prompt (e.g., when answered from dashboard) */
+  function clearPrompt(): void {
+    state.prompt = null;
+    if (promptResolveFn) {
+      promptResolveFn(undefined);
+      promptResolveFn = null;
+    }
+    invalidateFn?.();
+    onUpdate?.();
+  }
+
+  /** Handle keyboard input for the active prompt. Returns true if consumed. */
+  function handlePromptInput(data: string): boolean {
+    if (!state.prompt) return false;
+
+    if (state.prompt.type === "select" && state.prompt.options) {
+      const opts = state.prompt.options;
+      if (data === "\x1B[A" || data === "k") { // Up arrow or k
+        state.prompt.selectedIndex = Math.max(0, state.prompt.selectedIndex - 1);
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      if (data === "\x1B[B" || data === "j") { // Down arrow or j
+        state.prompt.selectedIndex = Math.min(opts.length - 1, state.prompt.selectedIndex + 1);
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      if (data === "\r" || data === "\n") { // Enter
+        const answer = opts[state.prompt.selectedIndex];
+        state.prompt = null;
+        if (promptResolveFn) {
+          promptResolveFn(answer);
+          promptResolveFn = null;
+        }
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      // Number keys for quick selection
+      const num = parseInt(data, 10);
+      if (num >= 1 && num <= opts.length) {
+        const answer = opts[num - 1];
+        state.prompt = null;
+        if (promptResolveFn) {
+          promptResolveFn(answer);
+          promptResolveFn = null;
+        }
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      return true; // Consume all input while select prompt is active
+    }
+
+    if (state.prompt.type === "input") {
+      if (data === "\r" || data === "\n") { // Enter — submit
+        const answer = state.prompt.inputValue;
+        state.prompt = null;
+        if (promptResolveFn) {
+          promptResolveFn(answer);
+          promptResolveFn = null;
+        }
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      if (data === "\x1B" || data === "\x03") { // Escape or Ctrl+C — cancel
+        state.prompt = null;
+        if (promptResolveFn) {
+          promptResolveFn(undefined);
+          promptResolveFn = null;
+        }
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      if (data === "\x7F" || data === "\b") { // Backspace
+        state.prompt.inputValue = state.prompt.inputValue.slice(0, -1);
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      // Regular character input
+      if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        state.prompt.inputValue += data;
+        invalidateFn?.();
+        onUpdate?.();
+        return true;
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  /** Check if a prompt is active */
+  function hasActivePrompt(): boolean {
+    return state.prompt !== null;
+  }
+
+  return { factory, setUpdateCallback, onToolCall, onToolResult, setReady, onAssistantText, onThinkingText, getFlowContent, hasFlowContent, getFlowContents, setPreviewSubMode, getPreviewSubMode, getSelectedFlowIndex, setSelectedFlowIndex, getFlowCount, getEventLog, setModel, showPrompt, clearPrompt, handlePromptInput, hasActivePrompt, dispose };
 }

@@ -24,7 +24,7 @@ export interface Diagnostic {
 // `finish` is auto-injected by the guard and must NOT be declared.
 // `ask_user` and `subagent` are main-session-only or guard-blocked —
 // they must NOT be declared in agent frontmatter.
-// Extension tools (agent_catalog, agent_write, flow_write, flow_preview)
+// Extension tools (agent_catalog, agent_write, flow_write)
 // are available to any agent that declares them in its tools: field.
 const BASE_TOOLS = new Set([
   "read",

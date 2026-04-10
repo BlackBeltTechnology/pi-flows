@@ -4,8 +4,7 @@ import type { DetailEntry } from "../flow-dashboard/agent-dashboard.js";
 import type { AgentCard } from "../flow-dashboard/agent-card.js";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
-import { getModelRole as getModelRoleFromProvider } from "../role-manager.js";
+import { writeFileSync, mkdirSync } from "node:fs";
 
 export type SummaryMode = "summary" | "navigate";
 
@@ -28,15 +27,6 @@ interface SummaryState {
   flowResult: FlowResult;
   summaryBoxHeight: number;
 }
-
-// -- System prompt for @compact LLM -------------------------------------------
-const SYSTEM_PROMPT = `You are a concise flow execution summarizer. Given per-agent summaries and artifacts from a completed flow, produce a brief digest.
-
-Rules:
-- Output one line per agent/domain, each starting with "•"
-- Each line: "• <domain>: <key insight or outcome>" (max 80 chars)
-- Focus on what was produced, decided, or discovered — not process details
-- No preamble, no closing. Just the bullet lines.`;
 
 // -- Duration formatting ------------------------------------------------------
 function formatDuration(ms: number): string {
@@ -67,19 +57,6 @@ export function computeStats(fr: FlowResult): { agentCount: number; duration: st
   };
 }
 
-// -- Build user message for LLM from FlowResult ------------------------------
-function buildUserMessage(fr: FlowResult): string {
-  const lines: string[] = [`Flow: ${fr.flowName}`, ""];
-  for (const [name, r] of Object.entries(fr.results)) {
-    lines.push(`## ${name} (${r.status})`);
-    if (r.summary) lines.push(`Summary: ${r.summary}`);
-    if (r.artifacts) lines.push(`Artifacts: ${r.artifacts}`);
-    if (r.files) lines.push(`Files: ${r.files}`);
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-
 // -- Next-step resolution via workflow registry -------------------------------
 async function resolveNextStep(flowName: string, pkgRoot: string): Promise<string | null> {
   try {
@@ -96,13 +73,6 @@ async function resolveNextStep(flowName: string, pkgRoot: string): Promise<strin
   }
 }
 
-// -- Helpers: get modelRegistry via event (no ctx dependency) -----------------
-function getModelRegistry(pi: ExtensionAPI): any {
-  const spawnCtx: any = {};
-  pi.events.emit("flow:get-spawn-context", spawnCtx);
-  return spawnCtx.modelRegistry ?? null;
-}
-
 // -- Extension entry point ----------------------------------------------------
 export function activate(pi: ExtensionAPI) {
   // Resolve package root from import.meta.url
@@ -117,43 +87,7 @@ export function activate(pi: ExtensionAPI) {
     const stats = computeStats(fr);
     const nextStep = await resolveNextStep(fr.flowName, pkgRoot);
 
-    // Notify TUI that summarization is starting (TUI renders spinner if present)
-    pi.events.emit("flow:summary-started", { flowName: fr.flowName });
-
-    // -- Phase 1: Call @compact LLM (or skip) ---------------------------------
-    let insightLines: string[] = [];
-
-    try {
-      const modelId = getModelRoleFromProvider("compact");
-      const modelRegistry = getModelRegistry(pi);
-      if (modelId && modelRegistry) {
-        const [provider, ...modelParts] = modelId.split("/");
-        const model = modelRegistry.find(provider, modelParts.join("/"));
-        if (model) {
-          const auth = await modelRegistry.getApiKeyAndHeaders(model);
-          if (auth.ok) {
-            const { completeSimple } = await import("@mariozechner/pi-ai");
-            const response = await completeSimple(model, {
-              systemPrompt: SYSTEM_PROMPT,
-              messages: [{ role: "user" as const, content: [{ type: "text" as const, text: buildUserMessage(fr) }], timestamp: Date.now() }],
-            }, { apiKey: auth.apiKey, headers: auth.headers });
-
-            // Extract text from response
-            const text = response.content
-              .filter((c: any) => c.type === "text")
-              .map((c: any) => c.text)
-              .join("\n");
-            if (text) {
-              insightLines = text.split("\n").filter(Boolean);
-            }
-          }
-        }
-      }
-    } catch {
-      // Graceful fallback: no LLM insight lines
-    }
-
-    // -- Phase 2: Persist summary to disk -------------------------------------
+    // -- Phase 1: Persist summary to disk (using per-agent finish summaries) --
     try {
       const resultsDir = join(process.cwd(), ".pi", "flows", "results");
       mkdirSync(resultsDir, { recursive: true });
@@ -161,29 +95,20 @@ export function activate(pi: ExtensionAPI) {
       const summaryPath = join(resultsDir, `${fr.flowName}.md`);
       const jsonPath = join(resultsDir, `${fr.flowName}.json`);
 
-      // Read existing file before overwriting (acknowledge any manual annotations)
-      if (existsSync(summaryPath)) {
-        try { readFileSync(summaryPath, "utf-8"); } catch { /* ignore */ }
-      }
-
-      // Build markdown summary
+      // Build markdown summary from per-agent finish data
       const summaryMdLines: string[] = [];
       summaryMdLines.push(`## Flow: ${fr.flowName}`);
       summaryMdLines.push(`Duration: ${stats.duration} | Agents: ${stats.agentCount} | Files: ${stats.fileCount}`);
       summaryMdLines.push("");
       summaryMdLines.push("### Results");
-      if (insightLines.length > 0) {
-        for (const line of insightLines) {
-          summaryMdLines.push(line);
-        }
-      } else {
-        for (const agent of stats.perAgent) {
-          const icon = agent.status === "complete" ? "✓"
-            : agent.status === "skipped" ? "✓"
-            : (agent.status === "blocked" || agent.status === "error") ? "⚠" : "✗";
-          const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
-          summaryMdLines.push(`${icon} ${agent.name}${detail}`);
-        }
+      for (const [name, r] of Object.entries(fr.results)) {
+        const icon = r.status === "complete" ? "✓"
+          : r.status === "skipped" ? "✓"
+          : (r.status === "blocked" || r.status === "error") ? "⚠" : "✗";
+        const fileCount = r.files ? r.files.split(", ").filter(Boolean).length : 0;
+        const detail = fileCount > 0 ? ` (${fileCount} files)` : "";
+        const summary = r.summary ? `: ${r.summary}` : "";
+        summaryMdLines.push(`${icon} ${name}${detail}${summary}`);
       }
       summaryMdLines.push("");
       summaryMdLines.push("### Files Modified");
@@ -199,7 +124,7 @@ export function activate(pi: ExtensionAPI) {
       // Non-critical: don't break the summary if disk write fails
     }
 
-    // -- Phase 3: Set summary state and emit ready event ----------------------
+    // -- Phase 2: Set summary state and emit ready event ----------------------
     const hasIssue = stats.perAgent.some(a => a.status === "error" || a.status === "blocked");
     const agentNames = Object.keys(fr.results);
 
@@ -211,16 +136,20 @@ export function activate(pi: ExtensionAPI) {
       summaryBoxHeight: 0,
     });
 
-    // Emit summary-ready with all computed data — TUI and dashboard listen
+    // Emit summary-ready with computed data — TUI and dashboard listen
     pi.events.emit("flow:summary-ready", {
       flowName: fr.flowName,
       flowResult: fr,
       stats,
-      insightLines,
       hasIssue,
       nextStep,
       agentNames,
     });
+  });
+
+  // Clear summary state when dismissed from either TUI or dashboard
+  pi.events.on("flow:summary-dismissed", () => {
+    setSummaryState(null);
   });
 
   // Receive summary context from flow-engine (tool history + preserved cards)
