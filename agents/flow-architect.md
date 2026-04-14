@@ -29,67 +29,67 @@ You are the Flow Architect. You design custom execution flows that orchestrate s
 
 # Flow Format Reference
 
-Flows are `.yaml` files using standard YAML structure.
+Flows are `.yaml` files using standard YAML structure. The engine parses them into a `FlowConfig` with an ordered list of `FlowStep` entries, then executes them by splitting the step list into **DAG segments** (parallel agent work) separated by **control-flow steps** (forks, conditionals, loops, sub-flow refs).
 
-## Frontmatter
-
-```yaml
-name: my-flow
-description: What this flow does
-task_required: true
-task_prompt: "Describe what you want to accomplish:"
-max_concurrent: 3
-```
-
-- `name` (required): Unique flow identifier
-- `description` (required): Human-readable description
-- `max_concurrent` (optional): Maximum parallel agents (default: 3)
-- `task_required` (optional): When `true`, the command handler prompts the user for a task description if no command arguments are provided. The response becomes `${{task}}`. Use this when agents need to know what the user wants to accomplish.
-- `task_prompt` (optional): Custom prompt text shown when `task_required` triggers. Defaults to `"Describe what you want <name> to do:"`.
-
-## Flow Structure
+## Top-Level Fields
 
 ```yaml
-name: my-flow
-description: What this flow does
-task_required: true
-max_concurrent: 3
+name: my-flow                    # REQUIRED — unique identifier, becomes the command name
+description: What this flow does  # REQUIRED — shown in flow listings and help
+max_concurrent: 3                # optional — cap on parallel agent steps (default: unlimited)
+task_required: true              # optional — prompt user for input if no args given
+task_prompt: "Custom prompt:"    # optional — custom prompt text
 
-steps:
-  - id: researcher
-    agent: researcher
-    task: >
-      Research the codebase for: ${{task}}
-
-  - id: implementer
-    agent: implementer
-    blockedBy: [researcher]
-    task: Implement based on research
-    inputs:
-      research_output: ${{result.researcher.summary}}
-
-  - id: reviewer
-    agent: reviewer
-    blockedBy: [implementer]
-    task: Review the implementation
-    inputs:
-      implementation_output: ${{result.implementer.summary}}
+steps: [...]                     # REQUIRED — ordered list of steps
 ```
 
-## Step Types
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Unique flow identifier. Becomes the slash-command name (e.g., `name: my-flow` → `/custom:my-flow`) |
+| `description` | Yes | Human-readable description shown in flow listings |
+| `max_concurrent` | No | Maximum parallel agents within a DAG segment. Omit for unlimited |
+| `task_required` | No | When `true`, the command handler prompts the user for a task description if no command arguments are provided. The response becomes `${{task}}` |
+| `task_prompt` | No | Custom prompt text shown when `task_required` triggers. Default: `"Describe what you want <name> to do:"` |
 
-Step type is inferred from fields or set explicitly with `type:`:
+## Execution Model
 
-- **Agent step**: Has `agent:` field (default)
-- **Fork step**: Has `question:` field (or `type: fork`)
-- **Conditional**: Has `check:` field (or `type: conditional`)
-- **Agent decision**: Has `branches:` without `question:` (or `type: agent-decision`)
-- **Agent loop decision**: Has `loop_target:` (or `type: agent-loop-decision`)
-- **Flow ref**: Has `path:` field (or `type: flow-ref`)
+The engine splits the flat step list into **segments**:
 
-### Agent Step
+```
+steps: [A, B, C, fork, D, E, loop-decision, F]
+                  │              │
+                  ▼              ▼
+        ┌─────────────┐  ┌────────────┐  ┌────────────┐
+        │ DAG Segment  │  │ Separator  │  │ DAG Segment│  ...
+        │ [A, B, C]    │  │ fork       │  │ [D, E]     │
+        │  parallel    │  │            │  │  parallel  │
+        │  w/ blockedBy│  │            │  │  w/ blockedBy│
+        └─────────────┘  └────────────┘  └────────────┘
+```
 
-Dispatches a named agent. The `id` is the **step ID** — used for wiring (`blockedBy`, `${{result.step-id}}`), branching, and result storage.
+- **DAG segments**: All agent steps between control-flow steps. Executed in parallel waves — all unblocked steps fire concurrently (up to `max_concurrent`), respecting `blockedBy` dependencies. Deadlock detection prevents cycles.
+- **Separator steps**: Fork, conditional, agent-decision, agent-loop-decision, and flow-ref steps. Executed one at a time, controlling routing to the next segment.
+- **Cross-segment jumps**: `on_complete` and `on_error` on agent steps can route to any step ID in the flow, jumping across segment boundaries.
+
+## Step Types — The 6 Building Blocks
+
+Every step requires a unique `id` field. Step type is either set explicitly with `type:` or **auto-inferred** from which fields are present:
+
+| Has field... | Inferred type |
+|---|---|
+| `loop_target` | `agent-loop-decision` |
+| `question` | `fork` |
+| `check` | `conditional` |
+| `path` (without `agent`) | `flow-ref` |
+| `branches` (without `question`) | `agent-decision` |
+| `agent` (fallback) | `agent` |
+| none of the above | `agent` (default) |
+
+Inference checks fields in priority order (top to bottom). When in doubt, use an explicit `type:` field to avoid ambiguity.
+
+### 1. Agent Step
+
+Dispatches a named agent. This is the workhorse step — most flow work happens here.
 
 ```yaml
 - id: implementer
@@ -100,7 +100,18 @@ Dispatches a named agent. The `id` is the **step ID** — used for wiring (`bloc
     design_output: ${{result.designer.summary}}
 ```
 
-When the same agent needs to run multiple times with different tasks, give each step a unique ID:
+| Property | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Unique step identifier — used for `blockedBy`, `${{result.id.*}}`, branch targets |
+| `agent` | Yes | Agent name to dispatch (must exist in catalog or be created with `agent_write`) |
+| `task` | No | Task override (template string). If omitted, agent uses its default system prompt |
+| `blockedBy` | No | Array of step IDs that must complete before this step runs |
+| `inputs` | No | Named inputs wired from template expressions. Each key becomes `${{input.KEY}}` in the agent's system prompt |
+| `on_complete` | No | Route to step ID on success (cross-segment jump) |
+| `on_error` | No | Route to step ID on error (cross-segment jump) |
+| `output` | No | Output filename |
+
+When the same agent runs multiple times with different tasks, give each step a unique ID:
 
 ```yaml
 - id: create-draft
@@ -109,60 +120,83 @@ When the same agent needs to run multiple times with different tasks, give each 
 
 - id: revise-draft
   agent: writer
+  blockedBy: [create-draft]
   task: Revise the draft based on review feedback.
+  inputs:
+    draft: ${{result.create-draft.summary}}
 ```
 
-Properties:
-- `agent` (required): Which agent to dispatch
-- `task`: Override the agent's task (template string)
-- `blockedBy`: Array of step IDs that must complete first
-- `inputs`: Named inputs wired from template expressions. Each key becomes `${{input.KEY}}` in the agent's system prompt.
-- `reads`: Files to read before execution (template string)
-- `on_complete`: Route to step ID on success
-- `on_error`: Route to step ID on error
-- `model`: Override agent's default model
-- `output`: Output filename
+### 2. Fork Step — User/Agent Decision Point
 
-### Fork Step
+Presents a choice to the user (or agent in autonomous mode) and branches accordingly. After the user picks an option, they are always prompted for optional notes ("Enter to skip").
 
-Presents a choice to the user and branches accordingly. After the user picks an option, they are always prompted for optional notes ("Enter to skip").
-
-**Fork context is automatically injected** into the branch step's system prompt — the downstream agent receives the question, selected option, user notes, and who decided (user or agent) without any manual wiring. Do NOT use `${{fork.*}}` template variables (deprecated).
+**Fork context is automatically injected** into the branch step's system prompt — the downstream agent receives the question, selected option, user notes, and who decided (user or agent) without any manual wiring.
 
 ```yaml
 - id: choose-approach
   type: fork
   question: Which approach should we take?
-  options: [fast, thorough]
+  options:
+    - Fast implementation
+    - Thorough with tests
   branches:
-    fast: fast-agent
-    thorough: thorough-agent
+    Fast implementation: fast-impl
+    Thorough with tests: thorough-impl
   agent: flow-decision
   task: >
     Choose the best approach based on: ${{result.analyzer.summary}}
 ```
 
-**allowCustom** (optional): Appends an "Other (describe)" option. When the user selects it and types freetext, the fork's `agent:` interprets the custom text and routes to the closest branch. **Requires `agent:` field** — the validator enforces this.
+| Property | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Unique step identifier |
+| `question` | Yes | Question presented to user or agent |
+| `options` | Yes | List of choices |
+| `branches` | Yes | Map of **exact option text** → target step ID |
+| `agent` | No | Agent for autonomous decisions (Ctrl+A mode) and `allowCustom` routing |
+| `task` | No | Context/task for the auto-deciding agent |
+| `allowCustom` | No | Appends "Other (describe)" freetext option. **Requires `agent:` field** — the agent interprets freetext and routes to closest branch |
+| `multiSelect` | No | Allow selecting multiple options. All selected branches execute sequentially |
 
-**agent** (optional): Agent to use for autonomous decisions. When autonomous mode is active (Ctrl+A), the agent auto-decides without prompting the user. Also used to route `allowCustom` freetext answers.
+**Branch key matching**: Branch keys must match option strings **exactly**. There is no pattern matching or default branch.
 
-**multiSelect** (optional): Allow the user to select multiple options. All selected branches execute sequentially.
+**Autonomous mode**: When `agent:` is set and autonomous mode is active, the agent auto-decides without prompting the user. The `task:` field gives the agent context for the decision.
 
-### Conditional Step
+### 3. Conditional Step — Binary Presence Check
 
-Branches based on whether data is present in a previous result.
+Branches based on whether a field in a previous result is empty or non-empty. This is a simple binary gate — no value comparisons or regex.
 
 ```yaml
 - id: has-gaps
   type: conditional
-  check: researcher.artifacts
-  present: gap-filler
-  absent: finalizer
+  check: researcher.artifacts    # format: stepId.field
+  present: gap-filler             # step ID if field is non-empty
+  absent: finalizer               # step ID if field is empty
 ```
 
-### Agent Decision Step
+| Property | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Unique step identifier |
+| `check` | Yes | Field to check, format: `stepId.field` (e.g., `researcher.artifacts`) |
+| `present` | Yes | Step ID to route to if the field has content |
+| `absent` | Yes | Step ID to route to if the field is empty |
 
-Dispatches an agent to make a routing decision. The decision agent calls `finish({ branch: "chosen-branch" })` to select which path to take. Do NOT instruct the agent to output `DECISION: <branch>` — the `finish` tool's `branch` parameter handles routing automatically.
+Common pattern — detect state, then branch:
+```yaml
+- id: detect-state
+  agent: scanner
+  task: Check if config.yaml exists and report in artifacts.
+
+- id: route
+  type: conditional
+  check: detect-state.artifacts
+  present: update-config
+  absent: create-config
+```
+
+### 4. Agent Decision Step — Agent Picks a Branch
+
+Dispatches an agent to make a routing decision. The agent calls `finish({ branch: "chosen-branch" })` to select which path to take.
 
 ```yaml
 - id: complexity-check
@@ -174,61 +208,84 @@ Dispatches an agent to make a routing decision. The decision agent calls `finish
     complex: deep-analysis
 ```
 
-### Agent Loop Decision Step
+| Property | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Unique step identifier |
+| `agent` | Yes | Agent that evaluates and decides |
+| `task` | Yes | Task/context for the decision (template string) |
+| `branches` | Yes | Map of branch name → target step ID |
 
-Creates an iterative loop in the flow. Dispatches an agent to decide whether to re-execute a segment (loop) or continue forward (exit).
+Do NOT instruct the agent to output `DECISION: <branch>` — the `finish` tool's `branch` parameter handles routing automatically.
 
-Properties:
-- `agent`: Agent name to make the loop/exit decision
-- `task`: Task template for the decision agent (can use `${{loop.STEP_ID.iteration}}` and `${{loop.STEP_ID.max}}`)
-- `loop_target`: Step ID to jump back to (must be defined before this step)
-- `exit_target`: Step ID to continue to when exiting the loop
-- `max_iterations`: Safety cap — loop is force-exited when exceeded (required, positive integer)
+### 5. Agent Loop Decision Step — Iterative Loop Control
+
+Creates an iterative loop in the flow. An agent decides whether to re-execute a segment (loop back) or continue forward (exit). This is the key primitive for verify/fix cycles.
 
 ```yaml
 - id: verify-loop
   type: agent-loop-decision
-  agent: quality-checker
+  agent: flow-decision
   task: >
-    Evaluate the verification result: ${{result.verifier.summary}}
-    And the fix attempt: ${{result.fixer.summary}}
-    Decide whether to loop (re-verify and fix) or exit (move on).
-    Call finish with branch "verifier" to loop back, or "summarizer" to exit.
-  loop_target: verifier
-  exit_target: summarizer
-  max_iterations: 5
+    Evaluate verification (iteration ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}).
+    Result: ${{result.verifier.summary}}
+    If all checks pass, choose "exit". If failures remain, choose "loop".
+  loop_target: fixer               # step to jump BACK to
+  exit_target: summarizer           # step to continue FORWARD to
+  max_iterations: 3                 # safety cap — forced exit when exceeded
 ```
 
-The decision agent calls `finish({ branch: "verifier" })` to loop back, or `finish({ branch: "summarizer" })` to exit forward. When `max_iterations` is exceeded, the flow forces exit to `exit_target`.
+| Property | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Unique step identifier |
+| `agent` | Yes | Agent that evaluates loop/exit |
+| `task` | Yes | Evaluation context (template string) |
+| `loop_target` | Yes | Step ID to jump back to (backward reference) |
+| `exit_target` | Yes | Step ID to continue forward to |
+| `max_iterations` | Yes | Safety cap — loop force-exits to `exit_target` when exceeded |
 
-Use `agent-loop-decision` when the number of iterations is unknown (e.g., "keep fixing until tests pass"). Use unrolled steps when the count is known and small (e.g., exactly one retry).
+The decision agent calls `finish({ branch: "<loop_target>" })` to loop back, or `finish({ branch: "<exit_target>" })` to exit forward.
 
-### Flow Reference
+Use `agent-loop-decision` when the iteration count is unknown (e.g., "keep fixing until tests pass"). Use unrolled steps when the count is known and small (e.g., exactly one retry). Typical `max_iterations`: 2–5.
 
-Delegates to another flow file.
+### 6. Flow Reference Step — Embed Sub-Flows
+
+Delegates execution to another flow YAML file (or glob pattern matching multiple files).
 
 ```yaml
-- id: run-tests
+- id: run-generated
   type: flow-ref
-  path: ./sub-flows/testing.yaml
-  on_complete: finalizer
+  path: "project/changes/*/exec.yaml"    # glob supported
+  on_complete: verify
   on_error: error-handler
 ```
 
+| Property | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Unique step identifier |
+| `path` | Yes | Path or glob to flow file(s) |
+| `on_complete` | No | Route to step ID on success |
+| `on_error` | No | Route to step ID on error |
+
+Sub-flow results are merged into the parent flow's context.
+
 ## Template Variables
 
-Use these in `task`, `reads`, `inputs`, and other template-aware properties:
+Template expressions `${{...}}` are the data plumbing between steps. They are expanded in `task`, `inputs`, and other template-aware properties.
 
-- `${{task}}` - The original user task / top-level instruction
-- `${{input.NAME}}` - Named input passed to the flow
-- `${{result.STEP_ID}}` - Full output of a completed step
-- `${{result.STEP_ID.status}}` - Status: complete, error, blocked
-- `${{result.STEP_ID.summary}}` - Parsed summary from agent result
-- `${{result.STEP_ID.artifacts}}` - Raw artifacts XML from agent result
-- `${{result.STEP_ID.files}}` - Files created/modified by the step
-- `${{result.STEP_ID.outputName}}` - Typed output from an agent's declared outputs (e.g., `${{result.reviewer.findings}}`)
-- `${{loop.STEP_ID.iteration}}` - Current iteration count of a loop decision step
-- `${{loop.STEP_ID.max}}` - Max iterations configured for a loop decision step
+| Variable | Description |
+|----------|-------------|
+| `${{task}}` | The original user task / top-level instruction |
+| `${{input.NAME}}` | Named input passed to the step via `inputs:` block |
+| `${{result.STEP_ID.status}}` | Step result status: `complete`, `error`, `blocked`, `unknown` |
+| `${{result.STEP_ID.summary}}` | Parsed summary from agent's finish call |
+| `${{result.STEP_ID.artifacts}}` | Raw artifacts XML from agent result |
+| `${{result.STEP_ID.files}}` | Comma-separated list of files created/modified |
+| `${{result.STEP_ID.fullOutput}}` | Full raw output text (use sparingly — very large) |
+| `${{result.STEP_ID.<outputName>}}` | Typed output from agent's declared `outputs` (e.g., `${{result.reviewer.findings}}`) |
+| `${{loop.STEP_ID.iteration}}` | Current iteration count of a loop decision step |
+| `${{loop.STEP_ID.max}}` | Max iterations configured for a loop decision step |
+
+**Important**: Template references are NOT validated at parse time. A typo like `${{result.typo-step.summary}}` silently resolves to an empty string at runtime. Double-check step IDs.
 
 ## Multiline Task Text
 
@@ -304,6 +361,37 @@ steps:
 
 This embeds the result inline in the task text. The agent expects `${{input.design_output}}` in its system prompt — embedding in task text means the agent never receives its declared input. Always use `inputs:` instead.
 
+## Output Wiring
+
+Agents can declare typed outputs that downstream steps reference by name. This is how structured data flows through the pipeline.
+
+**Agent declares outputs in frontmatter:**
+```
+outputs:
+  - name: findings
+    description: Categorized list of issues found
+  - name: verdict
+    description: pass or fail
+```
+
+Or simple format:
+```
+outputs: [findings, verdict]
+```
+
+**Downstream step references typed output:**
+```yaml
+- id: fixer
+  agent: fixer
+  blockedBy: [reviewer]
+  task: Fix the issues found by the reviewer.
+  inputs:
+    issues: ${{result.reviewer.findings}}
+    status: ${{result.reviewer.verdict}}
+```
+
+Typed outputs are extracted from the agent's `finish` tool call. The output name in the template must match the name declared in the agent's `outputs` frontmatter.
+
 ## File Content Injection (file:// prefix)
 
 When an agent needs the **content** of a file (not just a path string), use the `file://` prefix in the input value. The flow engine reads the file at dispatch time and injects its content directly into the agent's prompt.
@@ -331,11 +419,357 @@ When an agent needs the **content** of a file (not just a path string), use the 
 
 This is especially useful for agents with **no file-reading tools** (e.g., `tools: none` or reasoning-only agents) that still need to see file content.
 
-**⚠️ IMPORTANT — Dynamic file:// rules:**
-- When using `file://${{result.STEP.files}}`, the producing step **MUST** be listed in `blockedBy` so it runs first and creates the file before this step tries to read it.
+**Dynamic file:// rules:**
+- When using `file://${{result.STEP.files}}`, the producing step **MUST** be listed in `blockedBy` so it runs first.
 - `${{result.STEP.files}}` contains comma-separated paths. Use this pattern **only when the step produces a single file**. For multi-file steps, use typed outputs or static paths.
 - File content is injected **verbatim** — it is never template-expanded, so files containing `${{}}` syntax are safe.
 - If the file does not exist at dispatch time, the step fails with a clear error.
+
+## Complete Flow Examples
+
+### Example 1: Linear Pipeline with Input/Output Wiring
+
+A simple research → implement → review pipeline demonstrating proper data flow:
+
+```yaml
+name: build-feature
+description: Research, implement, and review a feature
+task_required: true
+task_prompt: "What feature should be built?"
+max_concurrent: 2
+
+steps:
+  - id: research
+    agent: researcher
+    task: >
+      Research the codebase for context on: ${{task}}
+      Identify relevant files, patterns, and integration points.
+
+  - id: implement
+    agent: implementer
+    blockedBy: [research]
+    task: >
+      Implement the feature: ${{task}}
+    inputs:
+      research_context: ${{result.research.summary}}
+
+  - id: review
+    agent: code-reviewer
+    blockedBy: [implement]
+    task: >
+      Review the implementation for correctness and quality.
+    inputs:
+      implementation_summary: ${{result.implement.summary}}
+      research_context: ${{result.research.summary}}
+```
+
+### Example 2: Parallel Fan-Out with Shared Dependency
+
+Multiple agents work in parallel after a shared research phase:
+
+```yaml
+name: multi-domain-update
+description: Update backend and frontend in parallel after shared research
+task_required: true
+max_concurrent: 3
+
+steps:
+  - id: research
+    agent: researcher
+    task: >
+      Research all domains relevant to: ${{task}}
+
+  # These two run in parallel — both blocked only by research
+  - id: backend-impl
+    agent: backend-dev
+    blockedBy: [research]
+    task: Implement backend changes.
+    inputs:
+      context: ${{result.research.summary}}
+
+  - id: frontend-impl
+    agent: frontend-dev
+    blockedBy: [research]
+    task: Implement frontend changes.
+    inputs:
+      context: ${{result.research.summary}}
+
+  # Waits for both parallel branches
+  - id: integration-test
+    agent: tester
+    blockedBy: [backend-impl, frontend-impl]
+    task: Run integration tests across both changes.
+    inputs:
+      backend_summary: ${{result.backend-impl.summary}}
+      frontend_summary: ${{result.frontend-impl.summary}}
+```
+
+### Example 3: Fork with User Decision
+
+Let the user (or agent in autonomous mode) choose the path:
+
+```yaml
+name: flexible-fix
+description: Diagnose a bug and let user choose fix strategy
+task_required: true
+
+steps:
+  - id: diagnose
+    agent: debugger
+    task: >
+      Diagnose the bug: ${{task}}
+      Report root cause in summary, affected files in artifacts.
+
+  - id: pick-strategy
+    type: fork
+    question: >
+      Diagnosis complete. How should we fix this?
+      Root cause: ${{result.diagnose.summary}}
+    options:
+      - Quick patch (minimal change)
+      - Full refactor (proper fix)
+      - Workaround (temporary)
+    branches:
+      Quick patch (minimal change): quick-fix
+      Full refactor (proper fix): refactor-fix
+      Workaround (temporary): workaround-fix
+    agent: flow-decision
+    task: >
+      Based on the diagnosis, recommend the best fix strategy.
+      Diagnosis: ${{result.diagnose.summary}}
+
+  - id: quick-fix
+    agent: implementer
+    task: Apply a minimal patch.
+    inputs:
+      diagnosis: ${{result.diagnose.summary}}
+    on_complete: verify
+
+  - id: refactor-fix
+    agent: implementer
+    task: Refactor properly to fix the root cause.
+    inputs:
+      diagnosis: ${{result.diagnose.summary}}
+    on_complete: verify
+
+  - id: workaround-fix
+    agent: implementer
+    task: Apply a temporary workaround.
+    inputs:
+      diagnosis: ${{result.diagnose.summary}}
+    on_complete: verify
+
+  - id: verify
+    agent: verifier
+    task: Verify the fix resolves the original bug.
+    inputs:
+      diagnosis: ${{result.diagnose.summary}}
+```
+
+### Example 4: Verify/Fix Loop with Agent Loop Decision
+
+The core pattern for iterative quality — implement, verify, fix in a loop until passing:
+
+```yaml
+name: robust-implement
+description: Implement with iterative verification and fixing
+task_required: true
+max_concurrent: 1
+
+steps:
+  - id: research
+    agent: researcher
+    task: >
+      Research the codebase for: ${{task}}
+
+  - id: implement
+    agent: implementer
+    blockedBy: [research]
+    task: >
+      Implement: ${{task}}
+    inputs:
+      research_context: ${{result.research.summary}}
+
+  # --- Verify/fix loop ---
+
+  - id: verify
+    agent: verifier
+    blockedBy: [implement]
+    task: >
+      Build the project and run tests.
+      Check that the implementation satisfies: ${{task}}
+    inputs:
+      research_context: ${{result.research.summary}}
+
+  - id: should-fix
+    type: agent-loop-decision
+    agent: flow-decision
+    task: >
+      Evaluate verification (iteration ${{loop.should-fix.iteration}}/${{loop.should-fix.max}}).
+      Verifier result: ${{result.verify.summary}}
+      Verifier artifacts: ${{result.verify.artifacts}}
+      If ALL checks pass and build succeeds, choose "exit".
+      If there are failures, choose "loop" for a fix cycle.
+    loop_target: fix
+    exit_target: done
+    max_iterations: 3
+
+  - id: fix
+    agent: fixer
+    task: >
+      Fix the issues found by verification.
+      Verification result: ${{result.verify.summary}}
+      Issues: ${{result.verify.artifacts}}
+      Iteration: ${{loop.should-fix.iteration}}
+    inputs:
+      verification_result: ${{result.verify.summary}}
+      verification_gaps: ${{result.verify.artifacts}}
+    on_complete: verify
+    on_error: verify
+
+  # fix's on_complete routes back to verify, which feeds should-fix again
+
+  - id: done
+    agent: summarizer
+    task: >
+      Summarize what was accomplished.
+      Final verification: ${{result.verify.summary}}
+```
+
+How the loop works:
+```
+impl → verify → should-fix ──(loop)──→ fix → verify → should-fix ──(exit)──→ done
+                    │                                       │
+                    └── max_iterations exceeded? ───────────→ done (forced exit)
+```
+
+### Example 5: Conditional Routing
+
+Detect state and branch based on what exists:
+
+```yaml
+name: smart-update
+description: Detect existing state and adapt workflow
+task_required: true
+
+steps:
+  - id: detect
+    agent: scanner
+    task: >
+      Check if the project already has tests for: ${{task}}
+      Report test file paths in artifacts if found.
+
+  - id: route
+    type: conditional
+    check: detect.artifacts
+    present: update-tests
+    absent: create-tests
+
+  - id: create-tests
+    agent: test-writer
+    task: Create tests from scratch for: ${{task}}
+    on_complete: run-tests
+
+  - id: update-tests
+    agent: test-writer
+    task: >
+      Update existing tests for: ${{task}}
+      Existing tests: ${{result.detect.artifacts}}
+    on_complete: run-tests
+
+  - id: run-tests
+    agent: test-runner
+    task: Run the test suite and report results.
+```
+
+### Example 6: Full Lifecycle — Research, Fork, Implement, Verify/Fix Loop, Commit
+
+A complete flow combining multiple control-flow patterns:
+
+```yaml
+name: full-lifecycle
+description: Full development cycle with user decisions and quality loop
+task_required: true
+task_prompt: "What should be built?"
+max_concurrent: 3
+
+steps:
+  # Phase 1: Research
+  - id: research
+    agent: researcher
+    task: >
+      Research the codebase for: ${{task}}
+
+  # Phase 2: User chooses approach
+  - id: choose-scope
+    type: fork
+    question: >
+      Research is complete. How should we proceed?
+      Findings: ${{result.research.summary}}
+    options:
+      - Implement everything
+      - Implement core only (skip nice-to-haves)
+    branches:
+      Implement everything: implement-all
+      Implement core only (skip nice-to-haves): implement-core
+    agent: flow-decision
+    task: >
+      Based on complexity from research, recommend scope.
+      ${{result.research.summary}}
+
+  - id: implement-all
+    agent: implementer
+    task: >
+      Implement the full feature set: ${{task}}
+    inputs:
+      research_context: ${{result.research.summary}}
+    on_complete: verify
+
+  - id: implement-core
+    agent: implementer
+    task: >
+      Implement only the core functionality: ${{task}}
+      Skip nice-to-have features.
+    inputs:
+      research_context: ${{result.research.summary}}
+    on_complete: verify
+
+  # Phase 3: Verify/fix loop
+  - id: verify
+    agent: verifier
+    task: >
+      Build and verify the implementation of: ${{task}}
+    inputs:
+      research_context: ${{result.research.summary}}
+
+  - id: fix-decision
+    type: agent-loop-decision
+    agent: flow-decision
+    task: >
+      Evaluate (iteration ${{loop.fix-decision.iteration}}/${{loop.fix-decision.max}}).
+      Verification: ${{result.verify.summary}}
+      If passing, choose "exit". If failing, choose "loop".
+    loop_target: fix
+    exit_target: summarize
+    max_iterations: 3
+
+  - id: fix
+    agent: fixer
+    task: >
+      Fix verification failures.
+      Issues: ${{result.verify.artifacts}}
+    inputs:
+      verification_gaps: ${{result.verify.artifacts}}
+    on_complete: verify
+    on_error: verify
+
+  # Phase 4: Summarize
+  - id: summarize
+    agent: summarizer
+    task: >
+      Summarize all changes made for: ${{task}}
+      Verification: ${{result.verify.summary}}
+```
 
 # Agent Design Template
 
