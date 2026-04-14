@@ -27,7 +27,6 @@ import { FlowManager } from "./flow-manager.js";
 import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
 import { emitPromptAndAwait } from "./flow-prompt.js";
 import { TuiFlowObserver, EventEmitObserver, setupFlowTui, getIsOverlayOpen } from "./flow-tui.js";
-import { registerTuiPromptAdapter } from "./tui-prompt-adapter.js";
 import { registerArchitectUIAdapter } from "./architect-ui-adapter.js";
 import { listenForPromptBus } from "./prompt-bus-access.js";
 
@@ -222,42 +221,14 @@ export function activate(pi: ExtensionAPI) {
   // activate would fire before the listener exists.
   {
     let architectAdapterRegistered = false;
-    let tuiAdapterRegistered = false;
-    let pendingOriginals: any = null;
 
-    // Listen early — before session_start — to capture originals from bridge
-    pi.events?.on("prompt:ctx-originals", (originals: any) => {
-      pendingOriginals = originals;
-    });
-
-    pi.on("session_start", (_ev: any, ctx: any) => {
+    pi.on("session_start", (_ev: any, _ctx: any) => {
       // Architect adapter: claims architect-* prompts with widget-bar component.
       // Registered for ALL sessions (including headless) — it doesn't need ctx.ui,
       // it just tells the dashboard how to render the prompt.
       if (!architectAdapterRegistered) {
         architectAdapterRegistered = true;
         registerArchitectUIAdapter(pi);
-      }
-
-      // TUI adapter: presents prompts in the terminal — only when TUI is available
-      if (ctx.hasUI && !tuiAdapterRegistered) {
-        tuiAdapterRegistered = true;
-
-        const adapter = registerTuiPromptAdapter(pi);
-        // If originals were already captured before registration, inject them now
-        if (pendingOriginals) {
-          adapter.captureOriginals(pendingOriginals);
-          pendingOriginals = null;
-        }
-
-        // Listen for architect widget prompt handler injection
-        pi.events?.on("prompt:set-architect-handler", (data: any) => {
-          if (typeof data?.handler === "function") {
-            adapter.setArchitectHandler(data.handler);
-          } else if (data?.handler === null) {
-            adapter.setArchitectHandler(null as any);
-          }
-        });
       }
     });
   }

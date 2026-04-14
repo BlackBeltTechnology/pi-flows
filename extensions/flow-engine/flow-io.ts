@@ -71,10 +71,10 @@ export interface FlowObserver {
   onFlowStarted?(flowName: string, flow: FlowConfig, task: string): void;
   onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string): void;
   onAgentComplete?(agentName: string, stepId: string, result: AgentResult): void;
-  onToolCall?(agentName: string, toolName: string, input: any): void;
-  onToolResult?(agentName: string, toolName: string, output: any, isError: boolean): void;
-  onAssistantText?(agentName: string, text: string): void;
-  onThinkingText?(agentName: string, text: string): void;
+  onToolCall?(agentName: string, stepId: string, toolName: string, input: any): void;
+  onToolResult?(agentName: string, stepId: string, toolName: string, output: any, isError: boolean): void;
+  onAssistantText?(agentName: string, stepId: string, text: string): void;
+  onThinkingText?(agentName: string, stepId: string, text: string): void;
   onLoopIteration?(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void;
   onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void;
   onFlowComplete?(flowName: string, result: FlowResult): void;

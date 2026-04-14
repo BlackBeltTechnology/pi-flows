@@ -108,6 +108,8 @@ interface ArchitectState {
   architectModelAlias: string;  // Raw model alias (e.g., "@planning")
   /** Inline prompt (Save/Replan/Cancel, input questions) */
   prompt: WidgetPrompt | null;
+  /** Validation diagnostics from flow_write failure */
+  validationErrors: Array<{ line: number; severity: string; message: string }>;
 }
 
 // ---- Flow content parser (uses canonical YAML parser) ---------------------
@@ -300,6 +302,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     architectModel: "",
     architectModelAlias: "",
     prompt: null,
+    validationErrors: [],
   };
 
   let spinTimer: ReturnType<typeof setInterval> | null = null;
@@ -380,6 +383,7 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
 
       case "flow_write": {
         state.statusRight = "Writing flow\u2026";
+        state.validationErrors = []; // Clear previous errors
         // Store the flow path
         if (input?.path) state.flowPath = input.path;
         // Parse and accumulate flow content
@@ -517,9 +521,28 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
       case "flow_write": {
         if (isError) {
           state.statusRight = "Write failed";
+          // Parse validation diagnostics from the output
+          try {
+            const parsed = typeof output === "string" ? JSON.parse(output) : output;
+            if (parsed?.diagnostics && Array.isArray(parsed.diagnostics)) {
+              state.validationErrors = parsed.diagnostics;
+            }
+          } catch { /* non-JSON output — no diagnostics */ }
         } else {
           state.flowWritten = true;
+          state.validationErrors = [];
           state.statusRight = "\u2713 Written";
+          // Check for warnings even on success
+          try {
+            const parsed = typeof output === "string" ? JSON.parse(output) : output;
+            if (parsed?.diagnostics && Array.isArray(parsed.diagnostics)) {
+              const warnings = parsed.diagnostics.filter((d: any) => d.severity === "warning");
+              if (warnings.length > 0) {
+                state.validationErrors = warnings;
+                state.statusRight = `\u2713 Written (${warnings.length} warning${warnings.length !== 1 ? "s" : ""})`;
+              }
+            }
+          } catch { /* ignore */ }
           // Transition to preview mode — the widget shows the structured view
           // while ctx.ui.select() asks the bare question below
           state.mode = "preview";
@@ -680,6 +703,36 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           lines.push(bord("\u2502") + " ".repeat(w) + bord("\u2502"));
         }
 
+        // -- Validation errors section ----------------------------------------
+        if (state.validationErrors.length > 0) {
+          const errLabel = " Validation:";
+          lines.push(
+            bord("\u2502") +
+              theme.fg("error", errLabel) +
+              " ".repeat(Math.max(0, w - errLabel.length)) +
+              bord("\u2502"),
+          );
+          for (const diag of state.validationErrors.slice(0, 5)) {
+            const icon = diag.severity === "error" ? theme.fg("error", "\u2717") : theme.fg("accent", "\u26A0");
+            const lineRef = diag.line > 0 ? theme.fg("dim", `L${diag.line}: `) : "";
+            const msgText = `   ${icon} ${lineRef}${diag.message}`;
+            const msgVis = 3 + 2 + (diag.line > 0 ? `L${diag.line}: `.length : 0) + diag.message.length;
+            const truncMsg = msgVis > w ? msgText.slice(0, w) : msgText;
+            const truncVis = Math.min(msgVis, w);
+            lines.push(
+              bord("\u2502") + truncMsg + " ".repeat(Math.max(0, w - truncVis)) + bord("\u2502"),
+            );
+          }
+          if (state.validationErrors.length > 5) {
+            const moreText = `   ... +${state.validationErrors.length - 5} more`;
+            const moreVis = moreText.length;
+            lines.push(
+              bord("\u2502") + theme.fg("dim", moreText) + " ".repeat(Math.max(0, w - moreVis)) + bord("\u2502"),
+            );
+          }
+          lines.push(bord("\u2502") + " ".repeat(w) + bord("\u2502"));
+        }
+
         // -- Tool call line ---------------------------------------------------
         if (state.lastToolCall) {
           const tcLine = ` \u25B8 ${state.lastToolCall.toolName} ${state.lastToolCall.inputPreview}`;
@@ -797,7 +850,27 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
           }
         }
 
-        // -- Inline prompt (Save/Replan/Cancel or input) -----------------------
+        // -- Validation errors in preview mode ---------------------------------
+        if (state.validationErrors.length > 0) {
+          separators.push(content.length - 1);
+          const hasErrors = state.validationErrors.some(d => d.severity === "error");
+          const errCount = state.validationErrors.filter(d => d.severity === "error").length;
+          const warnCount = state.validationErrors.filter(d => d.severity === "warning").length;
+          const summaryParts: string[] = [];
+          if (errCount > 0) summaryParts.push(theme.fg("error", `${errCount} error${errCount !== 1 ? "s" : ""}`));
+          if (warnCount > 0) summaryParts.push(theme.fg("accent", `${warnCount} warning${warnCount !== 1 ? "s" : ""}`));
+          content.push(` ${hasErrors ? theme.fg("error", "\u2717 Flow Invalid:") : theme.fg("accent", "\u26A0 Warnings:")} ${summaryParts.join(", ")}`);
+          for (const diag of state.validationErrors.slice(0, 3)) {
+            const icon = diag.severity === "error" ? theme.fg("error", "\u2717") : theme.fg("accent", "\u26A0");
+            const lineRef = diag.line > 0 ? theme.fg("dim", `L${diag.line}: `) : "";
+            content.push(`   ${icon} ${lineRef}${diag.message}`);
+          }
+          if (state.validationErrors.length > 3) {
+            content.push(theme.fg("dim", `   ... +${state.validationErrors.length - 3} more`));
+          }
+        }
+
+        // -- Inline prompt (Save/Replan or input) ------------------------------
         if (state.prompt) {
           separators.push(content.length - 1);
           content.push(theme.fg("accent", ` ${state.prompt.question}`));

@@ -27,6 +27,7 @@ let uiCtx: any = null;
 let tui: any = null;
 let overlayOpen = false;
 let overlayDone: ((result: null) => void) | null = null;
+let piRef: ExtensionAPI | null = null;
 
 // Lifecycle-scoped input handler unsubscribers
 let unsubDashboardInput: (() => void) | null = null;
@@ -212,7 +213,7 @@ function registerSummaryInputHandler(): void {
         unregisterSummaryInputHandler();
         setSummaryState(null);
         requestRender();
-        pi.events?.emit("flow:summary-dismissed", {});
+        piRef?.events?.emit("flow:summary-dismissed", {});
         return { consume: true };
       }
       return undefined;
@@ -378,28 +379,28 @@ export class TuiFlowObserver implements FlowObserver {
     }
   }
 
-  onToolCall(agentName: string, toolName: string, input: any): void {
+  onToolCall(agentName: string, _stepId: string, toolName: string, input: any): void {
     if (this.dashboard) {
       this.dashboard.onToolCall(agentName, toolName, input);
       this.renderDashboard!();
     }
   }
 
-  onToolResult(agentName: string, toolName: string, output: any, isError: boolean): void {
+  onToolResult(agentName: string, _stepId: string, toolName: string, output: any, isError: boolean): void {
     if (this.dashboard) {
       this.dashboard.onToolResult(agentName, toolName, output, isError);
       this.renderDashboard!();
     }
   }
 
-  onAssistantText(agentName: string, text: string): void {
+  onAssistantText(agentName: string, _stepId: string, text: string): void {
     if (this.dashboard) {
       this.dashboard.onAssistantText(agentName, text);
       this.renderDashboard!();
     }
   }
 
-  onThinkingText(agentName: string, text: string): void {
+  onThinkingText(agentName: string, _stepId: string, text: string): void {
     if (this.dashboard) {
       this.dashboard.onThinkingText(agentName, text);
       this.renderDashboard!();
@@ -473,6 +474,8 @@ export class EventEmitObserver implements FlowObserver {
       stepType: step.stepType,
       agent: (step as any).agent,
       blockedBy: (step as any).blockedBy || [],
+      loopTarget: (step as any).loop_target,
+      exitTarget: (step as any).exit_target,
     }));
     this.pi.events.emit("flow:flow-started", {
       flowName,
@@ -495,6 +498,7 @@ export class EventEmitObserver implements FlowObserver {
         description: config.description,
         model: config.model,
         card: config.card,
+        sourcePath: config.source,
       } : undefined,
     });
   }
@@ -514,20 +518,20 @@ export class EventEmitObserver implements FlowObserver {
     });
   }
 
-  onAssistantText(agentName: string, text: string): void {
-    this.pi.events.emit("flow:assistant-text", { agentName, text });
+  onAssistantText(agentName: string, stepId: string, text: string): void {
+    this.pi.events.emit("flow:assistant-text", { agentName, stepId, text });
   }
 
-  onThinkingText(agentName: string, text: string): void {
-    this.pi.events.emit("flow:thinking-text", { agentName, text });
+  onThinkingText(agentName: string, stepId: string, text: string): void {
+    this.pi.events.emit("flow:thinking-text", { agentName, stepId, text });
   }
 
-  onToolCall(agentName: string, toolName: string, input: any): void {
-    this.pi.events.emit("flow:subagent-tool-call", { agentName, toolName, input });
+  onToolCall(agentName: string, stepId: string, toolName: string, input: any): void {
+    this.pi.events.emit("flow:subagent-tool-call", { agentName, stepId, toolName, input });
   }
 
-  onToolResult(agentName: string, toolName: string, output: any, isError: boolean): void {
-    this.pi.events.emit("flow:subagent-tool-result", { agentName, toolName, output, isError });
+  onToolResult(agentName: string, stepId: string, toolName: string, output: any, isError: boolean): void {
+    this.pi.events.emit("flow:subagent-tool-result", { agentName, stepId, toolName, output, isError });
   }
 
   onAutoDecision(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void {
@@ -563,6 +567,8 @@ export function setupFlowTui(
   pi: ExtensionAPI,
   flowManager: FlowManager,
 ): void {
+  piRef = pi;
+
   // ── Legacy prompt request/response handler REMOVED ──
   // Previously listened for flow:prompt-request and presented via proxied uiCtx,
   // causing duplicate prompts on the dashboard. Now handled by TuiPromptAdapter
@@ -623,13 +629,6 @@ export function setupFlowTui(
       };
       setFlowWidget(uiCtx, "flow-architect", wrappedFactory);
       architectWidget.setUpdateCallback(architectRender);
-
-      // Inject architect widget as prompt handler for TUI adapter
-      pi.events.emit("prompt:set-architect-handler", {
-        handler: (id: string, type: "select" | "input", question: string, options?: string[], signal?: AbortSignal) => {
-          return architectWidget.showPrompt(id, type, question, options, signal);
-        },
-      });
     } catch { /* widget not available */ }
   }
 
@@ -637,8 +636,6 @@ export function setupFlowTui(
     if (architectWidget) {
       architectWidget.dispose();
       architectWidget = null;
-      // Clear the architect prompt handler from TUI adapter
-      pi.events.emit("prompt:set-architect-handler", { handler: null });
     }
     if (uiCtx) {
       setFlowWidget(uiCtx, "flow-architect", undefined);

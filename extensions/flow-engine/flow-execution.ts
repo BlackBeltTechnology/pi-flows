@@ -54,10 +54,10 @@ export interface FlowRunOptions {
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
   onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult) => void;
-  onToolCall?: (agentName: string, toolName: string, input: any) => void;
-  onToolResult?: (agentName: string, toolName: string, output: any, isError: boolean) => void;
-  onAssistantText?: (agentName: string, text: string) => void;
-  onThinkingText?: (agentName: string, text: string) => void;
+  onToolCall?: (agentName: string, stepId: string, toolName: string, input: any) => void;
+  onToolResult?: (agentName: string, stepId: string, toolName: string, output: any, isError: boolean) => void;
+  onAssistantText?: (agentName: string, stepId: string, text: string) => void;
+  onThinkingText?: (agentName: string, stepId: string, text: string) => void;
   onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void) => void;
   onLoopIteration?: (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => void;
   isAutonomous?: () => boolean;
@@ -275,19 +275,19 @@ async function runDagSegment(
   let lastSnapshot = "";
   let deadlockCount = 0;
 
+  // Cross-segment blockedBy: deps referencing steps outside this DAG segment
+  // are already satisfied (the preceding separator/segment completed before us).
+  const segmentStepIds = new Set(steps.map(s => s.id));
+
   // If activeSteps is set (branch exclusivity), skip inactive steps immediately
   if (activeSteps) {
     for (const step of steps) {
       if (!activeSteps.has(step.id)) {
         completed.add(step.id);
         // Store synthetic "skipped" result so blockedBy refs auto-satisfy
-        ctx.results[step.id] = {
-          fullOutput: "",
-          status: "skipped",
-          summary: "",
-          artifacts: "",
-          files: "",
-        };
+        const skippedResult = { fullOutput: "", status: "skipped" as const, summary: "", artifacts: "", files: "" };
+        ctx.results[step.id] = skippedResult;
+        // Don't emit events for skipped agents — they stay "pending" in the dashboard
       }
     }
   }
@@ -299,10 +299,11 @@ async function runDagSegment(
     waveNumber++;
 
     // Find unblocked steps within this segment
+    // Deps outside this segment are treated as satisfied (cross-segment ordering)
     const unblocked = steps.filter(s => {
       if (completed.has(s.id)) return false;
       if (!s.blockedBy) return true;
-      return s.blockedBy.every(dep => completed.has(dep));
+      return s.blockedBy.every(dep => completed.has(dep) || !segmentStepIds.has(dep));
     });
 
     // Deadlock detection
@@ -526,10 +527,10 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     modelRegistry: options.modelRegistry,
     extraGuardFactories: options.extraGuardFactories,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
-    onToolCall: (name, input) => options.onToolCall?.(step.agent, name, input),
-    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, name, output, err),
-    onAssistantText: (text) => options.onAssistantText?.(step.agent, text),
-    onThinkingText: (text) => options.onThinkingText?.(step.agent, text),
+    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
+    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
+    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text),
+    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text),
     onExtensionUIRequest: options.onExtensionUIRequest
       ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond)
       : undefined,
@@ -582,6 +583,9 @@ async function spawnForkDecisionAgent(
     decisionTask += `\n\nThe user typed a custom answer instead of picking an option: "${customText}"\nBased on their intent, choose the closest matching branch.`;
   }
 
+  const agentName = step.agent || agentConfig.name;
+  options.onAgentStarted?.(agentName, step.id);
+
   const result = await spawnAgent({
     agent: agentConfig,
     task: decisionTask,
@@ -593,8 +597,14 @@ async function spawnForkDecisionAgent(
     extraGuardFactories: options.extraGuardFactories,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
     decisionBranches: branchNames,
+    onToolCall: (name, input) => options.onToolCall?.(agentName, step.id, name, input),
+    onToolResult: (name, output, err) => options.onToolResult?.(agentName, step.id, name, output, err),
+    onAssistantText: (text) => options.onAssistantText?.(agentName, step.id, text),
+    onThinkingText: (text) => options.onThinkingText?.(agentName, step.id, text),
     signal: options.signal,
   });
+
+  options.onAgentComplete?.(agentName, step.id, result);
 
   const branch = result.finishParams?.branch;
   if (branch && step.branches[branch]) {
@@ -623,6 +633,10 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
     return spawnForkDecisionAgent(step, ctx, options);
   }
 
+  // Signal that the fork step is active (waiting for user input)
+  const forkAgentName = step.agent || "fork";
+  options.onAgentStarted?.(forkAgentName, step.id);
+
   const extra: Record<string, boolean | Record<string, string>> = {};
   if (step.multiSelect) extra.multiSelect = true;
   if (step.allowCustom) extra.allowCustom = true;
@@ -632,15 +646,26 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
 
   const response = await options.askUser(expandedQuestion, "select", step.options, extra);
 
+  const makeForkResult = (summary: string): AgentResult => ({
+    success: true, output: summary, stderr: "", exitCode: 0,
+    result: { status: "complete" as const, files: [], artifacts: "", summary },
+    toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+  });
+
   // Handle auto-decide: user chose to let the agent decide this fork
   if (response.answer === "__auto_decide__" && step.agent) {
+    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult("Auto-decide"));
     return spawnForkDecisionAgent(step, ctx, options);
   }
 
   // Handle custom-decide: user typed freetext via "Other (describe)"
   if (response.answer === "__custom_decide__" && step.agent) {
+    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(response.notes || "Custom"));
     return spawnForkDecisionAgent(step, ctx, options, response.notes);
   }
+
+  // User selected an option directly
+  options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(`Selected: ${response.answer}`));
 
   ctx.forks[step.id] = response;
 
@@ -740,6 +765,8 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
       if (content) skillContents.set(skill, content);
     }
   }
+  options.onAgentStarted?.(step.agent, step.id);
+
   const result = await spawnAgent({
     agent: decisionConfig,
     task: decisionTask,
@@ -752,8 +779,14 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     extraGuardFactories: options.extraGuardFactories,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: branchNames,
+    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
+    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
+    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text),
+    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text),
     signal: options.signal,
   });
+
+  options.onAgentComplete?.(step.agent, step.id, result);
 
   // Route via finish tool's branch parameter
   const branch = result.finishParams?.branch;
@@ -806,6 +839,8 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
       if (content) skillContents.set(skill, content);
     }
   }
+  options.onAgentStarted?.(step.agent, step.id);
+
   const result = await spawnAgent({
     agent: decisionConfig,
     task: decisionTask,
@@ -818,8 +853,14 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     extraGuardFactories: options.extraGuardFactories,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: ["loop", "exit"],
+    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
+    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
+    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text),
+    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text),
     signal: options.signal,
   });
+
+  options.onAgentComplete?.(step.agent, step.id, result);
 
   const branch = result.finishParams?.branch;
   if (branch === "loop") {

@@ -120,17 +120,17 @@ export class FlowManager {
       onExtensionUIRequest: (agentName: string, request: any, respond: (response: any) => void) => {
         ioAdapter.handleExtensionUIRequest(agentName, request, respond);
       },
-      onToolCall: (agentName: string, toolName: string, input: any) => {
-        for (const obs of observers) obs.onToolCall?.(agentName, toolName, input);
+      onToolCall: (agentName: string, stepId: string, toolName: string, input: any) => {
+        for (const obs of observers) obs.onToolCall?.(agentName, stepId, toolName, input);
       },
-      onToolResult: (agentName: string, toolName: string, output: any, isError?: boolean) => {
-        for (const obs of observers) obs.onToolResult?.(agentName, toolName, output, !!isError);
+      onToolResult: (agentName: string, stepId: string, toolName: string, output: any, isError?: boolean) => {
+        for (const obs of observers) obs.onToolResult?.(agentName, stepId, toolName, output, !!isError);
       },
-      onAssistantText: (agentName: string, text: string) => {
-        for (const obs of observers) obs.onAssistantText?.(agentName, text);
+      onAssistantText: (agentName: string, stepId: string, text: string) => {
+        for (const obs of observers) obs.onAssistantText?.(agentName, stepId, text);
       },
-      onThinkingText: (agentName: string, text: string) => {
-        for (const obs of observers) obs.onThinkingText?.(agentName, text);
+      onThinkingText: (agentName: string, stepId: string, text: string) => {
+        for (const obs of observers) obs.onThinkingText?.(agentName, stepId, text);
       },
       onLoopIteration: (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => {
         for (const obs of observers) obs.onLoopIteration?.(stepId, iteration, maxIterations, loopTarget);

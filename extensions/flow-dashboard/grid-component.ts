@@ -33,12 +33,15 @@ export class GridComponent {
         c.render(colWidth, this.theme, startIdx + i === this._selectedIndex)
       );
 
+      // Compute row height from actual rendered card lines (not hardcoded)
+      const rowHeight = Math.max(CARD_HEIGHT, ...rendered.map(r => r.length));
+
       // Pad incomplete rows with empty space columns
       while (rendered.length < cols) {
-        rendered.push(Array(CARD_HEIGHT).fill(" ".repeat(colWidth)));
+        rendered.push(Array(rowHeight).fill(" ".repeat(colWidth)));
       }
 
-      for (let line = 0; line < CARD_HEIGHT; line++) {
+      for (let line = 0; line < rowHeight; line++) {
         rows.push(rendered.map(r => r[line] ?? " ".repeat(colWidth)));
       }
     }

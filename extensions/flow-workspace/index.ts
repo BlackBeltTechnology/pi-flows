@@ -472,7 +472,7 @@ async function handleEditFlow(
       pipeline: "architect-edit",
       type: "select",
       question: "What would you like to do?",
-      options: ["Save", "Replan", "Cancel"],
+      options: ["Save", "Replan"],
     }).then(r => r.cancelled ? "Cancel" : (r.answer || "Cancel"));
 
     if (choice === "Replan") {
@@ -807,7 +807,7 @@ async function handleNewFlow(
       pipeline: "architect-new",
       type: "select",
       question: "Save this flow?",
-      options: ["Save", "Don't save", "Replan", "Cancel"],
+      options: ["Save", "Don't save", "Replan"],
     }).then(r => r.cancelled ? "Cancel" : (r.answer || "Cancel"));
 
     if (choice === "Replan") {

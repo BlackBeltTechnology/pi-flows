@@ -63,7 +63,7 @@ function loadRoleConfig(): RoleConfig {
     roles: { ...DEFAULT_ROLES, ...(raw.roles as Record<string, string> | undefined) },
     rolePresets: Array.isArray(raw.rolePresets) ? raw.rolePresets as RolePreset[] : [],
     activePreset: (raw.activePreset as string | null) ?? null,
-    autonomousMode: (raw.autonomousMode as boolean) ?? false,
+    autonomousMode: (raw.autonomousMode as boolean) ?? true,
   };
 }
 
@@ -88,7 +88,7 @@ export function getModelRole(role: string): string | undefined {
 
 // -- Autonomous mode state ------------------------------------------------
 
-let autonomousModeEnabled = false;
+let autonomousModeEnabled = true;
 
 export function isAutonomousMode(): boolean {
   return autonomousModeEnabled;
