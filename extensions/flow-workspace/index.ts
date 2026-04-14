@@ -27,15 +27,20 @@ import { resolveModel } from "../flow-engine/model-roles.js";
 import type { AgentStep } from "../flow-engine/types.js";
 
 /** Parse flow YAML content into a simplified metadata object for dashboard events. */
-function parseFlowForDashboard(content: string): { name: string; description: string; maxConcurrent: number; steps: Array<{ id: string; agentName?: string; blockedBy: string[] }> } {
+function parseFlowForDashboard(content: string): { name: string; description: string; maxConcurrent: number; steps: Array<{ id: string; agentName?: string; blockedBy: string[]; stepType?: string; loopTarget?: string; exitTarget?: string }> } {
   try {
     const flow = parseFlowYamlString(content, "<preview>");
-    const steps = flow.steps
-      .filter(s => s.stepType === "agent")
-      .map(s => {
-        const agent = s as AgentStep;
-        return { id: agent.id, agentName: agent.agent, blockedBy: agent.blockedBy || [] };
-      });
+    const steps = flow.steps.map(s => {
+      const base: { id: string; agentName?: string; blockedBy: string[]; stepType?: string; loopTarget?: string; exitTarget?: string } = {
+        id: s.id,
+        blockedBy: s.blockedBy || [],
+        stepType: s.stepType,
+      };
+      if ("agent" in s && s.agent) base.agentName = s.agent as string;
+      if ("loop_target" in s && s.loop_target) base.loopTarget = s.loop_target as string;
+      if ("exit_target" in s && s.exit_target) base.exitTarget = s.exit_target as string;
+      return base;
+    });
     return { name: flow.name, description: flow.description, maxConcurrent: flow.max_concurrent || 0, steps };
   } catch {
     // Graceful fallback: extract basics via regex
