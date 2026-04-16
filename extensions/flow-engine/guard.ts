@@ -10,6 +10,7 @@
 
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { prefixToolName } from "./tool-prefix.js";
 
 
 interface AccessRules {
@@ -25,6 +26,8 @@ export interface GuardOptions {
   decisionBranches?: string[];
   agentOutputs?: Array<{name: string, description?: string}>;
   allowAskUser?: boolean;
+  /** When set, non-core tool names are prefixed (e.g., "mcp__flows__") for Anthropic OAuth. */
+  toolPrefix?: string;
 }
 
 /**
@@ -32,12 +35,18 @@ export interface GuardOptions {
  * This is the primary API — no env vars, no temp files.
  */
 export function createGuardExtension(options: GuardOptions): ExtensionFactory {
+  const tp = options.toolPrefix || "";
+
+  // Compute prefixed names for special tools
+  const finishName = prefixToolName("finish", tp);
+  const askUserName = prefixToolName("ask_user", tp);
+
   return (pi: ExtensionAPI) => {
     // Block ask_user unless explicitly allowed
     if (!options.allowAskUser) {
       pi.on("tool_call", (event: any) => {
         const toolName = event.toolName || event.name;
-        if (toolName === "ask_user") {
+        if (toolName === askUserName) {
           return {
             block: true,
             reason: "Subagents cannot use ask_user. Make a decision autonomously or report in your result.",
@@ -49,16 +58,16 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
 
     // ── Tool whitelist enforcement ──
     if (options.allowedTools) {
-      const allowedTools = new Set(options.allowedTools);
+      const allowedTools = new Set(options.allowedTools.map(t => prefixToolName(t, tp)));
       // Ensure finish is always allowed
-      allowedTools.add("finish");
+      allowedTools.add(finishName);
 
       pi.on("tool_call", (event: any) => {
         const toolName = event.toolName || event.name;
         if (!allowedTools.has(toolName)) {
           return {
             block: true,
-            reason: `Tool "${toolName}" not declared in agent frontmatter. Declared tools: ${[...allowedTools].filter(t => t !== "finish").join(", ")}`,
+            reason: `Tool "${toolName}" not declared in agent frontmatter. Declared tools: ${[...allowedTools].filter(t => t !== finishName).join(", ")}`,
           };
         }
         return undefined;
@@ -110,7 +119,7 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
       }
 
       pi.registerTool({
-        name: "finish",
+        name: finishName,
         label: "Finish",
         description: decisionBranches
           ? `Submit your decision and result. You MUST set branch to one of: ${decisionBranches.join(", ")}`
@@ -139,7 +148,7 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         if (finishCalled) {
           return { block: true, reason: "Agent has already called finish. No further tool calls allowed." };
         }
-        if ((event.toolName || event.name) === "finish") {
+        if ((event.toolName || event.name) === finishName) {
           finishCalled = true;
         }
         return undefined;

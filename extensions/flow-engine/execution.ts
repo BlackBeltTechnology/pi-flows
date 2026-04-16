@@ -19,6 +19,9 @@ import { resolveModel } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
 import { createGuardExtension } from "./guard.js";
+import { prefixToolName } from "./tool-prefix.js";
+
+export { prefixToolName } from "./tool-prefix.js";
 
 /**
  * Replace sentinel placeholders with actual file content.
@@ -94,7 +97,7 @@ export interface SpawnOptions {
  * ExtensionAPI that records handlers and tools into an Extension-shaped
  * object, which the ExtensionRunner will later bind with real actions.
  */
-function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any): any {
+function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any, toolPrefix: string = ""): any {
   const handlers = new Map<string, any[]>();
   const tools = new Map<string, any>();
 
@@ -107,7 +110,9 @@ function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any): any
       handlers.get(event)!.push(handler);
     },
     registerTool: (tool: any) => {
-      tools.set(tool.name, { definition: tool, extensionPath: "<guard>" });
+      const name = prefixToolName(tool.name, toolPrefix);
+      const prefixedTool = name !== tool.name ? { ...tool, name } : tool;
+      tools.set(name, { definition: prefixedTool, extensionPath: "<guard>" });
     },
     registerCommand: () => {},
     registerShortcut: () => {},
@@ -196,11 +201,6 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     systemPrompt = replaceSentinels(systemPrompt, options.fileInputs);
   }
 
-  // Resolve tools from agent frontmatter
-  const tools = agent.tools
-    .filter(t => TOOL_FACTORIES[t])
-    .map(t => TOOL_FACTORIES[t](cwd));
-
   // Resolve Model object from modelId
   // modelId may be "provider/model-id" or just "model-id"
   let model: any;
@@ -247,6 +247,31 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     ?? (options.modelRegistry as any)?.authStorage
     ?? undefined;
 
+  // Detect Anthropic-messages protocol: any provider using anthropic-messages
+  // needs non-core tools registered with mcp__flows__ prefix so Anthropic's
+  // endpoint accepts them. This covers direct OAuth, API key, AND proxy
+  // providers (e.g., 9Router) that forward to Anthropic. The mcp__ prefix
+  // is harmless for all anthropic-messages endpoints.
+  let toolPrefix = "";
+  if (model.api === "anthropic-messages") {
+    toolPrefix = "mcp__flows__";
+  }
+
+  // Resolve tools from agent frontmatter, applying mcp__ prefix for non-core tools
+  const tools = agent.tools
+    .filter(t => TOOL_FACTORIES[t])
+    .map(t => {
+      const tool = TOOL_FACTORIES[t](cwd);
+      const prefixed = prefixToolName(tool.name, toolPrefix);
+      return prefixed !== tool.name ? { ...tool, name: prefixed } : tool;
+    });
+
+  // Prefix customTools (extension tools like agent_write, flow_write, etc.)
+  const customTools = (options.extraCustomTools ?? []).map((t: any) => {
+    const prefixed = prefixToolName(t.name, toolPrefix);
+    return prefixed !== t.name ? { ...t, name: prefixed } : t;
+  });
+
   // Build guard options
   const guardOptions: GuardOptions = {
     allowedTools: [...agent.tools, "finish"],
@@ -255,6 +280,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     decisionBranches: options.decisionBranches,
     agentOutputs: agent.outputs,
     allowAskUser: !!options.onExtensionUIRequest,
+    toolPrefix,
   };
 
   // Build extension factories array
@@ -270,7 +296,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   const extensions: any[] = [];
   for (const factory of extensionFactories) {
     try {
-      const ext = buildExtensionFromFactory(factory, runtime);
+      const ext = buildExtensionFromFactory(factory, runtime, toolPrefix);
       extensions.push(ext);
     } catch {
       // Skip failed extensions
@@ -311,7 +337,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       model,
       thinkingLevel: thinking as any,
       tools,
-      customTools: options.extraCustomTools,
+      customTools: customTools,
       resourceLoader,
       sessionManager: SessionManager.inMemory(),
       authStorage,
@@ -337,6 +363,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   await session.bindExtensions({ uiContext });
 
   // Wire event capture
+  const finishToolName = prefixToolName("finish", toolPrefix);
   let finishParams: any = undefined;
   let finishToolCallId: string | undefined;
   let finishValidationRetries = 0;
@@ -347,7 +374,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   session.subscribe((event: any) => {
     switch (event.type) {
       case "tool_execution_start": {
-        if (event.toolName === "finish") {
+        if (event.toolName === finishToolName) {
           finishParams = event.args;
           finishToolCallId = event.toolCallId;
         }
@@ -386,8 +413,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
             if (finishValidationRetries < MAX_FINISH_RETRIES) {
               finishValidationRetries++;
               session.followUp(
-                "Your `finish` tool call failed schema validation. " +
-                "Review the validation error above and call `finish` again with all required fields. " +
+                `Your \`${finishToolName}\` tool call failed schema validation. ` +
+                `Review the validation error above and call \`${finishToolName}\` again with all required fields. ` +
                 "Make sure to include every required parameter."
               );
             }
@@ -453,7 +480,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     while (!finishParams && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
       finishRetries++;
       await session.prompt(
-        "You did not call the `finish` tool. You MUST call `finish` to submit your result.\n\n" +
+        `You did not call the \`${finishToolName}\` tool. You MUST call \`${finishToolName}\` to submit your result.\n\n` +
         "Call it now with:\n" +
         "- status: \"complete\", \"error\", or \"blocked\"\n" +
         "- summary: brief description of what you did\n" +

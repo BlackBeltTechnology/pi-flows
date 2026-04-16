@@ -1,176 +1,227 @@
 # pi-flows
 
-A pi-package that adds multi-agent workflow orchestration to pi. Design flows as YAML files, run them with automatic parallel scheduling, and watch everything in a live dashboard — while the main session stays fully interactive.
+A pi-package that adds multi-agent workflow orchestration to pi. Design flows as YAML DAGs, run them with automatic parallel scheduling, and watch everything in a live TUI dashboard — while the main session stays fully interactive.
 
 ---
 
 ## Overview
 
-Flows are **workflow templates** that can be reused across projects. They allow you to define processes where multiple agents communicate through structured inputs and outputs. 
+Flows are **reusable workflow templates** that coordinate multiple AI agents through structured inputs and outputs. Each agent runs in an isolated session with scoped tools and filesystem access.
 
-**Best Practice Usage:**
+**Best practice usage:**
 - **Research → Plan → Implement → Verify** cycles
-- **Code review** pipelines
-- **Documentation generation**
-- **Refactoring** loops
+- **Code review** pipelines with verify/fix loops
+- **Documentation generation** with multi-domain research
+- **Refactoring** with interactive branching
 
-## Installation & Setup
+## Installation
 
-1. Install the package via npm (or your preferred package manager):
-   ```bash
-   npm install pi-flows
-   ```
-2. Ensure pi-flows is added to your project's `pi` extensions configuration in `package.json`:
-   ```json
-   "pi": {
-     "extensions": ["pi-flows"]
-   }
-   ```
+```bash
+pi install npm:pi-flows
+```
+
+Or from a local clone:
+
+```bash
+pi install /path/to/pi-flows
+```
 
 ## Quick Start
 
-Create a simple workflow to review a file.
+1. **Create an agent** (`.pi/flows/agents/reviewer.md`):
 
-1. **Create an agent (`agents/reviewer.md`):**
-   ```yaml
+   ```markdown
    ---
-   id: simple-reviewer
-   name: Code Reviewer
-   description: Reviews code.
+   name: reviewer
+   description: Reviews code for quality issues
+   model: @coding
+   tools: read, grep, find
    inputs:
-     type: object
-     properties:
-       code:
-         type: string
+     - target_path
    ---
-   Review the provided code: ${{input.code}}
+   Review the code for: ${{task}}
+   Focus on: ${{input.target_path}}
    ```
 
-2. **Create a flow (`flows/review.yaml`):**
+2. **Create a flow** (`.pi/flows/flows/review.yaml`):
+
    ```yaml
-   id: basic-review
-   name: Basic Review Flow
-   description: Reviews a single piece of code.
-   inputs:
-     type: object
-     properties:
-       targetCode:
-         type: string
+   name: review
+   description: Research then review code
+   task_required: true
+   task_prompt: "What should I review?"
+
    steps:
-     - id: review_step
-       type: agent
-       agent: simple-reviewer
+     - id: research
+       agent: project-context-reader
+       task: Investigate the codebase for ${{task}}
+
+     - id: review
+       agent: reviewer
+       blockedBy: [research]
        inputs:
-         code: ${{input.targetCode}}
+         target_path: "${{result.research.summary}}"
+       task: Review based on research findings
    ```
 
-3. Run it using the pi CLI or TUI by triggering the `basic-review` flow and providing the `targetCode` input.
+3. **Run it:**
+
+   ```
+   /review Fix the auth middleware
+   ```
+
+## Commands & Keybindings
+
+| Command | Description |
+|---------|-------------|
+| `/flows` | Manage flows (new, edit, delete) |
+| `/flows:new` | Design & run a new flow with the Flow Architect |
+| `/flows:edit` | Edit an existing flow |
+| `/flows:delete` | Delete a flow |
+| `/roles` | Assign models to role tiers (@coding, @planning, etc.) |
+| `Ctrl+A` | Toggle auto-routing (agents decide fork branches autonomously) |
+| `Ctrl+X` | Abort running flow |
+
+Flows also register as slash commands based on file path: `.pi/flows/flows/review.yaml` → `/review`.
 
 ## Core Concepts
 
-- **Agents:** Defined in `.md` files. They contain the system prompt (body) and configuration (frontmatter).
-- **Flows:** Defined in `.yaml` files. They represent a Directed Acyclic Graph (DAG) of steps.
-- **DAG Execution:** Steps run in parallel automatically unless constrained by `dependsOn` or input dependencies.
-- **Template Variables:** Used to pass data between steps dynamically using `${{ }}` syntax.
+- **Agents** — Markdown files with YAML frontmatter (config) and body (system prompt). Run in isolated sessions with scoped tools and file access.
+- **Flows** — YAML files defining a DAG of steps connected via `blockedBy`. The engine schedules independent steps in parallel, up to `max_concurrent`.
+- **Template variables** — `${{task}}`, `${{result.step-id.summary}}`, `${{input.name}}` wire data between steps at dispatch time.
+- **Model roles** — `@coding`, `@planning`, `@research`, `@compact` map to concrete models via `/roles`. Each agent declares which tier it needs.
+- **Flow Architect** — A built-in AI agent (`/flows:new`) that analyzes your conversation context, selects agents from the catalog, and designs a complete flow DAG.
 
 ## Writing Agents
 
-Agents are configured via frontmatter in their markdown files.
+Agents are `.md` files in `.pi/flows/agents/` (project-local) or a package's `agents/` directory.
 
-```yaml
+```markdown
 ---
-id: planner
-name: Architecture Planner
-role: architect
-tools: [read, grep]
+name: backend-dev
+description: Implements backend changes
+model: @coding
+thinking: high
+tools: read, write, edit, grep, bash
 inputs:
-  type: object
-  properties:
-    feature: { type: string }
+  - research_context
+outputs:
+  - verdict
+access:
+  read: ["src/**"]
+  write: ["src/main/**"]
+  bash:
+    deny: ["rm -rf"]
+card:
+  label: "Backend Dev"
+  metric: developer
 ---
-You are an architect. Plan the implementation for: ${{input.feature}}
+You are a backend developer. Task: ${{task}}
+Context: ${{input.research_context}}
 ```
 
-**Key Fields:**
-- `id`, `name`, `description`: Metadata.
-- `role`: Ties the agent to specific model presets.
-- `tools`: Grants access to specific tools (e.g., `read`, `write`).
-- `inputs`: JSON schema for the expected input.
+**Key fields:** `model` (role tier), `tools` (allowlist — guard blocks everything else), `inputs`/`outputs` (typed data flow), `access` (filesystem sandbox), `card` (TUI dashboard rendering).
 
 ## Writing Flows
 
-Flows coordinate agents and logic.
+### Step Types
 
-### Agent Step
+**Agent** — dispatch a named agent with a task:
 ```yaml
-- id: my_agent_step
-  type: agent
-  agent: planner
+- id: impl
+  agent: backend-dev
+  blockedBy: [research]
   inputs:
-    feature: "User Auth"
+    research_context: "${{result.research.summary}}"
 ```
 
-### Fork Step (Parallel execution)
+**Fork** — present a choice to the user (or let an agent decide in auto-routing mode):
 ```yaml
-- id: process_all
+- id: choose
   type: fork
-  items: ${{input.files}}
-  itemVar: file
-  step:
-    type: agent
-    agent: file-analyzer
-    inputs:
-      target: ${{file}}
+  question: "Which approach?"
+  options: [Quick fix, Full refactor]
+  branches:
+    Quick fix: quick-step
+    Full refactor: refactor-step
+  agent: flow-decision    # used when Ctrl+A is active
 ```
 
-### Conditional Step
+**Conditional** — branch on whether a result field is empty:
 ```yaml
-- id: fix_code
+- id: check
   type: conditional
-  condition: ${{steps.test.output.failed}}
-  step:
-    type: agent
-    agent: fixer
+  check: researcher.artifacts
+  present: process-step
+  absent: skip-step
 ```
 
-## Template Variables
+**Agent Loop Decision** — iterative verify/fix cycles:
+```yaml
+- id: verify-loop
+  type: agent-loop-decision
+  agent: flow-decision
+  task: "Check iteration ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}"
+  loop_target: fixer
+  exit_target: done
+  max_iterations: 3
+```
 
-Variables let you wire inputs and outputs together:
-- `${{input.myVar}}`: Global flow input.
-- `${{steps.stepId.output.result}}`: Data outputted by a previous step via `set_step_output`.
-- `${{steps.stepId.summary}}`: The summary string provided by the step.
+**Flow Reference** — delegate to a sub-flow:
+```yaml
+- id: run-tests
+  type: flow-ref
+  path: .pi/flows/flows/test-suite.yaml
+```
 
 ## Input Wiring
 
-To pass data from step A to step B, map it in the `inputs` section:
+Steps pass data through `inputs` + template variables:
 
 ```yaml
-steps:
-  - id: step_A
-    type: agent
-    agent: generator
-  - id: step_B
-    type: agent
-    agent: reviewer
-    dependsOn: [step_A]
-    inputs:
-      codeToReview: ${{steps.step_A.output.generatedCode}}
+- id: researcher
+  agent: researcher
+  task: Investigate ${{task}}
+
+- id: developer
+  agent: developer
+  blockedBy: [researcher]
+  inputs:
+    context: "${{result.researcher.summary}}"
+    spec: file://specs/api-spec.md    # injects file content
 ```
 
-## Dashboard & Cards
+The agent's prompt references inputs as `${{input.context}}`. Typed outputs declared in agent frontmatter (`outputs:`) are accessible as `${{result.step-id.outputName}}`.
 
-pi-flows includes a rich TUI dashboard. When flows run, they appear in the dashboard. Each agent can have custom UI cards registered via the `flow:register-card` event to display real-time metrics and progress.
+## TUI Dashboard
 
-## Configuration
+When flows run, a live dashboard appears with agent cards in a grid layout. Each card shows status, elapsed time, and domain-specific metrics (files modified, tests passed, etc.). Navigate with arrow keys, expand agent detail views, and see the full flow summary after completion.
 
-Flows and Agents are automatically discovered if placed in configured directories. You can extend functionality by hooking into the Events API.
+Card types (`card.metric`): `developer`, `researcher`, `tester`, `verifier`, `writer`, `default` — or register custom renderers via `flow:register-card`.
+
+## Built-in Agents
+
+| Agent | Role | Description |
+|-------|------|-------------|
+| `flow-architect` | Orchestrator | Designs flows from conversation context using `agent_catalog` |
+| `flow-decision` | Router | Makes branch/loop decisions for fork and loop steps |
+| `project-context-reader` | Researcher | Reads and summarizes project structure |
 
 ## Developer Docs
 
-For advanced customization, check the detailed documentation in the `docs/` folder:
+Detailed documentation in the `docs/` folder:
 
-- [Events API](docs/events-api.md): Register custom providers, cards, and listen to flow events.
-- [Tools Reference](docs/tools-reference.md): Understand built-in tools.
-- [Extending pi-flows](docs/extending-pi-flows.md): Build your own extensions.
-- [Flow Authoring](docs/flow-authoring.md): Complete schema reference.
-- [Public API](docs/public-api.md): Core TS types and functions.
+- [Flows Reference](docs/flows.md) — Complete step type reference with syntax and examples
+- [Agents Reference](docs/agents.md) — Agent frontmatter schema, model tiers, card types
+- [Flow Authoring](docs/flow-authoring.md) — Full format reference for agent and flow files
+- [Architecture](docs/architecture.md) — Internal design: DAG execution, agent isolation, sub-extensions
+- [Events API](docs/events-api.md) — Register custom cards, tools, and listen to flow events
+- [Public API](docs/public-api.md) — Core TypeScript types and functions for programmatic use
+- [Skills & Extensions](docs/skills-and-extensions.md) — Skill bundles and extension registration
+- [Tools Reference](docs/tools-reference.md) — Built-in tools available to agents
+- [Creating Packages](docs/creating-packages.md) — Build domain packages with custom agents and flows
+- [Extending pi-flows](docs/extending-pi-flows.md) — Advanced customization
+
+## License
+
+MIT
