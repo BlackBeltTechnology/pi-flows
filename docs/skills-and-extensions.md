@@ -158,16 +158,16 @@ export default function myDomainExtension(pi: ExtensionAPI) {
     },
   });
 
-  // Register a subagent guard for sandboxing
-  pi.events?.emit("flow:register-guard-extension", {
+  // Register an extension for spawned agent sessions (guards, provider middleware, etc.)
+  pi.events?.emit("flow:register-agent-extension", {
     path: join(pkgRoot, "extensions", "my-guard.ts"),
   });
 }
 ```
 
-### Guard Extensions
+### Agent Extensions
 
-Guard extensions are loaded into spawned subagent processes to enforce domain-specific sandboxing:
+Agent extensions are loaded into spawned subagent sessions. They can enforce sandboxing, register provider middleware, or add custom tools:
 
 ```typescript
 // extensions/my-guard.ts

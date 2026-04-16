@@ -191,14 +191,14 @@ Rules:
 - desc: max 120 chars, imperative mood ("Add X", "Fix Y", "Implement Z")`;
 
 /** Get spawn context (tools, auth, model registry) from flow-engine via events */
-function getSpawnContext(pi: ExtensionAPI): { tools: any[]; authStorage: any; modelRegistry: any; extraGuardFactories: any[] } {
+function getSpawnContext(pi: ExtensionAPI): { tools: any[]; authStorage: any; modelRegistry: any; extraAgentExtensions: any[] } {
   const spawnCtx: any = {};
   pi.events.emit("flow:get-spawn-context", spawnCtx);
   return {
     tools: spawnCtx.extensionTools ?? [],
     authStorage: spawnCtx.authStorage,
     modelRegistry: spawnCtx.modelRegistry,
-    extraGuardFactories: spawnCtx.extraGuardFactories ?? [],
+    extraAgentExtensions: spawnCtx.extraAgentExtensions ?? [],
   };
 }
 
@@ -385,7 +385,7 @@ async function handleEditFlow(
       cwd: projectRoot,
       authStorage: spawnCtx.authStorage,
       modelRegistry: spawnCtx.modelRegistry,
-      extraGuardFactories: spawnCtx.extraGuardFactories,
+      extraAgentExtensions: spawnCtx.extraAgentExtensions,
       extraCustomTools: spawnCtx.tools,
       preambleSections: editArchitectContext
         ? [
@@ -718,7 +718,7 @@ async function handleNewFlow(
       cwd: projectRoot,
       authStorage: spawnCtx.authStorage,
       modelRegistry: spawnCtx.modelRegistry,
-      extraGuardFactories: spawnCtx.extraGuardFactories,
+      extraAgentExtensions: spawnCtx.extraAgentExtensions,
       extraCustomTools: spawnCtx.tools,
       preambleSections: architectContext
         ? [

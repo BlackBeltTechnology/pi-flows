@@ -123,7 +123,15 @@ export function activate(pi: ExtensionAPI) {
 
     config.roles[role] = modelId;
     currentRoles = { ...config.roles };
-    config.activePreset = null;
+
+    // If a preset is active, update it in-place with the new role assignment
+    if (config.activePreset && config.rolePresets) {
+      const preset = config.rolePresets.find((p) => p.name === config.activePreset);
+      if (preset) {
+        preset.roles = { ...config.roles };
+      }
+    }
+
     saveRoleConfig(config);
     data.success = true;
   });

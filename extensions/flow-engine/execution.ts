@@ -73,7 +73,7 @@ export interface SpawnOptions {
   cwd: string;
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
-  extraGuardFactories?: ExtensionFactory[];
+  extraAgentExtensions?: ExtensionFactory[];
   extraCustomTools?: any[];  // ToolDefinition[] — extension tools to include in the session
   onToolCall?: (toolName: string, input: any) => void;
   onToolResult?: (toolName: string, output: any, isError: boolean) => void;
@@ -260,7 +260,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Build extension factories array
   const extensionFactories: ExtensionFactory[] = [
     createGuardExtension(guardOptions),
-    ...(options.extraGuardFactories ?? []),
+    ...(options.extraAgentExtensions ?? []),
   ];
 
   // Build Extension objects from factories.

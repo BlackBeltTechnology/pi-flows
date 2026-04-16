@@ -18,7 +18,7 @@ export interface FlowManagerConfig {
   getPkgRoot: () => string;
   getAuthStorage: () => any;
   getModelRegistry: () => any;
-  getExtraGuardFactories: () => any[];
+  getExtraAgentExtensions: () => any[];
   getExtensionTools: () => any[];
   getSkillContent: (name: string) => string | undefined;
   isAutonomous: () => boolean;
@@ -95,7 +95,7 @@ export class FlowManager {
       cwd: config.getProjectRoot(),
       authStorage: config.getAuthStorage(),
       modelRegistry: config.getModelRegistry(),
-      extraGuardFactories: config.getExtraGuardFactories(),
+      extraAgentExtensions: config.getExtraAgentExtensions(),
       extraCustomTools: config.getExtensionTools(),
       signal: abortController.signal,
       isAutonomous: () => config.isAutonomous(),

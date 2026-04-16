@@ -11,7 +11,7 @@ export function registerSubagentTool(
   cwd: string,
   getAuthStorage: () => AuthStorage | undefined,
   getModelRegistry: () => ModelRegistry | undefined,
-  getExtraGuardFactories: () => ExtensionFactory[],
+  getExtraAgentExtensions: () => ExtensionFactory[],
 ): void {
   pi.registerTool({
     name: "subagent",
@@ -29,7 +29,7 @@ export function registerSubagentTool(
       const templateCtx = { task: params.task || "", inputs: {}, results: {}, forks: {} };
       const authStorage = getAuthStorage();
       const modelRegistry = getModelRegistry();
-      const extraGuardFactories = getExtraGuardFactories();
+      const extraAgentExtensions = getExtraAgentExtensions();
 
       if (params.mode === "single" && params.agent) {
         const agentConfig = getAgents().get(params.agent);
@@ -37,7 +37,7 @@ export function registerSubagentTool(
 
         const result = await spawnAgent({
           agent: agentConfig, task: params.task || "", templateContext: templateCtx,
-          getModelRole, cwd, authStorage, modelRegistry, extraGuardFactories,
+          getModelRole, cwd, authStorage, modelRegistry, extraAgentExtensions,
         });
         return { content: [{ type: "text" as const, text: result.output }], details: {} };
       }
@@ -48,7 +48,7 @@ export function registerSubagentTool(
           if (!agentConfig) return `Agent not found: ${entry.agent}`;
           const result = await spawnAgent({
             agent: agentConfig, task: entry.task, templateContext: { ...templateCtx, task: entry.task },
-            getModelRole, cwd, authStorage, modelRegistry, extraGuardFactories,
+            getModelRole, cwd, authStorage, modelRegistry, extraAgentExtensions,
           });
           return `=== Parallel Task ${i + 1} (${entry.agent}) ===\n${result.output}`;
         }));

@@ -110,7 +110,7 @@ Each agent runs as an in-process isolated session with controlled capabilities:
 1. **Tool scoping** — `AGENT_ALLOWED_TOOLS` env var parsed into a Set. Only declared tools + `finish` are permitted.
 2. **File access** — `access.read` and `access.write` glob patterns control filesystem operations.
 3. **Bash deny list** — `access.bash.deny` patterns block specific shell commands.
-4. **Extension guards** — domain packages can register additional guards via `flow:register-guard-extension` for custom sandboxing rules.
+4. **Agent extensions** — domain packages can register additional extensions (guards, provider middleware, custom tools) into spawned agent sessions via `flow:register-agent-extension`.
 
 ## Flow Execution Model
 

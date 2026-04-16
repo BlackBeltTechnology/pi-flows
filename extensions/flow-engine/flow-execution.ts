@@ -45,7 +45,7 @@ export interface FlowRunOptions {
   cwd: string;
   authStorage?: any;
   modelRegistry?: any;
-  extraGuardFactories?: any[];
+  extraAgentExtensions?: any[];
   /** Extension-registered custom tool definitions passed to spawned agent sessions. */
   extraCustomTools?: any[];
   getModelRole?: (role: string) => string | undefined;
@@ -525,7 +525,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
-    extraGuardFactories: options.extraGuardFactories,
+    extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
     onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
     onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
@@ -594,7 +594,7 @@ async function spawnForkDecisionAgent(
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
-    extraGuardFactories: options.extraGuardFactories,
+    extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
     decisionBranches: branchNames,
     onToolCall: (name, input) => options.onToolCall?.(agentName, step.id, name, input),
@@ -776,7 +776,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
-    extraGuardFactories: options.extraGuardFactories,
+    extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: branchNames,
     onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
@@ -850,7 +850,7 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
-    extraGuardFactories: options.extraGuardFactories,
+    extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: ["loop", "exit"],
     onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),

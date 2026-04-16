@@ -18,6 +18,7 @@ import {
   findSkillDir,
 } from "./tools/skill-read.js";
 import { registerAgentCatalogTool } from "./tools/agent-catalog.js";
+import { createAnthropicOAuthTransformFactory } from "./anthropic-oauth-transform.js";
 import { registerAgentWriteTool } from "./tools/agent-write.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { existsSync, rmSync, readFileSync } from "node:fs";
@@ -59,7 +60,12 @@ let flows = new Map<string, FlowConfig>();
 let packageRoot = "";
 const extraAgentsDirs: string[] = [];
 const extraFlowsDirs: string[] = [];
-const extraGuardFactories: any[] = [];
+const extraAgentExtensions: any[] = [
+  // Built-in: Anthropic OAuth payload transform for agent sessions.
+  // See anthropic-oauth-transform.ts for details. Remove this line if
+  // Anthropic drops the OAuth tool filtering restriction.
+  createAnthropicOAuthTransformFactory(),
+];
 const registeredExtensionTools: any[] = [];
 
 export function getDiscoveredAgents(): Map<string, AgentConfig> {
@@ -158,7 +164,7 @@ export function activate(pi: ExtensionAPI) {
       getPkgRoot: () => pkgRoot,
       getAuthStorage: () => sessionAuthStorage,
       getModelRegistry: () => sessionModelRegistry,
-      getExtraGuardFactories: () => [...extraGuardFactories],
+      getExtraAgentExtensions: () => [...extraAgentExtensions],
       getExtensionTools: () => [...registeredExtensionTools],
       getSkillContent: (skillName) => {
         const dir = findSkillDir(pkgRoot, skillName);
@@ -291,19 +297,24 @@ export function activate(pi: ExtensionAPI) {
     if (dir) registerExtraSkillsDir(dir);
   });
 
-  pi.events?.on("flow:register-guard-extension", (data) => {
+  const handleRegisterAgentExtension = (data: unknown) => {
     const entry = data as { factory?: any; path?: string };
     if (entry.factory) {
-      extraGuardFactories.push(entry.factory);
+      extraAgentExtensions.push(entry.factory);
     } else if (entry.path) {
       const filePath = entry.path;
       const factory = async (piApi: any) => {
         const mod = await import(filePath);
         if (mod.default) mod.default(piApi);
       };
-      extraGuardFactories.push(factory);
+      extraAgentExtensions.push(factory);
     }
-  });
+  };
+
+  pi.events?.on("flow:register-agent-extension", handleRegisterAgentExtension);
+
+  // Deprecated alias — kept for backward compatibility
+  pi.events?.on("flow:register-guard-extension", handleRegisterAgentExtension);
 
   // ── Register tools ──
 
@@ -314,7 +325,7 @@ export function activate(pi: ExtensionAPI) {
     projectRoot,
     () => sessionAuthStorage,
     () => sessionModelRegistry,
-    () => [...extraGuardFactories],
+    () => [...extraAgentExtensions],
   );
 
   registerAskUserTool(pi);
@@ -459,7 +470,7 @@ export function activate(pi: ExtensionAPI) {
   pi.events.on("flow:get-spawn-context", (data: any) => {
     data.authStorage = sessionAuthStorage;
     data.modelRegistry = sessionModelRegistry;
-    data.extraGuardFactories = [...extraGuardFactories];
+    data.extraAgentExtensions = [...extraAgentExtensions];
     data.extensionTools = [...registeredExtensionTools];
   });
 }
