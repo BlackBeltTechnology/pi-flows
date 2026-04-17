@@ -97,7 +97,7 @@ export interface SpawnOptions {
  * ExtensionAPI that records handlers and tools into an Extension-shaped
  * object, which the ExtensionRunner will later bind with real actions.
  */
-function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any, toolPrefix: string = ""): any {
+async function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any, toolPrefix: string = ""): Promise<any> {
   const handlers = new Map<string, any[]>();
   const tools = new Map<string, any>();
 
@@ -139,8 +139,12 @@ function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any, tool
     events: createEventBus(),
   };
 
-  // Run the factory — it calls api.on() and api.registerTool()
-  factory(api);
+  // Run the factory — it calls api.on() and api.registerTool().
+  // MUST await: see the doc comment above. Async factories (e.g. the
+  // pi-anthropic-messages adapter that dynamic-imports the package before
+  // registering hooks) will otherwise return a pending Promise and leave
+  // `handlers` empty.
+  await factory(api);
 
   // Return Extension-shaped object
   return {
@@ -296,7 +300,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   const extensions: any[] = [];
   for (const factory of extensionFactories) {
     try {
-      const ext = buildExtensionFromFactory(factory, runtime, toolPrefix);
+      // MUST await — see buildExtensionFromFactory doc comment. Async
+      // factories (pi-anthropic-messages adapter, etc.) register hooks
+      // only after their internal awaits resolve.
+      const ext = await buildExtensionFromFactory(factory, runtime, toolPrefix);
       extensions.push(ext);
     } catch {
       // Skip failed extensions
