@@ -18,7 +18,7 @@ import {
   findSkillDir,
 } from "./tools/skill-read.js";
 import { registerAgentCatalogTool } from "./tools/agent-catalog.js";
-import { createAnthropicOAuthTransformFactory } from "./anthropic-oauth-transform.js";
+import { anthropicMessagesAgentFactory } from "./anthropic-messages-adapter.js";
 import { registerAgentWriteTool } from "./tools/agent-write.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { existsSync, rmSync, readFileSync } from "node:fs";
@@ -61,10 +61,12 @@ let packageRoot = "";
 const extraAgentsDirs: string[] = [];
 const extraFlowsDirs: string[] = [];
 const extraAgentExtensions: any[] = [
-  // Built-in: Anthropic OAuth payload transform for agent sessions.
-  // See anthropic-oauth-transform.ts for details. Remove this line if
-  // Anthropic drops the OAuth tool filtering restriction.
-  createAnthropicOAuthTransformFactory(),
+  // Delegate anthropic-messages payload transforms to @pi/anthropic-messages
+  // (if installed). Propagates the main session's mcp__ prefixing +
+  // inbound-response translation to each spawned subagent. See
+  // anthropic-messages-adapter.ts for the direction-of-dependency rationale.
+  // No-op when the package is not installed.
+  anthropicMessagesAgentFactory,
 ];
 const registeredExtensionTools: any[] = [];
 
