@@ -14,6 +14,7 @@ import type {
   AgentDecisionStep,
   AgentLoopDecisionStep,
   FlowRefStep,
+  ShellStep,
 } from "./types.js";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
@@ -44,6 +45,15 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
   const task_required = doc.task_required === true || doc.task_required === "true";
   const task_prompt = doc.task_prompt ? String(doc.task_prompt) : undefined;
 
+  // Parse optional flow-level config map
+  let config: Record<string, string> | undefined;
+  if (doc.config && typeof doc.config === "object" && !Array.isArray(doc.config)) {
+    config = {};
+    for (const [k, v] of Object.entries(doc.config)) {
+      config[k] = String(v);
+    }
+  }
+
   const rawSteps = doc.steps;
   if (!Array.isArray(rawSteps)) {
     throw new Error(`Flow YAML must have a "steps" array: ${source}`);
@@ -57,6 +67,7 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
     ...(max_concurrent !== undefined ? { max_concurrent } : {}),
     ...(task_required ? { task_required } : {}),
     ...(task_prompt ? { task_prompt } : {}),
+    ...(config ? { config } : {}),
     steps,
     source,
   };
@@ -85,6 +96,7 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
     case "agent-decision": return parseAgentDecisionStep(raw, source);
     case "agent-loop-decision": return parseAgentLoopDecisionStep(raw, source);
     case "flow-ref": return parseFlowRefStep(raw, source);
+    case "shell": return parseShellStep(raw, source);
     default:
       throw new Error(`Unknown step type "${stepType}" for step "${id}": ${source}`);
   }
@@ -96,6 +108,7 @@ function inferStepType(raw: any): string {
   if (raw.check) return "conditional";
   if (raw.path) return "flow-ref";
   if (raw.branches && !raw.question) return "agent-decision";
+  if (raw.command) return "shell";
   if (raw.agent) return "agent";
   return "agent"; // default
 }
@@ -207,6 +220,27 @@ function parseFlowRefStep(raw: any, source: string): FlowRefStep {
 
   if (raw.on_complete) step.on_complete = String(raw.on_complete);
   if (raw.on_error) step.on_error = String(raw.on_error);
+
+  return step;
+}
+
+function parseShellStep(raw: any, source: string): ShellStep {
+  const step: ShellStep = {
+    stepType: "shell",
+    id: raw.id,
+    command: requireString(raw, "command", source),
+  };
+
+  if (raw.timeout !== undefined) step.timeout = toInt(raw.timeout, source);
+  if (raw.on_complete) step.on_complete = String(raw.on_complete);
+  if (raw.on_error) step.on_error = String(raw.on_error);
+
+  if (raw.config && typeof raw.config === "object" && !Array.isArray(raw.config)) {
+    step.config = {};
+    for (const [k, v] of Object.entries(raw.config)) {
+      step.config[k] = String(v);
+    }
+  }
 
   return step;
 }
