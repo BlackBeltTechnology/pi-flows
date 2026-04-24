@@ -1,10 +1,12 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult } from "./types.js";
+import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, ShellStep, TemplateContext, AgentResult, FlowResult } from "./types.js";
 import { expandTemplateVariables, spawnAgent } from "./execution.js";
 import { resolveModel } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
 import { globSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { parse as parseYaml } from "yaml";
 
 // ---- Flow cancellation error -----------------------------------------------
 
@@ -385,6 +387,7 @@ async function executeStep(step: FlowStep, ctx: FlowContext, options: FlowRunOpt
     case "agent-decision": return executeAgentDecisionStep(step, ctx, options);
     case "agent-loop-decision": return executeAgentLoopDecisionStep(step, ctx, options);
     case "flow-ref": return executeFlowRefStep(step, ctx, options);
+    case "shell": return executeShellStep(step, ctx, options);
   }
 }
 
@@ -867,6 +870,136 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     return { nextStepId: step.loop_target, agentResult: result };
   }
   return { nextStepId: step.exit_target, agentResult: result };
+}
+
+// ---- Shell step execution -------------------------------------------------
+
+/** Default timeout for shell steps: 30 minutes */
+const SHELL_DEFAULT_TIMEOUT_SECS = 1800;
+
+/**
+ * Load the global config from `.pi/flows/config.yaml` if it exists.
+ * Returns an empty object if the file is missing or unparseable.
+ */
+function loadGlobalConfig(cwd: string): Record<string, string> {
+  const configPath = join(cwd, ".pi", "flows", "config.yaml");
+  if (!existsSync(configPath)) return {};
+  try {
+    const raw = readFileSync(configPath, "utf-8");
+    const doc = parseYaml(raw);
+    if (!doc || typeof doc !== "object" || Array.isArray(doc)) return {};
+    const result: Record<string, string> = {};
+    for (const [k, v] of Object.entries(doc)) {
+      result[k] = String(v);
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Merge config layers: global -> flow -> step (highest wins).
+ */
+function mergeConfig(
+  globalConfig: Record<string, string>,
+  flowConfig: Record<string, string> | undefined,
+  stepConfig: Record<string, string> | undefined,
+): Record<string, string> {
+  return { ...globalConfig, ...(flowConfig ?? {}), ...(stepConfig ?? {}) };
+}
+
+async function executeShellStep(step: ShellStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
+  const startTime = Date.now();
+  const timeoutMs = (step.timeout ?? SHELL_DEFAULT_TIMEOUT_SECS) * 1000;
+
+  // Build merged config: global -> flow -> step
+  const globalCfg = loadGlobalConfig(options.cwd);
+  const flowCfg = options.flow.config;
+  const merged = mergeConfig(globalCfg, flowCfg, step.config);
+
+  // Build template context with merged config
+  const templateCtx: TemplateContext = {
+    task: ctx.task,
+    inputs: {},
+    results: ctx.results,
+    loopCounters: ctx.loopCounters,
+    loopMaxIterations: ctx.loopMaxIterations,
+    config: merged,
+  };
+
+  const command = expandTemplateVariables(step.command, templateCtx);
+
+  // Notify observers that the step has started (using step id as agent name)
+  options.onAgentStarted?.(step.id, step.id);
+
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | null = null;
+  let timedOut = false;
+
+  await new Promise<void>((resolve) => {
+    const child = spawn("sh", ["-c", command], {
+      cwd: options.cwd,
+      env: { ...process.env },
+    });
+
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+    }, timeoutMs);
+
+    // Wire abort signal
+    const onAbort = () => { child.kill("SIGTERM"); };
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      exitCode = code;
+      resolve();
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      stderr += `\nProcess error: ${err.message}`;
+      resolve();
+    });
+  });
+
+  const duration = Date.now() - startTime;
+  const timeoutSecs = step.timeout ?? SHELL_DEFAULT_TIMEOUT_SECS;
+  const success = !timedOut && exitCode === 0;
+  const summary = timedOut
+    ? `Timed out after ${timeoutSecs}s`
+    : `Exited with code ${exitCode ?? "unknown"}`;
+
+  const result: AgentResult = {
+    success,
+    output: stdout,
+    stderr,
+    exitCode,
+    result: {
+      status: success ? "complete" : "error",
+      summary,
+      files: [],
+      artifacts: "",
+    },
+    toolCalls: [],
+    duration,
+    tokens: { input: 0, output: 0 },
+  };
+
+  options.onAgentComplete?.(step.id, step.id, result);
+  storeResult(ctx, step.id, result);
+
+  const nextStepId = success ? step.on_complete : step.on_error;
+  return { agentResult: result, nextStepId };
 }
 
 async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
