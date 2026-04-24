@@ -14,6 +14,7 @@ import type {
   AgentDecisionStep,
   AgentLoopDecisionStep,
   FlowRefStep,
+  ShellStep,
 } from "../flow-engine/types.js";
 import { renderBox } from "./box-renderer.js";
 
@@ -32,6 +33,7 @@ const SYMBOLS: Record<string, string> = {
   "agent-decision": "◈",
   "agent-loop-decision": "↻",
   "flow-ref": "▷",
+  shell: "$",
 };
 
 export interface FlowPreviewOverlayOptions {
@@ -143,6 +145,21 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
         if (s.on_error) lines.push(`     ${fg("dim", `→ on_error: ${s.on_error}`)}`);
         break;
       }
+
+      case "shell": {
+        const s = step as ShellStep;
+        const timeoutStr = s.timeout ? ` (timeout: ${s.timeout}s)` : "";
+        lines.push(`  ${fg("dim", num)} ${fg("accent", sym)} ${fg("accent", s.id)} ${fg("dim", `(shell${timeoutStr})`)}`);
+        lines.push(`     ${fg("muted", truncate("command: " + s.command, inner - 5))}`);
+        if (s.config) {
+          for (const [k, v] of Object.entries(s.config)) {
+            lines.push(`     ${fg("dim", `config: ${k}=${v}`)}`);
+          }
+        }
+        if (s.on_complete) lines.push(`     ${fg("dim", `→ on_complete: ${s.on_complete}`)}`);
+        if (s.on_error) lines.push(`     ${fg("dim", `→ on_error: ${s.on_error}`)}`);
+        break;
+      }
     }
 
     lines.push(""); // blank line between steps
@@ -210,7 +227,7 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
   }
 
   // ── Legend ──
-  lines.push(fg("dim", `  Legend: ○ agent  ◇ fork  ◆ conditional  ◈ decision  ↻ loop  ▷ flow-ref`));
+  lines.push(fg("dim", `  Legend: ○ agent  ◇ fork  ◆ conditional  ◈ decision  ↻ loop  ▷ flow-ref  $ shell`));
   lines.push("");
   lines.push(fg("dim", "  ↑ ↓ scroll · Backspace close"));
 
