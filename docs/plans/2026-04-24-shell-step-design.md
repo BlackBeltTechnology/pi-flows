@@ -173,13 +173,31 @@ case "shell": return executeShellStep(step, ctx, options);
 
 ## Files to Change
 
+### Must change
+
 | File | Change |
 |---|---|
 | `extensions/flow-engine/types.ts` | Add `ShellStep`, extend `FlowStep` union, add `config` to `FlowConfig`, add `config` to `TemplateContext` |
-| `extensions/flow-engine/flow-parser-yaml.ts` | Parse `type: shell`, `config:` at flow level, `parseShellStep()` |
-| `extensions/flow-engine/execution.ts` | Add `${{config.key}}` to `expandTemplateVariables()`, accept `config` in `TemplateContext` |
-| `extensions/flow-engine/flow-execution.ts` | `executeShellStep()`, update `executeStep()` switch, load global config, pass merged config into template context |
-| `extensions/flow-engine/tools/flow-validate.ts` | Validate shell steps |
+| `extensions/flow-engine/flow-parser-yaml.ts` | `inferStepType()` add `command` → `shell`; `parseShellStep()`; parse top-level `config:` block |
+| `extensions/flow-engine/execution.ts` | Add `${{config.key}}` to `expandTemplateVariables()`; accept `config` in `TemplateContext` |
+| `extensions/flow-engine/flow-execution.ts` | `executeShellStep()`, update `executeStep()` switch, load global `.pi/flows/config.yaml`, pass merged config (global → flow → step) into template context |
+| `extensions/flow-engine/tools/flow-validate.ts` | Add `case "shell"` in agent-ref validation switch; validate `command` required, `timeout` positive integer; add `"config"` to `knownPrefixes` for template variable validation; warn if `on_error` missing |
+| `extensions/flow-dashboard/flow-preview-overlay.ts` | Add `shell: "⬡"` (or similar) to `SYMBOLS`; add `case "shell"` render block showing `command`, `timeout`, `on_complete`, `on_error` |
+
+### No change needed
+
+| File | Reason |
+|---|---|
+| `extensions/flow-engine/flow-manager.ts` | Purely orchestrates — agnostic to step types |
+| `extensions/flow-engine/flow-io.ts` | Observer interfaces are step-type agnostic |
+| `extensions/flow-engine/flow-tui.ts` | `EventEmitObserver` serializes step metadata generically; `TuiFlowObserver` delegates to dashboard which handles any agent name |
+| `extensions/flow-engine/index.ts` | `extractAgentConfigs()` and `buildAgentDeps()` already filter `stepType === "agent"` — shell steps are correctly skipped |
+| `extensions/flow-dashboard/architect-widget.ts` | Tracks agents from tool calls, not step type enum |
+| `extensions/flow-workspace/index.ts` | Passes `stepType` through generically already |
+| `extensions/flow-engine/tools/agent-validate.ts` | Agent-only, unrelated |
+| `extensions/flow-engine/tools/agent-write.ts` | Agent-only, unrelated |
+| `extensions/flow-engine/tools/ask-user.ts` | Unrelated |
+| `extensions/flow-engine/tools/skill-read.ts` | Unrelated |
 
 ---
 
