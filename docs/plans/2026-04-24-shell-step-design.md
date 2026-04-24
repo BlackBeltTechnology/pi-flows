@@ -183,9 +183,24 @@ case "shell": return executeShellStep(step, ctx, options);
 
 ---
 
+## Documentation Updates
+
+| File | Change |
+|------|--------|
+| `README.md` | Shell step example in "Writing Flows" section; `${{config.key}}` in template variables |
+| `docs/flows.md` | Shell Step section (syntax, fields, config resolution, CI example); `${{config.key}}` in template variable table; `config:` in flow frontmatter |
+| `docs/flow-authoring.md` | Shell step as step type #2; `config:` in top-level flow structure; `command` in infer table; `${{config.key}}` and `${{result.X.output}}` in template variables |
+
+## Tests
+
+No test infrastructure exists in the project (only `extensions/flow-dashboard/tests-card.ts` which is a type file, not a test runner). Tests are out of scope for this feature until a test framework is introduced.
+
+---
+
 ## Out of Scope
 
 - Configurable shell binary (always `sh -c`)
 - File tracking for shell steps (no `result.files` population)
 - Streaming shell output to TUI in real-time (output available after completion)
 - Shell steps inside DAG segments (they are always separators)
+- Test suite (no test framework in the project yet)

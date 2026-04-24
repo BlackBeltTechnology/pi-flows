@@ -21,6 +21,9 @@ description: Research the codebase then implement changes
 max_concurrent: 2
 task_required: true
 task_prompt: "What feature should I research and implement?"
+config:
+  package_manager: pnpm
+  node_env: production
 ---
 ```
 
@@ -31,6 +34,7 @@ task_prompt: "What feature should I research and implement?"
 | `max_concurrent` | | Maximum agents running in parallel (default: `4`) |
 | `task_required` | | When `true`, prompts the user for a task if none was provided |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
+| `config` | | Key-value config map. Values accessible as `${{config.key}}` in shell step commands. Overrides global `.pi/flows/config.yaml`. |
 
 > **Command name = file path, not `name:` field.** The slash command is derived from the file path:
 >
@@ -271,6 +275,83 @@ steps:
 
 ---
 
+### Shell Step
+
+Run a shell command directly within a flow. No agent is dispatched — the command executes immediately and the result is stored like any other step result.
+
+**Syntax:**
+
+```yaml
+  - id: build
+    type: shell
+    command: "${{config.package_manager}} run build"
+    timeout: 300
+    config:
+      package_manager: yarn    # per-step override
+    on_complete: test
+    on_error: notify
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `id` | ✓ | Unique step identifier |
+| `command` | ✓ | Shell command to run. Template string — supports `${{config.key}}`, `${{task}}`, `${{result.X.field}}`. |
+| `timeout` | | Seconds before the command is killed. Default: `1800` (30 min). Routes to `on_error` on timeout. |
+| `config` | | Per-step config overrides. Merged on top of flow-level and global config. |
+| `on_complete` | | Step ID to route to when exit code is `0`. |
+| `on_error` | | Step ID to route to on non-zero exit code or timeout. |
+
+**Execution:**
+- Runs as `sh -c "<command>"` from the project root.
+- stdout is captured as the step output; stderr is captured separately.
+- Downstream steps access output via `${{result.build.output}}` (stdout), `${{result.build.status}}` (`complete` or `error`).
+
+**Config system (3-layer resolution, highest wins):**
+1. Per-step `config:` on the shell step
+2. Flow-level `config:` at the top of the flow YAML
+3. Global `.pi/flows/config.yaml` in the project root
+
+**Global config file (`.pi/flows/config.yaml`):**
+
+```yaml
+package_manager: pnpm
+node_env: production
+```
+
+**Example — CI pipeline with configurable package manager:**
+
+```yaml
+name: ci
+description: Build, test, and deploy
+config:
+  package_manager: pnpm
+
+steps:
+  - id: build
+    type: shell
+    command: "${{config.package_manager}} run build"
+    on_complete: test
+    on_error: notify
+
+  - id: test
+    type: shell
+    command: "${{config.package_manager}} run test"
+    on_complete: report
+    on_error: notify
+
+  - id: report
+    agent: reporter
+    task: "Build: ${{result.build.status}}, Tests: ${{result.test.status}}"
+
+  - id: notify
+    agent: notifier
+    task: "Step failed. Build: ${{result.build.output}}, Tests: ${{result.test.output}}"
+```
+
+---
+
 ### Flow Reference Step
 
 Delegate execution to another flow file. The sub-flow runs to completion before continuing.
@@ -308,6 +389,7 @@ Template variables are placeholders in `task`, `inputs`, and `question` fields. 
 |----------|-------------|
 | `${{task}}` | The task passed when the flow was invoked |
 | `${{input.NAME}}` | A wired input value (from the `inputs:` block) |
+| `${{config.KEY}}` | A config value — resolved from per-step → flow-level → global `.pi/flows/config.yaml` |
 | `${{result.STEP-ID}}` | Full raw output from a completed step |
 | `${{result.STEP-ID.summary}}` | Summary from `finish(summary:)` |
 | `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |

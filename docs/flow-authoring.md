@@ -259,6 +259,9 @@ description: What this flow does # REQUIRED — shown in listings
 max_concurrent: 3                # optional — parallel agent cap (default: 4)
 task_required: true              # optional — prompt user for task if no args given
 task_prompt: "Enter your task:"  # optional — custom prompt text
+config:                          # optional — flow-level config for shell steps
+  package_manager: pnpm
+  node_env: production
 
 steps:
   - ...
@@ -272,6 +275,7 @@ steps:
 | `max_concurrent` | No | `4` | Maximum number of agent steps running in parallel within a DAG segment. |
 | `task_required` | No | `false` | When `true`, prompts the user for a task description if the slash-command is invoked with no arguments. The answer becomes `${{task}}`. |
 | `task_prompt` | No | `"Describe what you want <name> to do:"` | Custom prompt text shown when `task_required` triggers. |
+| `config` | No | `{}` | Key-value config map. Values accessible as `${{config.key}}` in shell step `command` fields. Overrides global `.pi/flows/config.yaml`. |
 
 ---
 
@@ -304,7 +308,10 @@ Every step requires a unique `id` field. The `type` field is optional — the en
 | `check` | `conditional` |
 | `path` (no `agent`) | `flow-ref` |
 | `branches` (no `question`) | `agent-decision` |
+| `command` | `shell` |
 | `agent` or none | `agent` |
+
+Use explicit `type: shell` when the inference would be ambiguous (e.g. a step that has both `command` and other fields).
 
 Use explicit `type:` when the inference would be ambiguous.
 
@@ -357,7 +364,100 @@ The primary step type. Dispatches a named agent with an optional task and inputs
 
 ---
 
-#### 2. Fork step
+#### 2. Shell step
+
+Runs a shell command directly. No agent is dispatched — the command executes in a subprocess and stdout/stderr are captured as the step result.
+
+```yaml
+- id: build
+  type: shell
+  command: "${{config.package_manager}} run build"
+  timeout: 300          # seconds; default 1800 (30 min)
+  config:
+    package_manager: yarn   # per-step override
+  on_complete: test
+  on_error: notify
+```
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `id` | Yes | — | Unique step identifier. |
+| `command` | Yes | — | Command to run. Expanded as a template string: `${{config.key}}`, `${{task}}`, `${{result.X.field}}` all work. |
+| `timeout` | No | `1800` | Seconds before the process is killed (`SIGTERM` → `SIGKILL`). Routes to `on_error` on timeout. |
+| `config` | No | `{}` | Per-step config overrides. Merged on top of flow-level `config:` and global `.pi/flows/config.yaml`. |
+| `on_complete` | No | — | Step ID to route to when exit code is `0`. |
+| `on_error` | No | — | Step ID to route to on non-zero exit code or timeout. |
+
+**Execution details:**
+- Runs as `sh -c "<command>"` from the project root (`cwd`).
+- stdout is stored as `output`; stderr stored as `stderr`.
+- Shell steps are **separator steps** — they break DAG parallelism (agent steps before and after run in separate parallel segments).
+
+**Result fields available to downstream steps:**
+
+| Template expression | Value |
+|---------------------|-------|
+| `${{result.build.status}}` | `complete` (exit 0) or `error` (non-zero / timeout) |
+| `${{result.build.output}}` | Full stdout |
+| `${{result.build.summary}}` | `"Exited with code 0"` / `"Exited with code 1"` / `"Timed out after 300s"` |
+
+**Config resolution order (highest wins):**
+1. Per-step `config:` on the shell step
+2. Flow-level `config:` in the flow YAML
+3. Global `.pi/flows/config.yaml`
+
+**Global config file** (`.pi/flows/config.yaml`):
+```yaml
+package_manager: pnpm
+node_env: production
+```
+
+**Example — npm/make pipeline:**
+
+```yaml
+name: build-and-test
+description: Build and run tests
+config:
+  package_manager: pnpm
+
+steps:
+  - id: install
+    type: shell
+    command: "${{config.package_manager}} install"
+    on_complete: build
+    on_error: abort
+
+  - id: build
+    type: shell
+    command: "${{config.package_manager}} run build"
+    on_complete: test
+    on_error: abort
+
+  - id: test
+    type: shell
+    command: "${{config.package_manager}} run test"
+    timeout: 600
+    on_complete: summarize
+    on_error: fix
+
+  - id: fix
+    agent: developer
+    task: >-
+      Tests failed. Fix the issues.
+      Test output: ${{result.test.output}}
+
+  - id: summarize
+    agent: reporter
+    task: "All steps passed. Build: ${{result.build.status}}, Tests: ${{result.test.status}}"
+
+  - id: abort
+    agent: notifier
+    task: "Step failed. Output: ${{result.install.output}}${{result.build.output}}"
+```
+
+---
+
+#### 3. Fork step
 
 Presents a choice to the user and routes to different steps based on the selection. In autonomous mode, the `agent:` field provides an agent to decide automatically.
 
@@ -395,7 +495,7 @@ Presents a choice to the user and routes to different steps based on the selecti
 
 ---
 
-#### 3. Conditional step
+#### 4. Conditional step
 
 Binary branch based on whether a result field is empty or non-empty.
 
@@ -418,7 +518,7 @@ No regex or value comparison — purely presence/absence.
 
 ---
 
-#### 4. Agent decision step
+#### 5. Agent decision step
 
 An agent evaluates options and calls `finish({ branch: "chosen" })` to select the route.
 
@@ -445,7 +545,7 @@ The guard injects the branch names into the `finish` tool parameters as a union 
 
 ---
 
-#### 5. Agent loop decision step
+#### 6. Agent loop decision step
 
 Iterative loop control. An agent decides to loop back or continue forward.
 
@@ -509,7 +609,7 @@ The agent calls `finish({ branch: "<loop_target>" })` to loop or `finish({ branc
 
 ---
 
-#### 6. Flow reference step
+#### 7. Flow reference step
 
 Delegate execution to another flow file, optionally using a glob pattern.
 
@@ -540,8 +640,10 @@ Template expressions `${{...}}` are expanded in `task`, `inputs` values, `questi
 |----------|------------|
 | `${{task}}` | The original user task string (from command args or `task_required` prompt). |
 | `${{input.NAME}}` | Named input passed to this step via the `inputs:` block. |
+| `${{config.KEY}}` | Config value — resolved from per-step `config:` → flow-level `config:` → global `.pi/flows/config.yaml`. Primarily used in shell step `command` fields. |
 | `${{result.STEP_ID.status}}` | Step result status: `"complete"`, `"error"`, `"blocked"`, `"unknown"`. |
-| `${{result.STEP_ID.summary}}` | Summary string from the step's `finish` call. |
+| `${{result.STEP_ID.summary}}` | Summary string from the step's `finish` call (agent steps) or `"Exited with code N"` (shell steps). |
+| `${{result.STEP_ID.output}}` | Full stdout for shell steps; full raw output for agent steps. |
 | `${{result.STEP_ID.artifacts}}` | Raw artifacts XML from the step. |
 | `${{result.STEP_ID.files}}` | Comma-separated list of files created/modified. |
 | `${{result.STEP_ID.fullOutput}}` | Full raw output text. Use sparingly — can be very large. |
