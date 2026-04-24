@@ -59,6 +59,7 @@ export interface FlowConfig {
   max_concurrent?: number;
   task_required?: boolean; // Prompt user for task if no command args provided
   task_prompt?: string; // Custom prompt text (default: "Describe what you want <name> to do:")
+  config?: Record<string, string>; // Flow-level config — values accessible as ${{config.key}} in shell step commands
   steps: FlowStep[];
   source: string; // File path where this flow was discovered
 }
@@ -71,7 +72,8 @@ export type FlowStep =
   | ConditionalStep
   | AgentDecisionStep
   | AgentLoopDecisionStep
-  | FlowRefStep;
+  | FlowRefStep
+  | ShellStep;
 
 export interface AgentStep {
   stepType: "agent";
@@ -130,6 +132,16 @@ export interface FlowRefStep {
   path: string; // Path or glob to flow file(s)
   on_complete?: string;
   on_error?: string;
+}
+
+export interface ShellStep {
+  stepType: "shell";
+  id: string;
+  command: string; // Shell command to run — template string, supports ${{config.key}}, ${{task}}, ${{result.X.field}}
+  timeout?: number; // Seconds before process is killed. Default: 1800 (30 min)
+  config?: Record<string, string>; // Per-step config overrides — merged on top of flow-level and global config
+  on_complete?: string; // Route to step ID on exit code 0
+  on_error?: string; // Route to step ID on non-zero exit or timeout
 }
 
 // ---- Routing directives ---------------------------------------------------
@@ -243,4 +255,5 @@ export interface TemplateContext {
   >;
   loopCounters?: Record<string, number>;
   loopMaxIterations?: Record<string, number>;
+  config?: Record<string, string>; // Merged config for ${{config.key}} expansion (global -> flow -> step)
 }
