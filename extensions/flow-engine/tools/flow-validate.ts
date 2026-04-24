@@ -20,6 +20,7 @@ import type {
   AgentDecisionStep,
   AgentLoopDecisionStep,
   FlowRefStep,
+  ShellStep,
 } from "../types.js";
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
 
@@ -316,6 +317,37 @@ export function validateFlowContent(
           }
           break;
         }
+        case "shell": {
+          const s = step as ShellStep;
+          // command is required — parser already enforces this, but double-check semantically
+          if (!s.command || !s.command.trim()) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "command") || stepLine(idx, s.id),
+              severity: "error",
+              message: `Shell step "${s.id}" has an empty command`,
+              suggestion: "Provide a non-empty command string",
+            });
+          }
+          // timeout must be a positive integer if provided
+          if (s.timeout !== undefined && (s.timeout <= 0 || !Number.isInteger(s.timeout))) {
+            diagnostics.push({
+              line: stepPropLine(idx, s.id, "timeout") || stepLine(idx, s.id),
+              severity: "error",
+              message: `Shell step "${s.id}" timeout must be a positive integer (seconds)`,
+              suggestion: "Use a positive integer, e.g. timeout: 300",
+            });
+          }
+          // Warn if on_error is missing — shell commands can fail
+          if (!s.on_error) {
+            diagnostics.push({
+              line: stepLine(idx, s.id),
+              severity: "warning",
+              message: `Shell step "${s.id}" has no on_error handler — failures will end the flow silently`,
+              suggestion: "Add on_error: <step-id> to handle command failures",
+            });
+          }
+          break;
+        }
       }
     }
   }
@@ -461,6 +493,28 @@ export function validateFlowContent(
     }
   }
 
+  // 4e2. Shell step routing target validation
+  for (const step of flow.steps) {
+    if (step.stepType !== "shell") continue;
+    const s = step as ShellStep;
+    if (s.on_complete && !stepIds.has(s.on_complete)) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "on_complete") || stepLine(idx, s.id),
+        severity: "error",
+        message: `Shell step "${s.id}" on_complete references unknown step ID "${s.on_complete}"`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    }
+    if (s.on_error && !stepIds.has(s.on_error)) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "on_error") || stepLine(idx, s.id),
+        severity: "error",
+        message: `Shell step "${s.id}" on_error references unknown step ID "${s.on_error}"`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    }
+  }
+
   // 4f. Agent-loop-decision target validation
   for (const step of flow.steps) {
     if (step.stepType !== "agent-loop-decision") continue;
@@ -565,7 +619,7 @@ export function validateFlowContent(
 
   // ---- 5. Raw-line scans (template variables, deprecated syntax) ----------
 
-  const knownPrefixes = ["result", "input", "task", "loop"];
+  const knownPrefixes = ["result", "input", "task", "loop", "config"];
 
   // 5a. Primary syntax: ${{...}}
   for (let i = 0; i < lines.length; i++) {
