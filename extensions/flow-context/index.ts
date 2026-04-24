@@ -551,7 +551,7 @@ export function activate(pi: ExtensionAPI) {
           type: "form",
           title: "New Flow",
           fields: [
-            { key: "description", label: "What should the flow do?", type: "textarea", required: true, placeholder: "e.g. A flow that researches a topic and writes a report" }
+            { key: "description", label: "What should the flow do?", type: "textarea", required: true, placeholder: "e.g. A flow that researches a topic and writes a report", description: "Describe the purpose and steps of the flow. The architect will use this to design the agent pipeline." }
           ],
           actions: [
             { label: "Cancel", emit: "ui:navigate", params: { viewId: "list" } },
