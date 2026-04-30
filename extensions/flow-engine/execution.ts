@@ -546,6 +546,25 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     };
   }
 
+  // If finish was never called as a real tool (e.g. max_tokens truncation mid-call),
+  // try to recover finish params from text-embedded <tool_call> JSON blocks.
+  // The model sometimes outputs: <tool_call> {"name":"mcp__flows__finish","arguments":{...}} </tool_call>
+  if (!finishParams) {
+    const toolCallMatch = lastAssistantText.match(
+      /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/
+    );
+    if (toolCallMatch) {
+      try {
+        const parsed = JSON.parse(toolCallMatch[1]);
+        const args = parsed.arguments ?? parsed.args ?? parsed;
+        const baseName = (parsed.name ?? "").replace(/^mcp__[^_]+__/, "");
+        if (baseName === "finish" && args && typeof args === "object") {
+          finishParams = args;
+        }
+      } catch { /* ignore malformed JSON */ }
+    }
+  }
+
   // Build AgentResult from accumulated data
   const parsed = finishParams
     ? {

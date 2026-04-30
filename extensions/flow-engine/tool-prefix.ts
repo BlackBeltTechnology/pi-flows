@@ -23,6 +23,8 @@ export const CORE_TOOL_NAMES = new Set([
   "edit",
   "bash",
   "grep",
+  "find",
+  "ls",
   "glob",
   "askuserquestion",
   "enterplanmode",
