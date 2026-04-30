@@ -2,6 +2,7 @@
   "name": "pi-flows",
   "version": "0.1.0",
   "description": "Flow engine, dashboard, and orchestration extensions for pi",
+  "license": "MIT",
   "keywords": [
     "pi-package"
   ],
