@@ -432,6 +432,20 @@ async function handleEditFlow(
       }
     }
 
+    // Fallback: recover flowPath and createdFiles from finishParams.files when
+    // flow_write never fired as a real tool call (max_tokens truncation).
+    if (!flowPath && result.finishParams?.files) {
+      for (const f of result.finishParams.files) {
+        const p: string = f.path ?? "";
+        if (!p) continue;
+        allCreatedFiles.add(p);
+        createdFiles.push(p);
+        if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) {
+          flowPath = p;
+        }
+      }
+    }
+
     if (!flowPath) {
       // Architect failed to produce a flow
       const summary = result.result?.summary || result.output?.slice(0, 500) || "No details available";
@@ -764,6 +778,21 @@ async function handleNewFlow(
       if (baseName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
+      }
+    }
+
+    // Fallback: if flow_write never fired as a real tool call (e.g. finish was text-embedded
+    // after max_tokens truncation), recover flowPath and createdFiles from finishParams.files.
+    // The architect lists every file it wrote in its finish call.
+    if (!flowPath && result.finishParams?.files) {
+      for (const f of result.finishParams.files) {
+        const p: string = f.path ?? "";
+        if (!p) continue;
+        allCreatedFiles.add(p);
+        createdFiles.push(p);
+        if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) {
+          flowPath = p;
+        }
       }
     }
 
