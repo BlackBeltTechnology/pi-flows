@@ -421,11 +421,12 @@ async function handleEditFlow(
     createdFiles.length = 0;
 
     for (const tc of result.toolCalls) {
-      if (tc.toolName === "flow_write" && !tc.isError) {
+      const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
+      if (baseName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
-      if (tc.toolName === "agent_write" && !tc.isError) {
+      if (baseName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
       }
@@ -755,11 +756,12 @@ async function handleNewFlow(
     createdFiles.length = 0;
 
     for (const tc of result.toolCalls) {
-      if (tc.toolName === "flow_write" && !tc.isError) {
+      const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
+      if (baseName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
-      if (tc.toolName === "agent_write" && !tc.isError) {
+      if (baseName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
       }
