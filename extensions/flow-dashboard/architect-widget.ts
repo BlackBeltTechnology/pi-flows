@@ -349,7 +349,9 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
     // Track the most recent tool call for display (all tools, not just architect-specific)
     state.lastToolCall = { toolName, inputPreview: extractInputPreview(toolName, input) };
 
-    switch (toolName) {
+    // Strip mcp__<ns>__ prefix so bare name comparisons work regardless of API path
+    const baseToolName = toolName.replace(/^mcp__[^_]+__/, "");
+    switch (baseToolName) {
       case "agent_catalog":
         state.statusLeft = "Reading agent catalog\u2026";
         break;
@@ -462,7 +464,9 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
         break;
       }
     }
-    switch (toolName) {
+    // Strip mcp__<ns>__ prefix so bare name comparisons work regardless of API path
+    const baseToolResultName = toolName.replace(/^mcp__[^_]+__/, "");
+    switch (baseToolResultName) {
       case "agent_catalog": {
         // Store catalog metadata for source type resolution — don't add to display list
         try {

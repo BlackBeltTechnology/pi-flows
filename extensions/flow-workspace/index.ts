@@ -20,6 +20,7 @@ import {
 import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS, STAGING_FLOWS } from "./staging.js";
 import { join } from "node:path";
+import { resolveProjectRoot } from "../project-root.js";
 import { getModelRole } from "../role-manager.js";
 import { emitPromptAndAwait } from "../flow-engine/flow-prompt.js";
 import { parseFlowYamlString } from "../flow-engine/flow-parser-yaml.js";
@@ -421,13 +422,25 @@ async function handleEditFlow(
     createdFiles.length = 0;
 
     for (const tc of result.toolCalls) {
-      if (tc.toolName === "flow_write" && !tc.isError) {
+      const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
+      if (baseName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
-      if (tc.toolName === "agent_write" && !tc.isError) {
+      if (baseName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
+      }
+    }
+
+    // Fallback: recover from finishParams.files when flow_write never fired as a real tool call
+    if (!flowPath && result.finishParams?.files) {
+      for (const f of result.finishParams.files) {
+        const p: string = f.path ?? "";
+        if (!p) continue;
+        allCreatedFiles.add(p);
+        createdFiles.push(p);
+        if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) flowPath = p;
       }
     }
 
@@ -755,13 +768,25 @@ async function handleNewFlow(
     createdFiles.length = 0;
 
     for (const tc of result.toolCalls) {
-      if (tc.toolName === "flow_write" && !tc.isError) {
+      const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
+      if (baseName === "flow_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
       }
-      if (tc.toolName === "agent_write" && !tc.isError) {
+      if (baseName === "agent_write" && !tc.isError) {
         const path = tc.input?.path;
         if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
+      }
+    }
+
+    // Fallback: recover from finishParams.files when flow_write never fired as a real tool call
+    if (!flowPath && result.finishParams?.files) {
+      for (const f of result.finishParams.files) {
+        const p: string = f.path ?? "";
+        if (!p) continue;
+        allCreatedFiles.add(p);
+        createdFiles.push(p);
+        if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) flowPath = p;
       }
     }
 
@@ -956,7 +981,7 @@ async function handleNewFlow(
 // ---- Extension activation -------------------------------------------------
 
 export function activate(pi: ExtensionAPI) {
-  const projectRoot = process.cwd();
+  const projectRoot = resolveProjectRoot();
 
   // No lastCtx — all interactions go through events.
 
