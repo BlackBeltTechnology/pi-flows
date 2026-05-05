@@ -22,6 +22,34 @@ import { activate as activateFlowWorkspace } from "./flow-workspace/index.js";
 import { activate as activateFlowFooter } from "./flow-footer.js";
 
 export default function activate(pi: ExtensionAPI) {
+  // --- Dashboard/TUI Settings Integration ---
+  const registerSettings = () => {
+    pi.events.emit("pi-extension-settings:register", {
+      extension: "flows",
+      nodes: {
+        autoSummarize: {
+          _tag: "boolean",
+          label: "Auto-Summarize",
+          description: "Automatically generate flow summaries after completion.",
+          default: true
+        },
+        defaultRole: {
+          _tag: "text",
+          label: "Default Role",
+          description: "Initial role for new sessions.",
+          default: "developer"
+        }
+      }
+    });
+  };
+
+  pi.events.on("pi-extension-settings:ready", () => {
+    registerSettings();
+  });
+
+  // Register immediately
+  registerSettings();
+
   activateRoleManager(pi);
   activateFileTracker(pi);
   activateFlowEngine(pi);

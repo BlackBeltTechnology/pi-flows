@@ -518,4 +518,58 @@ export function activate(pi: ExtensionAPI) {
       pi.events.emit("flows:new-request", { description });
     },
   });
+
+  pi.events.on("ui:list-modules", (data: any) => {
+    data.modules.push({
+      id: "flows",
+      title: "Flows",
+      icon: "fileTree",
+      command: "/flows",
+      initialViewId: "list",
+      views: [
+        {
+          id: "list",
+          type: "table",
+          title: "Saved Flows",
+          dataEvent: "flow:list-flows",
+          updateEvent: "flow:rediscover",
+          fields: [
+            { key: "name", label: "Name", type: "text" },
+            { key: "description", label: "Description", type: "text" }
+          ],
+          itemActions: [
+            { label: "Run", icon: "play", emit: "flow:run", primaryParam: "flowName" },
+            { label: "Edit", icon: "pencil", emit: "flows:edit-request", primaryParam: "flowName" },
+            { label: "Delete", icon: "trashCanOutline", emit: "flow:delete-request", primaryParam: "flowName", variant: "danger", confirm: "Delete this flow?" }
+          ],
+          actions: [
+            { label: "New Flow", icon: "plus", emit: "ui:navigate", params: { viewId: "new" }, variant: "primary" }
+          ]
+        },
+        {
+          id: "new",
+          type: "form",
+          title: "New Flow",
+          fields: [
+            { key: "description", label: "What should the flow do?", type: "textarea", required: true, placeholder: "e.g. A flow that researches a topic and writes a report", description: "Describe the purpose and steps of the flow. The architect will use this to design the agent pipeline." }
+          ],
+          actions: [
+            { label: "Cancel", emit: "ui:navigate", params: { viewId: "list" } },
+            { label: "Design Flow", icon: "autoFix", emit: "flows:new-request", variant: "primary" }
+          ]
+        }
+      ]
+    });
+  });
+
+  pi.events.on("ui:get-data", (data: any) => {
+    if (data.event === "flow:list-flows") {
+      const flowFiles = getFlowFiles(projectRoot);
+      data.items = flowFiles.map(f => ({
+        name: f.name,
+        description: "Flow file",
+        path: f.path
+      }));
+    }
+  });
 }
