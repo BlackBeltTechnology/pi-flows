@@ -947,10 +947,11 @@ async function executeShellStep(step: ShellStep, ctx: FlowContext, options: Flow
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
-      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
+      killTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already dead */ } }, 5000);
     }, timeoutMs);
 
     // Wire abort signal
@@ -959,6 +960,7 @@ async function executeShellStep(step: ShellStep, ctx: FlowContext, options: Flow
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       options.signal?.removeEventListener("abort", onAbort);
       exitCode = code;
       resolve();
@@ -993,6 +995,7 @@ async function executeShellStep(step: ShellStep, ctx: FlowContext, options: Flow
     toolCalls: [],
     duration,
     tokens: { input: 0, output: 0 },
+    typedOutputs: { output: stdout, stderr },
   };
 
   options.onAgentComplete?.(step.id, step.id, result);
