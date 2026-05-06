@@ -537,7 +537,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // try to recover finishParams from text-embedded <tool_call> JSON blocks.
   if (!finishParams) {
     const toolCallMatch = lastAssistantText.match(
-      /<tool_call>\s*({[\s\S]*?})\s*<\/tool_call>/
+      /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/
     );
     if (toolCallMatch) {
       try {

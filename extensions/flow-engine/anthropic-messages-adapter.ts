@@ -39,27 +39,17 @@ const CANDIDATE_PATHS = [
 ];
 
 export const anthropicMessagesAgentFactory: ExtensionFactory = async (pi) => {
-  // First try the package name (works when installed as npm dep or alias)
+  let mod: any;
+
   try {
-    const mod = await import("@pi/anthropic-messages");
-    if (typeof mod.default === "function") {
-      await mod.default(pi);
-      return;
-    }
+    mod = await import("@pi/anthropic-messages");
   } catch {
-    // Not available as a package — fall through to path-based resolution
+    for (const candidate of CANDIDATE_PATHS) {
+      try { mod = await import(candidate); break; } catch {}
+    }
   }
 
-  // Fall back to known install paths
-  for (const candidate of CANDIDATE_PATHS) {
-    try {
-      const mod = await import(candidate);
-      if (typeof mod.default === "function") {
-        await mod.default(pi);
-        return;
-      }
-    } catch {
-      // Try next candidate
-    }
+  if (mod && typeof mod.default === "function") {
+    await mod.default(pi);
   }
 };

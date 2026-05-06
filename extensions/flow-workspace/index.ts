@@ -62,6 +62,46 @@ let architectAbort: AbortController | null = null;
 
 // ---- Helpers --------------------------------------------------------------
 
+function collectCreatedFiles(
+  result: { toolCalls: Array<{ toolName: string; input?: any; isError?: boolean }>; finishParams?: any },
+  projectRoot: string,
+): { flowPath: string; createdFiles: string[]; allCreatedFiles: Set<string> } {
+  let flowPath = "";
+  const createdFiles: string[] = [];
+  const allCreatedFiles = new Set<string>();
+
+  for (const tc of result.toolCalls) {
+    const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
+    if (baseName === "flow_write" && !tc.isError) {
+      const raw = tc.input?.path || tc.input?.name;
+      if (raw) {
+        const p = resolve(projectRoot, raw);
+        flowPath = p; createdFiles.push(p); allCreatedFiles.add(p);
+      }
+    }
+    if (baseName === "agent_write" && !tc.isError) {
+      const raw = tc.input?.path || tc.input?.name;
+      if (raw) {
+        const p = resolve(projectRoot, raw);
+        createdFiles.push(p); allCreatedFiles.add(p);
+      }
+    }
+  }
+
+  if (!flowPath && result.finishParams?.files) {
+    for (const f of result.finishParams.files) {
+      const raw: string = f.path ?? "";
+      if (!raw) continue;
+      const p = resolve(projectRoot, raw);
+      allCreatedFiles.add(p);
+      createdFiles.push(p);
+      if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) flowPath = p;
+    }
+  }
+
+  return { flowPath, createdFiles, allCreatedFiles };
+}
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -421,34 +461,10 @@ async function handleEditFlow(
     flowPath = "";
     createdFiles.length = 0;
 
-    for (const tc of result.toolCalls) {
-      const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
-      if (baseName === "flow_write" && !tc.isError) {
-        const raw = tc.input?.path || tc.input?.name;
-        if (raw) {
-          const p = resolve(projectRoot, raw);
-          flowPath = p; createdFiles.push(p); allCreatedFiles.add(p);
-        }
-      }
-      if (baseName === "agent_write" && !tc.isError) {
-        const raw = tc.input?.path || tc.input?.name;
-        if (raw) {
-          const p = resolve(projectRoot, raw);
-          createdFiles.push(p); allCreatedFiles.add(p);
-        }
-      }
-    }
-
-    if (!flowPath && result.finishParams?.files) {
-      for (const f of result.finishParams.files) {
-        const raw: string = f.path ?? "";
-        if (!raw) continue;
-        const p = resolve(projectRoot, raw);
-        allCreatedFiles.add(p);
-        createdFiles.push(p);
-        if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) flowPath = p;
-      }
-    }
+    const editCollected = collectCreatedFiles(result, projectRoot);
+    flowPath = editCollected.flowPath;
+    createdFiles.push(...editCollected.createdFiles);
+    for (const p of editCollected.allCreatedFiles) allCreatedFiles.add(p);
 
     if (!flowPath) {
       // Architect failed to produce a flow
@@ -773,34 +789,10 @@ async function handleNewFlow(
     flowPath = "";
     createdFiles.length = 0;
 
-    for (const tc of result.toolCalls) {
-      const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
-      if (baseName === "flow_write" && !tc.isError) {
-        const raw = tc.input?.path || tc.input?.name;
-        if (raw) {
-          const p = resolve(projectRoot, raw);
-          flowPath = p; createdFiles.push(p); allCreatedFiles.add(p);
-        }
-      }
-      if (baseName === "agent_write" && !tc.isError) {
-        const raw = tc.input?.path || tc.input?.name;
-        if (raw) {
-          const p = resolve(projectRoot, raw);
-          createdFiles.push(p); allCreatedFiles.add(p);
-        }
-      }
-    }
-
-    if (!flowPath && result.finishParams?.files) {
-      for (const f of result.finishParams.files) {
-        const raw: string = f.path ?? "";
-        if (!raw) continue;
-        const p = resolve(projectRoot, raw);
-        allCreatedFiles.add(p);
-        createdFiles.push(p);
-        if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) flowPath = p;
-      }
-    }
+    const newCollected = collectCreatedFiles(result, projectRoot);
+    flowPath = newCollected.flowPath;
+    createdFiles.push(...newCollected.createdFiles);
+    for (const p of newCollected.allCreatedFiles) allCreatedFiles.add(p);
 
     if (!flowPath) {
       // Architect failed to produce a flow
