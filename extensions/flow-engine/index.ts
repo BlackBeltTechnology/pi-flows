@@ -9,6 +9,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
+import { resolveProjectRoot } from "../project-root.js";
 import { getModelRole, isAutonomousMode, setAutonomousMode } from "../role-manager.js";
 import { registerSubagentTool } from "./tool.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
@@ -111,7 +112,7 @@ function checkGate(flowName: string): string | null {
 
 export function activate(pi: ExtensionAPI) {
   const pkgRoot = resolvePackageRoot(import.meta.url);
-  const projectRoot = process.cwd();
+  const projectRoot = resolveProjectRoot();
   packageRoot = pkgRoot;
 
   // Initial discovery
@@ -337,22 +338,27 @@ export function activate(pi: ExtensionAPI) {
   const seenToolNames = new Set<string>();
 
   // Capture full ToolDefinition objects (with .execute()) for subagent sessions.
-  // These tools are NOT registered on the main session — they are only available
-  // to subagents (e.g., flow-architect) via extraCustomTools.
+  // Also register stubs on the main session so the pi-anthropic-messages adapter's
+  // getAllTools() includes these names and can build correct inbound reverse maps.
   const subagentOnlyPi = {
     ...pi,
     registerTool: (tool: any) => {
       if (!seenToolNames.has(tool.name)) {
         seenToolNames.add(tool.name);
         registeredExtensionTools.push(tool);
+        // Stub on main session for adapter reverse map — execute is never called here.
+        try {
+          pi.registerTool({
+            ...tool,
+            execute: async () => ({ content: [{ type: "text" as const, text: "[subagent-only]" }], details: {} }),
+          });
+        } catch { /* ignore if main session already started */ }
       }
-      // Intentionally NOT calling pi.registerTool() — these tools should not
-      // appear in the main session's system prompt or be callable by the main LLM.
     },
   };
   registerAgentCatalogTool(subagentOnlyPi as any, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
-  registerAgentWriteTool(subagentOnlyPi as any);
-  registerFlowWriteTool(subagentOnlyPi as any, () => agents);
+  registerAgentWriteTool(subagentOnlyPi as any, projectRoot);
+  registerFlowWriteTool(subagentOnlyPi as any, () => agents, projectRoot);
 
   // ── Register flow commands ──
 

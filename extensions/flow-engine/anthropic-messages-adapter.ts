@@ -27,15 +27,29 @@
 // ---------------------------------------------------------------------------
 
 import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import { join } from "node:path";
+import { homedir } from "node:os";
+
+// Known install paths for pi-anthropic-messages, in priority order.
+const CANDIDATE_PATHS = [
+  join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "extensions", "index.ts"),
+  join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "extensions", "index.js"),
+  join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "dist", "extensions", "index.js"),
+  join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "dist", "index.js"),
+];
 
 export const anthropicMessagesAgentFactory: ExtensionFactory = async (pi) => {
+  let mod: any;
+
   try {
-    const mod = await import("@pi/anthropic-messages");
-    if (typeof mod.default === "function") {
-      await mod.default(pi);
-    }
+    mod = await import("@pi/anthropic-messages");
   } catch {
-    // Package not installed — subagents run without the anthropic-messages
-    // transform, same as the main session when the package is absent.
+    for (const candidate of CANDIDATE_PATHS) {
+      try { mod = await import(candidate); break; } catch {}
+    }
+  }
+
+  if (mod && typeof mod.default === "function") {
+    await mod.default(pi);
   }
 };

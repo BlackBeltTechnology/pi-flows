@@ -11,21 +11,32 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig } from "../types.js";
 import { validateFlowContent } from "./flow-validate.js";
 import { writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
 export function registerFlowWriteTool(
   pi: ExtensionAPI,
   getDiscoveredAgents: () => Map<string, AgentConfig>,
+  projectRoot?: string,
 ): void {
   pi.registerTool({
     name: "flow_write",
     description:
-      "Validate and write a flow YAML file. Validates internally first. If validation passes, writes the file to the specified path. Returns errors if invalid.",
+      "Validate and write a flow YAML file. Use 'path' for the full file path (e.g. '.pi/flows/.staging/flows/my-flow.yaml') or 'name' for a bare flow name (e.g. 'my-flow'). Validates content first; if valid, writes the file.",
     parameters: Type.Object({
-      path: Type.String({ description: "Absolute or relative path to write the flow .yaml file" }),
+      path: Type.Optional(Type.String({ description: "Absolute or relative path to write the flow .yaml file" })),
+      name: Type.Optional(Type.String({ description: "Flow name or path (alias for path)" })),
       content: Type.String({ description: "The flow YAML content to validate and write" }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+      // Accept 'name' as alias for 'path'; expand bare names to staging path
+      let rawPath = (params as any).path || (params as any).name || "";
+      if (rawPath && !rawPath.includes("/") && !rawPath.includes("\\")) {
+        const stem = rawPath.endsWith(".yaml") || rawPath.endsWith(".yml") ? rawPath : `${rawPath}.yaml`;
+        rawPath = `.pi/flows/.staging/flows/${stem}`;
+      }
+      const filePath = rawPath;
+      const absPath = projectRoot ? resolve(projectRoot, filePath) : filePath;
+
       // Run validation first
       const validation = validateFlowContent(params.content, getDiscoveredAgents);
 
@@ -36,7 +47,7 @@ export function registerFlowWriteTool(
               type: "text" as const,
               text: JSON.stringify({
                 written: false,
-                path: params.path,
+                path: absPath,
                 diagnostics: validation.diagnostics,
               }, null, 2),
             },
@@ -45,10 +56,9 @@ export function registerFlowWriteTool(
         };
       }
 
-      // Ensure directory exists and write the file
       try {
-        mkdirSync(dirname(params.path), { recursive: true });
-        writeFileSync(params.path, params.content, "utf-8");
+        mkdirSync(dirname(absPath), { recursive: true });
+        writeFileSync(absPath, params.content, "utf-8");
       } catch (err) {
         return {
           content: [
@@ -56,7 +66,7 @@ export function registerFlowWriteTool(
               type: "text" as const,
               text: JSON.stringify({
                 written: false,
-                path: params.path,
+                path: absPath,
                 error: err instanceof Error ? err.message : String(err),
               }, null, 2),
             },
@@ -74,7 +84,7 @@ export function registerFlowWriteTool(
             type: "text" as const,
             text: JSON.stringify({
               written: true,
-              path: params.path,
+              path: absPath,
               diagnostics: validation.diagnostics,
             }, null, 2),
           },

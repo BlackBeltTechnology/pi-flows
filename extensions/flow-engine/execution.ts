@@ -251,30 +251,14 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     ?? (options.modelRegistry as any)?.authStorage
     ?? undefined;
 
-  // Detect Anthropic-messages protocol: any provider using anthropic-messages
-  // needs non-core tools registered with mcp__flows__ prefix so Anthropic's
-  // endpoint accepts them. This covers direct OAuth, API key, AND proxy
-  // providers (e.g., 9Router) that forward to Anthropic. The mcp__ prefix
-  // is harmless for all anthropic-messages endpoints.
-  let toolPrefix = "";
-  if (model.api === "anthropic-messages") {
-    toolPrefix = "mcp__flows__";
-  }
+  // No tool prefix needed — the pi-anthropic-messages adapter handles
+  // outbound renaming (finish → mcp__pi__finish) and inbound translation
+  // automatically for all registered tools.
+  const toolPrefix = "";
 
-  // Resolve tools from agent frontmatter, applying mcp__ prefix for non-core tools
-  const tools = agent.tools
-    .filter(t => TOOL_FACTORIES[t])
-    .map(t => {
-      const tool = TOOL_FACTORIES[t](cwd);
-      const prefixed = prefixToolName(tool.name, toolPrefix);
-      return prefixed !== tool.name ? { ...tool, name: prefixed } : tool;
-    });
-
-  // Prefix customTools (extension tools like agent_write, flow_write, etc.)
-  const customTools = (options.extraCustomTools ?? []).map((t: any) => {
-    const prefixed = prefixToolName(t.name, toolPrefix);
-    return prefixed !== t.name ? { ...t, name: prefixed } : t;
-  });
+  // Built-in tools passed as name strings; custom tools as ToolDefinition objects.
+  const builtinToolNames = agent.tools.filter(t => TOOL_FACTORIES[t]);
+  const customTools: any[] = options.extraCustomTools ?? [];
 
   // Build guard options
   const guardOptions: GuardOptions = {
@@ -343,7 +327,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     const { session: sess } = await createAgentSession({
       model,
       thinkingLevel: thinking as any,
-      tools,
+      // Include custom tool names in the allowlist so getAllTools() returns them.
+      // The adapter builds its reverse map from getAllTools() to translate
+      // mcp__pi__agent_write → agent_write on inbound responses.
+      tools: [...builtinToolNames, ...customTools.map((t: any) => t.name)],
       customTools: customTools,
       resourceLoader,
       sessionManager: SessionManager.inMemory(),
@@ -544,6 +531,24 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       duration,
       tokens: { ...accumulatedTokens },
     };
+  }
+
+  // If finish was never called as a real tool (e.g. max_tokens truncation),
+  // try to recover finishParams from text-embedded <tool_call> JSON blocks.
+  if (!finishParams) {
+    const toolCallMatch = lastAssistantText.match(
+      /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/
+    );
+    if (toolCallMatch) {
+      try {
+        const parsed = JSON.parse(toolCallMatch[1]);
+        const args = parsed.arguments ?? parsed.args ?? parsed;
+        const baseName = (parsed.name ?? "").replace(/^mcp__[^_]+__/, "");
+        if (baseName === "finish" && args && typeof args === "object") {
+          finishParams = args;
+        }
+      } catch { /* ignore malformed JSON */ }
+    }
   }
 
   // Build AgentResult from accumulated data
