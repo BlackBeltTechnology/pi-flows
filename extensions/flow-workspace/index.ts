@@ -424,12 +424,18 @@ async function handleEditFlow(
     for (const tc of result.toolCalls) {
       const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
       if (baseName === "flow_write" && !tc.isError) {
-        const path = tc.input?.path;
-        if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
+        const raw = tc.input?.path || tc.input?.name;
+        if (raw) {
+          const p = resolve(projectRoot, raw);
+          flowPath = p; createdFiles.push(p); allCreatedFiles.add(p);
+        }
       }
       if (baseName === "agent_write" && !tc.isError) {
-        const path = tc.input?.path;
-        if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
+        const raw = tc.input?.path || tc.input?.name;
+        if (raw) {
+          const p = resolve(projectRoot, raw);
+          createdFiles.push(p); allCreatedFiles.add(p);
+        }
       }
     }
 
@@ -770,12 +776,18 @@ async function handleNewFlow(
     for (const tc of result.toolCalls) {
       const baseName = tc.toolName.replace(/^mcp__[^_]+__/, "");
       if (baseName === "flow_write" && !tc.isError) {
-        const path = tc.input?.path;
-        if (path) { flowPath = path; createdFiles.push(path); allCreatedFiles.add(path); }
+        const raw = tc.input?.path || tc.input?.name;
+        if (raw) {
+          const p = resolve(projectRoot, raw);
+          flowPath = p; createdFiles.push(p); allCreatedFiles.add(p);
+        }
       }
       if (baseName === "agent_write" && !tc.isError) {
-        const path = tc.input?.path;
-        if (path) { createdFiles.push(path); allCreatedFiles.add(path); }
+        const raw = tc.input?.path || tc.input?.name;
+        if (raw) {
+          const p = resolve(projectRoot, raw);
+          createdFiles.push(p); allCreatedFiles.add(p);
+        }
       }
     }
 

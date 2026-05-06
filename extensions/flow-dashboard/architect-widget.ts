@@ -164,7 +164,6 @@ function extractAgentName(input: any): string {
   if (pathLike) {
     const seg = (pathLike as string).split("/").pop() || "";
     const stripped = seg.replace(/\.md$/, "");
-    if (stripped && !stripped.includes(".")) return stripped;
     if (stripped) return stripped;
   }
   if (input.content) {
