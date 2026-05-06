@@ -256,8 +256,7 @@ Runs a shell command directly in the flow — no agent, no LLM, no tokens. Use t
 - id: run-tests
   type: shell
   command: npm test
-  working_dir: apps/admin      # optional — relative to project root
-  timeout: 120                  # optional — seconds (default: 60)
+  timeout: 120                  # optional — seconds (default: 1800)
   on_complete: summarize        # optional — route on exit code 0
   on_error: fix-failures        # optional — route on non-zero exit
 ```
@@ -265,11 +264,11 @@ Runs a shell command directly in the flow — no agent, no LLM, no tokens. Use t
 | Property | Required | Description |
 |----------|----------|-------------|
 | `id` | Yes | Unique step identifier |
-| `command` | Yes | Shell command to run |
-| `working_dir` | No | Directory to run in (relative to project root). Defaults to project root |
-| `timeout` | No | Seconds before the command is killed (default: 60) |
+| `command` | Yes | Shell command to run (template string — supports `${{config.key}}`, `${{task}}`, `${{result.X.field}}`) |
+| `timeout` | No | Seconds before the command is killed (default: 1800) |
+| `config` | No | Per-step config overrides merged on top of flow-level and global config |
 | `on_complete` | No | Route to step ID on success (exit code 0) |
-| `on_error` | No | Route to step ID on non-zero exit code |
+| `on_error` | No | Route to step ID on non-zero exit or timeout |
 
 **When to use `shell` vs `agent`:**
 
@@ -302,7 +301,6 @@ Runs a shell command directly in the flow — no agent, no LLM, no tokens. Use t
 - id: lint
   type: shell
   command: npm run lint
-  working_dir: apps/admin
   on_error: fix-lint
 
 # Run a migration script
