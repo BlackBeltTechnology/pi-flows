@@ -42,6 +42,7 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     // Primary syntax: ${{...}}
     .replace(/\$\{\{task\}\}/g, ctx.task)
     .replace(/\$\{\{input\.([\w-]+)\}\}/g, (_, name) => ctx.inputs[name] ?? "")
+    .replace(/\$\{\{config\.([\w-]+)\}\}/g, (_, key) => ctx.config?.[key] ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.status\}\}/g, (_, id) => ctx.results[id]?.status ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.summary\}\}/g, (_, id) => ctx.results[id]?.summary ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.artifacts\}\}/g, (_, id) => ctx.results[id]?.artifacts ?? "")

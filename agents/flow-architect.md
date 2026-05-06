@@ -80,6 +80,7 @@ Every step requires a unique `id` field. Step type is either set explicitly with
 | `loop_target` | `agent-loop-decision` |
 | `question` | `fork` |
 | `check` | `conditional` |
+| `command` | `shell` |
 | `path` (without `agent`) | `flow-ref` |
 | `branches` (without `question`) | `agent-decision` |
 | `agent` (fallback) | `agent` |
@@ -247,7 +248,76 @@ The decision agent calls `finish({ branch: "<loop_target>" })` to loop back, or 
 
 Use `agent-loop-decision` when the iteration count is unknown (e.g., "keep fixing until tests pass"). Use unrolled steps when the count is known and small (e.g., exactly one retry). Typical `max_iterations`: 2–5.
 
-### 6. Flow Reference Step — Embed Sub-Flows
+### 6. Shell Step — Run a Deterministic Command
+
+Runs a shell command directly in the flow — no agent, no LLM, no tokens. Use this for deterministic operations that don't require reasoning: running tests, building the project, executing scripts, or any CLI command with a known outcome.
+
+```yaml
+- id: run-tests
+  type: shell
+  command: npm test
+  timeout: 120                  # optional — seconds (default: 1800)
+  on_complete: summarize        # optional — route on exit code 0
+  on_error: fix-failures        # optional — route on non-zero exit
+```
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `id` | Yes | Unique step identifier |
+| `command` | Yes | Shell command to run (template string — supports `${{config.key}}`, `${{task}}`, `${{result.X.field}}`) |
+| `timeout` | No | Seconds before the command is killed (default: 1800) |
+| `config` | No | Per-step config overrides merged on top of flow-level and global config |
+| `on_complete` | No | Route to step ID on success (exit code 0) |
+| `on_error` | No | Route to step ID on non-zero exit or timeout |
+
+**When to use `shell` vs `agent`:**
+
+| Use `shell` when... | Use `agent` when... |
+|---|---|
+| The command is deterministic (same inputs → same output) | Output needs interpretation or reasoning |
+| You just need pass/fail (exit code) | You need to read and understand the output |
+| Running tests, builds, linters, formatters | Fixing failures found by tests |
+| Executing a known script with fixed args | Deciding what to do based on results |
+| Speed matters — avoid LLM latency | The task requires codebase knowledge |
+
+**Common patterns:**
+
+```yaml
+# Build before testing
+- id: build
+  type: shell
+  command: npm run build
+  on_error: report-build-failure
+
+# Run tests, route to fixer on failure
+- id: test
+  type: shell
+  command: npm test -- --reporter=json > test-results.json
+  blockedBy: [implement]
+  on_complete: summarize
+  on_error: fix-test-failures
+
+# Lint check as a gate
+- id: lint
+  type: shell
+  command: npm run lint
+  on_error: fix-lint
+
+# Run a migration script
+- id: migrate
+  type: shell
+  command: node scripts/migrate.js
+  timeout: 300
+```
+
+**Important rules:**
+- Use `shell` for commands you would run in a terminal — not for reasoning tasks
+- The command runs in a subprocess; capture output to a file if a downstream agent needs to read it
+- `on_error` is triggered by any non-zero exit code — not by stderr output
+- Do NOT use shell steps for tasks that require understanding the codebase; those belong in agent steps
+- Shell steps have no token cost and run much faster than agent steps for simple CLI operations
+
+### 7. Flow Reference Step — Embed Sub-Flows
 
 Delegates execution to another flow YAML file (or glob pattern matching multiple files).
 
@@ -897,6 +967,7 @@ If the user explicitly requests writing to a different location (e.g., editing a
 - Keep flows focused: one flow per user intent, not monolithic pipelines
 - You run as a non-interactive sub-agent — NEVER ask for confirmation or wait for user input. Always call `flow_write` to persist the flow after previewing it.
 - Use `agent-loop-decision` for iterative verify/fix cycles where the number of iterations is unknown (e.g., "keep fixing until tests pass"). Use manually unrolled steps only when the iteration count is known and small (e.g., exactly one retry). Always set a reasonable `max_iterations` (typically 3-5).
+- Use `shell` steps for deterministic CLI operations (tests, builds, linters, scripts) — they run faster, cost zero tokens, and route on exit code. Use `agent` only when reasoning about output is needed.
 - Decision agents (in `agent-decision` and `agent-loop-decision` steps) use the `finish` tool's `branch` parameter to express their choice. Do NOT instruct them to output `DECISION: <branch>` text — that pattern is deprecated.
 
 # Project Context Integration

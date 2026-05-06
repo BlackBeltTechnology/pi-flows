@@ -88,7 +88,7 @@ Flows also register as slash commands based on file path: `.pi/flows/flows/revie
 
 - **Agents** — Markdown files with YAML frontmatter (config) and body (system prompt). Run in isolated sessions with scoped tools and file access.
 - **Flows** — YAML files defining a DAG of steps connected via `blockedBy`. The engine schedules independent steps in parallel, up to `max_concurrent`.
-- **Template variables** — `${{task}}`, `${{result.step-id.summary}}`, `${{input.name}}` wire data between steps at dispatch time.
+- **Template variables** — `${{task}}`, `${{result.step-id.summary}}`, `${{input.name}}`, `${{config.key}}` wire data between steps at dispatch time.
 - **Model roles** — `@coding`, `@planning`, `@research`, `@compact` map to concrete models via `/roles`. Each agent declares which tier it needs.
 - **Flow Architect** — A built-in AI agent (`/flows:new`) that analyzes your conversation context, selects agents from the catalog, and designs a complete flow DAG.
 
@@ -134,6 +134,17 @@ Context: ${{input.research_context}}
   inputs:
     research_context: "${{result.research.summary}}"
 ```
+
+**Shell** — run a shell command directly, no agent needed:
+```yaml
+- id: build
+  type: shell
+  command: "${{config.package_manager}} run build"
+  timeout: 300
+  on_complete: test-step
+  on_error: notify
+```
+Commands use `${{config.key}}` for configurable values. Config resolves from `.pi/flows/config.yaml` → flow-level `config:` → per-step `config:` (highest wins). stdout/stderr available downstream via `${{result.build.output}}`.
 
 **Fork** — present a choice to the user (or let an agent decide in auto-routing mode):
 ```yaml
