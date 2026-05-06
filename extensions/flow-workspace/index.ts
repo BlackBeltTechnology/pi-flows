@@ -19,7 +19,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS, STAGING_FLOWS } from "./staging.js";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { resolveProjectRoot } from "../project-root.js";
 import { getModelRole } from "../role-manager.js";
 import { emitPromptAndAwait } from "../flow-engine/flow-prompt.js";
@@ -433,11 +433,11 @@ async function handleEditFlow(
       }
     }
 
-    // Fallback: recover from finishParams.files when flow_write never fired as a real tool call
     if (!flowPath && result.finishParams?.files) {
       for (const f of result.finishParams.files) {
-        const p: string = f.path ?? "";
-        if (!p) continue;
+        const raw: string = f.path ?? "";
+        if (!raw) continue;
+        const p = resolve(projectRoot, raw);
         allCreatedFiles.add(p);
         createdFiles.push(p);
         if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) flowPath = p;
@@ -779,11 +779,11 @@ async function handleNewFlow(
       }
     }
 
-    // Fallback: recover from finishParams.files when flow_write never fired as a real tool call
     if (!flowPath && result.finishParams?.files) {
       for (const f of result.finishParams.files) {
-        const p: string = f.path ?? "";
-        if (!p) continue;
+        const raw: string = f.path ?? "";
+        if (!raw) continue;
+        const p = resolve(projectRoot, raw);
         allCreatedFiles.add(p);
         createdFiles.push(p);
         if (!flowPath && (p.endsWith(".yaml") || p.endsWith(".yml"))) flowPath = p;

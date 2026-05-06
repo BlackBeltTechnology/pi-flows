@@ -160,12 +160,13 @@ function parseFlowForWidget(content: string): { name: string; description: strin
 
 function extractAgentName(input: any): string {
   if (!input) return "unknown";
-  // Try path: last segment without extension
-  if (input.path) {
-    const seg = (input.path as string).split("/").pop() || "";
-    return seg.replace(/\.md$/, "") || "unknown";
+  const pathLike = input.path || input.name || "";
+  if (pathLike) {
+    const seg = (pathLike as string).split("/").pop() || "";
+    const stripped = seg.replace(/\.md$/, "");
+    if (stripped && !stripped.includes(".")) return stripped;
+    if (stripped) return stripped;
   }
-  // Try content frontmatter name:
   if (input.content) {
     const m = (input.content as string).match(/^name:\s*(.+)$/m);
     if (m) return m[1].trim();

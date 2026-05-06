@@ -29,6 +29,7 @@ export function registerAgentWriteTool(pi: ExtensionAPI, projectRoot?: string): 
         rawPath = `.pi/flows/.staging/agents/${stem}`;
       }
       const filePath = rawPath;
+      const absPath = projectRoot ? resolve(projectRoot, filePath) : filePath;
 
       // Run validation first (with dynamically discovered tools)
       const dynamicTools = new Set(pi.getAllTools().map(t => t.name));
@@ -41,7 +42,7 @@ export function registerAgentWriteTool(pi: ExtensionAPI, projectRoot?: string): 
               type: "text" as const,
               text: JSON.stringify({
                 written: false,
-                path: filePath,
+                path: absPath,
                 diagnostics: validation.diagnostics,
               }, null, 2),
             },
@@ -49,9 +50,6 @@ export function registerAgentWriteTool(pi: ExtensionAPI, projectRoot?: string): 
           details: {},
         };
       }
-
-      // Resolve relative paths against projectRoot
-      const absPath = projectRoot ? resolve(projectRoot, filePath) : filePath;
 
       try {
         mkdirSync(dirname(absPath), { recursive: true });

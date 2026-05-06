@@ -35,6 +35,7 @@ export function registerFlowWriteTool(
         rawPath = `.pi/flows/.staging/flows/${stem}`;
       }
       const filePath = rawPath;
+      const absPath = projectRoot ? resolve(projectRoot, filePath) : filePath;
 
       // Run validation first
       const validation = validateFlowContent(params.content, getDiscoveredAgents);
@@ -46,7 +47,7 @@ export function registerFlowWriteTool(
               type: "text" as const,
               text: JSON.stringify({
                 written: false,
-                path: filePath,
+                path: absPath,
                 diagnostics: validation.diagnostics,
               }, null, 2),
             },
@@ -54,9 +55,6 @@ export function registerFlowWriteTool(
           details: {},
         };
       }
-
-      // Resolve relative paths against projectRoot
-      const absPath = projectRoot ? resolve(projectRoot, filePath) : filePath;
 
       try {
         mkdirSync(dirname(absPath), { recursive: true });

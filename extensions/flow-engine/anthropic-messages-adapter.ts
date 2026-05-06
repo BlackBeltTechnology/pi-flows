@@ -34,6 +34,8 @@ import { homedir } from "node:os";
 const CANDIDATE_PATHS = [
   join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "extensions", "index.ts"),
   join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "extensions", "index.js"),
+  join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "dist", "extensions", "index.js"),
+  join(homedir(), ".pi", "agent", "git", "github.com", "BlackBeltTechnology", "pi-anthropic-messages", "dist", "index.js"),
 ];
 
 export const anthropicMessagesAgentFactory: ExtensionFactory = async (pi) => {

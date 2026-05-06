@@ -258,10 +258,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Built-in tools passed as name strings; custom tools as ToolDefinition objects.
   const builtinToolNames = agent.tools.filter(t => TOOL_FACTORIES[t]);
-  const customTools = (options.extraCustomTools ?? []).map((t: any) => {
-    const prefixedName = prefixToolName(t.name, toolPrefix);
-    return prefixedName !== t.name ? { ...t, name: prefixedName } : t;
-  });
+  const customTools: any[] = options.extraCustomTools ?? [];
 
   // Build guard options
   const guardOptions: GuardOptions = {
