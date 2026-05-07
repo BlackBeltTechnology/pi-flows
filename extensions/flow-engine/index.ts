@@ -330,7 +330,11 @@ export function activate(pi: ExtensionAPI) {
     () => [...extraAgentExtensions],
   );
 
-  registerAskUserTool(pi);
+  // Register at runtime to avoid static tool-name conflicts with pi-ask-user
+  pi.on("session_start", () => {
+    registerAskUserTool(pi);
+  });
+
   registerSkillReadTool(pi, pkgRoot);
 
   // Tool name dedup set — shared between subagentOnlyPi and flow:register-tool handler.
