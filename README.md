@@ -199,6 +199,12 @@ When flows run, a live dashboard appears with agent cards in a grid layout. Each
 
 Card types (`card.metric`): `developer`, `researcher`, `tester`, `verifier`, `writer`, `default` — or register custom renderers via `flow:register-card`.
 
+## Integration with pi-agent-dashboard
+
+pi-flows is the **engine**. The browser dashboard rendering of flow events lives in [`pi-agent-dashboard`](https://github.com/BlackBeltTechnology/pi-agent-dashboard) as a separate workspace plugin (`packages/flows-plugin/`). The two repos are intentionally split: pi-flows emits `flow:*` events; the dashboard reacts to them.
+
+See [`docs/dashboard-integration.md`](docs/dashboard-integration.md) for the architecture diagram, the wire-protocol bridge, and how to add new flow events end-to-end.
+
 ## Built-in Agents
 
 | Agent | Role | Description |
@@ -221,6 +227,7 @@ Detailed documentation in the `docs/` folder:
 - [Tools Reference](docs/tools-reference.md) — Built-in tools available to agents
 - [Creating Packages](docs/creating-packages.md) — Build domain packages with custom agents and flows
 - [Extending pi-flows](docs/extending-pi-flows.md) — Advanced customization
+- [Dashboard Integration](docs/dashboard-integration.md) — How pi-flows and pi-agent-dashboard connect
 
 ## License
 

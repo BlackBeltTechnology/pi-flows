@@ -84,6 +84,11 @@ export function activate(pi: ExtensionAPI) {
     const fr = data as FlowResult;
     if (!fr?.flowName || !fr?.results) return;
 
+    // Signal the start of the summary lifecycle so dashboard observers can
+    // render a "generating summary…" intermediate state. The matching
+    // flow:summary-ready emission follows once the payload is computed.
+    pi.events.emit("flow:summary-started", { flowName: fr.flowName });
+
     const stats = computeStats(fr);
     const nextStep = await resolveNextStep(fr.flowName, pkgRoot);
 

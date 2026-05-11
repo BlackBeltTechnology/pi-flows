@@ -247,6 +247,12 @@ async function handleEditFlow(
 
     if (flowFiles.length === 0) {
       pi.events.emit("flow:architect-init-error", { reason: "no-flows" });
+      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
+      pi.events.emit("flow:architect-error", {
+        phase: "init",
+        reason: "no-flows",
+        message: "No flow files found in the workspace to edit.",
+      });
       pi.events.emit("flow:architect-complete", { choice: "error" });
       architectRunning = false;
       return;
@@ -302,6 +308,12 @@ async function handleEditFlow(
     architectConfig = parseAgentFile(join(pkgRoot, "agents", "flow-architect.md"));
   } catch {
     pi.events.emit("flow:architect-init-error", { reason: "agent-not-found" });
+    // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
+    pi.events.emit("flow:architect-error", {
+      phase: "init",
+      reason: "agent-not-found",
+      message: "Could not load the flow-architect agent configuration.",
+    });
     pi.events.emit("flow:architect-complete", { choice: "error" });
     architectRunning = false;
     return;
@@ -640,6 +652,12 @@ async function handleNewFlow(
     architectConfig = parseAgentFile(join(pkgRoot, "agents", "flow-architect.md"));
   } catch {
     pi.events.emit("flow:architect-init-error", { reason: "agent-not-found" });
+    // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
+    pi.events.emit("flow:architect-error", {
+      phase: "init",
+      reason: "agent-not-found",
+      message: "Could not load the flow-architect agent configuration.",
+    });
     pi.events.emit("flow:architect-complete", { choice: "error" });
     architectRunning = false;
     return;
@@ -969,6 +987,12 @@ export function activate(pi: ExtensionAPI) {
   pi.events.on("flows:new-request", async (data: any) => {
     if (architectRunning) {
       pi.events.emit("flow:architect-init-error", { reason: "already-running" });
+      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
+      pi.events.emit("flow:architect-error", {
+        phase: "init",
+        reason: "already-running",
+        message: "An architect session is already running.",
+      });
       return;
     }
     architectRunning = true;
@@ -984,12 +1008,24 @@ export function activate(pi: ExtensionAPI) {
   pi.events.on("flows:edit-request", async (data: any) => {
     if (architectRunning) {
       pi.events.emit("flow:architect-init-error", { reason: "already-running" });
+      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
+      pi.events.emit("flow:architect-error", {
+        phase: "init",
+        reason: "already-running",
+        message: "An architect session is already running.",
+      });
       return;
     }
     architectRunning = true;
     const { flowName, flowPath, modificationRequest } = data as { flowName: string; flowPath: string; modificationRequest?: string };
     if (flowPath && !existsSync(flowPath)) {
       pi.events.emit("flow:architect-init-error", { reason: "agent-not-found" });
+      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
+      pi.events.emit("flow:architect-error", {
+        phase: "init",
+        reason: "agent-not-found",
+        message: "Flow file does not exist at the requested path.",
+      });
       architectRunning = false;
       return;
     }

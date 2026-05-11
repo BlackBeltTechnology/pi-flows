@@ -658,6 +658,8 @@ export function setupFlowTui(
       // Ctrl+X: abort the architect agent (always takes priority)
       if (data === KEY_CTRL_X) {
         piRef.events.emit("flow:architect-abort", {});
+        // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the cancellation.
+        piRef.events.emit("flow:architect-cancelled", { reason: "user-abort" });
         return { consume: true };
       }
 
