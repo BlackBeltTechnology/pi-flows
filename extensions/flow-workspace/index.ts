@@ -251,7 +251,7 @@ async function handleEditFlow(
       pi.events.emit("flow:architect-error", {
         phase: "init",
         reason: "no-flows",
-        message: "No flow files found in the workspace to edit.",
+        summary: "No flow files found in the workspace to edit.",
       });
       pi.events.emit("flow:architect-complete", { choice: "error" });
       architectRunning = false;
@@ -312,7 +312,7 @@ async function handleEditFlow(
     pi.events.emit("flow:architect-error", {
       phase: "init",
       reason: "agent-not-found",
-      message: "Could not load the flow-architect agent configuration.",
+      summary: "Could not load the flow-architect agent configuration.",
     });
     pi.events.emit("flow:architect-complete", { choice: "error" });
     architectRunning = false;
@@ -656,7 +656,7 @@ async function handleNewFlow(
     pi.events.emit("flow:architect-error", {
       phase: "init",
       reason: "agent-not-found",
-      message: "Could not load the flow-architect agent configuration.",
+      summary: "Could not load the flow-architect agent configuration.",
     });
     pi.events.emit("flow:architect-complete", { choice: "error" });
     architectRunning = false;
@@ -991,7 +991,7 @@ export function activate(pi: ExtensionAPI) {
       pi.events.emit("flow:architect-error", {
         phase: "init",
         reason: "already-running",
-        message: "An architect session is already running.",
+        summary: "An architect session is already running.",
       });
       return;
     }
@@ -1012,7 +1012,7 @@ export function activate(pi: ExtensionAPI) {
       pi.events.emit("flow:architect-error", {
         phase: "init",
         reason: "already-running",
-        message: "An architect session is already running.",
+        summary: "An architect session is already running.",
       });
       return;
     }
@@ -1024,7 +1024,7 @@ export function activate(pi: ExtensionAPI) {
       pi.events.emit("flow:architect-error", {
         phase: "init",
         reason: "agent-not-found",
-        message: "Flow file does not exist at the requested path.",
+        summary: "Flow file does not exist at the requested path.",
       });
       architectRunning = false;
       return;
