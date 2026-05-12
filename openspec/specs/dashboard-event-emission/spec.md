@@ -8,28 +8,33 @@ In short: any architect or summary lifecycle state that a dashboard user is expe
 
 ## Requirements
 
-### Requirement: Architect init-error event is observable by dashboard observers
+### Requirement: Architect init-error event is emitted via `flow:architect-init-error`
 
-When the architect entry path (`flow:architect-started` followed by initial-context generation) fails before any `flow:architect-text` or `flow:architect-preview` is produced, pi-flows SHALL emit an event whose name is present in pi-agent-dashboard's `FLOW_EVENT_MAP` table. The event SHALL include at minimum: `{ flowName, error }` where `error` is a human-readable message and an optional `stack` field for debugging.
+When the architect entry path fails before any state-creating event (`flow:architect-context-generating` or `flow:architect-started`) has been emitted, pi-flows SHALL emit `flow:architect-init-error` with a `reason` field identifying the failure mode. The TUI listener registered in `extensions/flow-engine/flow-tui.ts` SHALL surface this event as a user notification.
 
-Two acceptable implementations satisfy this requirement:
+#### Why this is NOT observable on the dashboard side today
 
-- **Option A (pi-flows-side fix):** rename the emission from `flow:architect-init-error` to one of the names already mapped (e.g., `flow:architect-error` which the dashboard wires to `architect_error`). The init failure is reported as a regular architect error with a distinguishing field such as `phase: "init"`.
-- **Option B (cross-repo fix):** keep the `flow:architect-init-error` name and document a one-line addition to `pi-agent-dashboard/packages/extension/src/flow-event-wiring.ts#FLOW_EVENT_MAP` as a delegated change.
+The earlier draft of this requirement attempted to mirror init-errors to the dashboard via a companion `flow:architect-error` emission (which IS in `FLOW_EVENT_MAP`). Investigation against the dashboard at v0.5.3 revealed that `packages/flows-plugin/src/architect-reducer.ts`'s `case "architect_error"` opens with `if (!state) return null;` — dropping any error that arrives before architect state exists. Since init-errors fire BEFORE `architect_context_generating`/`architect_started`, the companion emission was silently dropped. Companions were removed.
 
-This change SHALL pick exactly one option and document the choice in `design.md`.
+The dashboard-side relaxation of this reducer guard is documented in `openspec/changes/archive/2026-05-11-align-with-dashboard-plugins/DASHBOARD-DELEGATION-BRIEF.md` and tracked as a follow-up cross-repo change. Once that lands, this requirement will be amended to mandate dashboard observability.
 
-#### Scenario: Init-error surfaces in the dashboard
+#### Scenario: Init-error reaches the TUI listener
 
-- **WHEN** the architect path fails during initial-context generation (e.g., model rejects the system prompt, file scan errors out, prompt template is malformed)
-- **THEN** pi-flows SHALL emit an event whose name is in `FLOW_EVENT_MAP`
-- **AND** the dashboard SHALL receive a protocol event with `eventType` matching the map entry
-- **AND** the protocol event's payload SHALL contain the error message
+- **WHEN** the architect path fails during the pre-architect-started phase (e.g., `no-flows`, `agent-not-found`, `already-running`)
+- **THEN** pi-flows SHALL emit `flow:architect-init-error` with `{ reason: <kebab-case-identifier> }`
+- **AND** the TUI listener at `extensions/flow-engine/flow-tui.ts` SHALL receive the event and call `uiCtx.notify(...)` with a message matching the reason
 
-#### Scenario: Init-error does not silently swallow
+#### Scenario: Init-error does NOT emit a companion `flow:architect-error`
 
-- **WHEN** the architect init phase fails and pi-flows does NOT emit a mapped event
-- **THEN** this is a regression of this requirement and SHALL fail the integration test in `verification`
+- **WHEN** the architect init phase fails
+- **THEN** pi-flows SHALL NOT emit `flow:architect-error` from the init-error site (the companion was reverted because the dashboard reducer guard drops it)
+- **AND** the codebase SHALL contain a comment at each init-error site noting the dashboard reducer guard and pointing at the delegation brief
+
+#### Scenario: Forward-compatibility once the dashboard reducer is relaxed
+
+- **WHEN** the dashboard's `architect_error` reducer case is amended to create state with `phase: "error"` when `state === null`
+- **THEN** the pi-flows-side change to revive the companion emission SHALL be a one-line addition at each init-error site (revert of the revert)
+- **AND** the spec SHALL be amended at that time to mandate dashboard observability
 
 ### Requirement: Architect abort event is observable by dashboard observers
 

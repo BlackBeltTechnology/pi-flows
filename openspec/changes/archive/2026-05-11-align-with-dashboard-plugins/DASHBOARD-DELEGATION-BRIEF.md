@@ -71,3 +71,63 @@ This is a routine doc + array-entry update, no behavior changes beyond enabling 
 ## Reviewer context (one paragraph)
 
 pi-flows now has MIT `LICENSE` and `"license": "MIT"` in `package.json` (commits `fe5f119` upstream). The stale comment in `BUNDLED_EXTENSION_IDS` referenced an absent license as the blocker; that blocker no longer exists. This PR removes the comment and adds `"pi-flows"` to the array so the Electron installer pre-delivers pi-flows on first launch alongside `pi-anthropic-messages`.
+
+---
+
+# Follow-up: relax `architect_error` reducer guard (added 2026-05-12)
+
+## Context
+
+While applying `align-with-dashboard-plugins`, I added companion `flow:architect-error` emissions alongside `flow:architect-init-error` so dashboard observers would see init failures. The companions were silently dropped: pi-flows emits architect init-errors BEFORE any state-creating event (`architect_started` or `architect_context_generating`), so by the time `architect_error` reaches the reducer, `state === null` and the guard at the top of the case skips the update:
+
+```typescript
+// packages/flows-plugin/src/architect-reducer.ts
+case "architect_error": {
+  if (!state) return null;        // ← init-errors get dropped here
+  const summary = (data.summary as string) || (data.error as string) || "Unknown error";
+  return { ...state, error: summary };
+}
+```
+
+The companion emissions were reverted in commit `<followup-sha>` because they did nothing useful in their then-current shape. The init-error UX gap on the dashboard remains.
+
+## Required change
+
+**File:** `pi-agent-dashboard/packages/flows-plugin/src/architect-reducer.ts`
+
+Drop the `if (!state) return null;` guard from the `architect_error` case so init-errors create a minimal state object with the error populated. Suggested shape:
+
+```typescript
+case "architect_error": {
+  const summary = (data.summary as string) || (data.error as string) || "Unknown error";
+  if (!state) {
+    return {
+      // minimal state — fill required fields with the most permissive defaults
+      phase: "error",
+      architectMode: ((data.mode as "new" | "edit") || "new"),
+      flowName: (data.flowName as string) || "",
+      agents: [],
+      dagSteps: [],
+      parsedFlows: [],
+      lastToolCall: null,
+      iteration: 1,
+      resolvedModel: undefined,
+      modelAlias: undefined,
+      error: summary,
+    };
+  }
+  return { ...state, error: summary };
+}
+```
+
+Exact field defaults depend on the current `ArchitectState` type — implementer should consult `packages/shared/src/types.ts`. The intent is: if `architect_error` arrives first, create state in an `"error"` phase so the UI can render the message; if state already exists, just attach the error like before.
+
+## Validation
+
+- Add `flow:architect-error` companion emissions back in pi-flows' `extensions/flow-workspace/index.ts` (revert the revert) once the reducer change lands.
+- Smoke: trigger `no-flows` and `agent-not-found` init failures; confirm the dashboard's `ArchitectErrorView` (or whichever component handles `architectState.error`) displays the message.
+
+## Out-of-scope alternatives that were considered
+
+- **Emit `architect_context_generating` before each init-error** in pi-flows. Creates the state correctly but flashes the architect overlay for ~100ms before clearing. Behaviorally dishonest ("started" is a lie). Rejected.
+- **Add a new `architect_init_failed` event type** with its own reducer case that doesn't require pre-existing state. Cleaner separation but requires `FLOW_EVENT_MAP` extension AND a new reducer case AND a UI affordance. Heavier than the guard relaxation.

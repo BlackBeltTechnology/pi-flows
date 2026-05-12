@@ -246,13 +246,11 @@ async function handleEditFlow(
     }
 
     if (flowFiles.length === 0) {
+      // TUI-only error: dashboard reducer's `if (!state) return null;` guard
+      // drops architect_error before architect_context_generating creates state.
+      // See: openspec/changes/archive/2026-05-11-align-with-dashboard-plugins/
+      //      DASHBOARD-DELEGATION-BRIEF.md
       pi.events.emit("flow:architect-init-error", { reason: "no-flows" });
-      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
-      pi.events.emit("flow:architect-error", {
-        phase: "init",
-        reason: "no-flows",
-        summary: "No flow files found in the workspace to edit.",
-      });
       pi.events.emit("flow:architect-complete", { choice: "error" });
       architectRunning = false;
       return;
@@ -307,13 +305,8 @@ async function handleEditFlow(
     const { parseAgentFile } = await import("../flow-engine/agent-parser.js");
     architectConfig = parseAgentFile(join(pkgRoot, "agents", "flow-architect.md"));
   } catch {
+    // TUI-only error: dashboard reducer guard drops architect_error before state exists.
     pi.events.emit("flow:architect-init-error", { reason: "agent-not-found" });
-    // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
-    pi.events.emit("flow:architect-error", {
-      phase: "init",
-      reason: "agent-not-found",
-      summary: "Could not load the flow-architect agent configuration.",
-    });
     pi.events.emit("flow:architect-complete", { choice: "error" });
     architectRunning = false;
     return;
@@ -651,13 +644,8 @@ async function handleNewFlow(
     const { parseAgentFile } = await import("../flow-engine/agent-parser.js");
     architectConfig = parseAgentFile(join(pkgRoot, "agents", "flow-architect.md"));
   } catch {
+    // TUI-only error: dashboard reducer guard drops architect_error before state exists.
     pi.events.emit("flow:architect-init-error", { reason: "agent-not-found" });
-    // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
-    pi.events.emit("flow:architect-error", {
-      phase: "init",
-      reason: "agent-not-found",
-      summary: "Could not load the flow-architect agent configuration.",
-    });
     pi.events.emit("flow:architect-complete", { choice: "error" });
     architectRunning = false;
     return;
@@ -986,13 +974,8 @@ export function activate(pi: ExtensionAPI) {
   // flows:new-request — triggered by /flows:new or /flows → "New flow"
   pi.events.on("flows:new-request", async (data: any) => {
     if (architectRunning) {
+      // TUI-only error: dashboard reducer guard drops architect_error before state exists.
       pi.events.emit("flow:architect-init-error", { reason: "already-running" });
-      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
-      pi.events.emit("flow:architect-error", {
-        phase: "init",
-        reason: "already-running",
-        summary: "An architect session is already running.",
-      });
       return;
     }
     architectRunning = true;
@@ -1007,25 +990,15 @@ export function activate(pi: ExtensionAPI) {
   // flows:edit-request — triggered by /flows:edit or /flows <name> → Edit
   pi.events.on("flows:edit-request", async (data: any) => {
     if (architectRunning) {
+      // TUI-only error: dashboard reducer guard drops architect_error before state exists.
       pi.events.emit("flow:architect-init-error", { reason: "already-running" });
-      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
-      pi.events.emit("flow:architect-error", {
-        phase: "init",
-        reason: "already-running",
-        summary: "An architect session is already running.",
-      });
       return;
     }
     architectRunning = true;
     const { flowName, flowPath, modificationRequest } = data as { flowName: string; flowPath: string; modificationRequest?: string };
     if (flowPath && !existsSync(flowPath)) {
+      // TUI-only error: dashboard reducer guard drops architect_error before state exists.
       pi.events.emit("flow:architect-init-error", { reason: "agent-not-found" });
-      // Mirror to a FLOW_EVENT_MAP-bridged event so dashboard observers see the failure.
-      pi.events.emit("flow:architect-error", {
-        phase: "init",
-        reason: "agent-not-found",
-        summary: "Flow file does not exist at the requested path.",
-      });
       architectRunning = false;
       return;
     }

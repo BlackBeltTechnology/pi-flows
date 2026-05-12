@@ -114,7 +114,7 @@ export const FLOW_EVENT_MAP: Record<string, string> = {
 
 **3. (If the dashboard server should react to it)** Handle the resulting protocol event in `pi-agent-dashboard/packages/flows-plugin/src/server/state-store.ts` so the canonical state-store mutates and a fresh intent tree gets broadcast. If the event only needs recording for replay (no UI change), step 2 is sufficient.
 
-**Fast-path observability without round-tripping a dashboard PR**: emit a companion event whose name is already in `FLOW_EVENT_MAP`. Example: `flow:architect-init-error` is TUI-only (no map entry), but the emission site also fires `flow:architect-error` with `{ phase: "init", ... }` so dashboard observers get the failure. See `extensions/flow-workspace/index.ts` for the pattern.
+**Fast-path observability without round-tripping a dashboard PR**: emit a companion event whose name is already in `FLOW_EVENT_MAP`. This works ONLY when the companion event's reducer handler does not depend on prior state. The architect lifecycle reducer rejects `architect_error` when `state === null` (i.e., before `architect_started` / `architect_context_generating`), so init-errors emitted before any architect state exists cannot be surfaced via the `flow:architect-error` companion. They remain TUI-only via the unmapped `flow:architect-init-error` event. Tracked in `openspec/changes/archive/2026-05-11-align-with-dashboard-plugins/DASHBOARD-DELEGATION-BRIEF.md` for a future dashboard-side reducer fix.
 
 ## TUI overlay vs server-driven renderer
 
