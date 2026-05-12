@@ -6,6 +6,11 @@
   "keywords": [
     "pi-package"
   ],
+  "type": "module",
+  "main": "./extensions/index.ts",
+  "exports": {
+    ".": "./extensions/index.ts"
+  },
   "pi": {
     "extensions": [
       "./extensions"

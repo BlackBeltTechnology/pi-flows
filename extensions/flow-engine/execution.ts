@@ -261,16 +261,26 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     toolPrefix = "mcp__flows__";
   }
 
-  // Resolve tools from agent frontmatter, applying mcp__ prefix for non-core tools
-  const tools = agent.tools
-    .filter(t => TOOL_FACTORIES[t])
-    .map(t => {
-      const tool = TOOL_FACTORIES[t](cwd);
-      const prefixed = prefixToolName(tool.name, toolPrefix);
-      return prefixed !== tool.name ? { ...tool, name: prefixed } : tool;
-    });
+  // Built-in pi tools (read/write/grep/find/bash/edit/ls) the agent declares.
+  // pi-coding-agent's createAgentSession({ tools }) accepts a STRING ARRAY of
+  // tool NAMES that select subsets of its built-in tool registry. Passing tool
+  // definition objects (the previous behaviour) silently failed: the SDK's
+  // `allowedToolNames` set was filled with `[object Object]` entries that
+  // never match real tool names, so EVERY tool got filtered out and the
+  // outbound payload contained no `tools` array. The architect subagent then
+  // saw "Available tools: (none)" and refused to call any tool.
+  //
+  // pi's SDK looks tools up by their canonical lowercase name ("read",
+  // "bash", "grep", "find", "ls", "edit", "write"). Outbound canonical
+  // capitalization or mcp__ prefixing for Claude-model anthropic-messages
+  // sessions happens later in pi-ai or @pi/anthropic-messages — we MUST pass
+  // the lowercase pi-internal names here.
+  const builtinToolNames = agent.tools.filter(t => TOOL_FACTORIES[t]);
 
-  // Prefix customTools (extension tools like agent_write, flow_write, etc.)
+  // Custom tools (agent_catalog, agent_write, flow_write, finish, ask_user, …)
+  // are passed as full ToolDefinition objects via `customTools`. The SDK adds
+  // them to its tool registry. For anthropic-messages sessions they need the
+  // mcp__flows__ prefix on their wire name so Claude's endpoint accepts them.
   const customTools = (options.extraCustomTools ?? []).map((t: any) => {
     const prefixed = prefixToolName(t.name, toolPrefix);
     return prefixed !== t.name ? { ...t, name: prefixed } : t;
@@ -337,13 +347,23 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // session's AskUserQueue via the onExtensionUIRequest callback.
   const uiContext = createSubagentUIContext(agent.name, options.onExtensionUIRequest);
 
-  // Create agent session
+  // Create agent session.
+  //
+  // IMPORTANT: we pass `tools: undefined` (NOT a filtered name list) so
+  // pi-coding-agent's `allowedToolNames` is undefined and the SDK does NOT
+  // filter out our `customTools` or extension-registered tools (the guard's
+  // `mcp__flows__finish`, the architect's `mcp__flows__agent_catalog`, etc.).
+  //
+  // The agent's tool sandbox is enforced by the guard extension (which blocks
+  // tool_call events for unauthorized names) — not by the SDK's name allowlist.
+  // We then call setActiveToolsByName below to tell the agent which tools to
+  // expose in its system prompt and on the wire.
   let session: any;
   try {
     const { session: sess } = await createAgentSession({
       model,
       thinkingLevel: thinking as any,
-      tools,
+      tools: undefined,                  // see comment above
       customTools: customTools,
       resourceLoader,
       sessionManager: SessionManager.inMemory(),
@@ -368,6 +388,28 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Bind extensions with UI context
   await session.bindExtensions({ uiContext });
+
+  // Activate the tools the agent should see on the wire. This MUST happen
+  // after bindExtensions because that's when the guard extension registers
+  // its `finish` tool into the session's tool registry. Calling
+  // setActiveToolsByName here:
+  //   - Picks the prefixed built-in names (read/grep/find — or Read/Grep/Find
+  //     once pi-ai canonicalizes them outbound).
+  //   - Adds prefixed customTools (mcp__flows__agent_catalog, mcp__flows__flow_write, …).
+  //   - Adds the guard's prefixed finish tool (mcp__flows__finish).
+  // The system prompt + outbound `tools` array are rebuilt accordingly.
+  const activeToolNames = [
+    ...builtinToolNames.map(name => prefixToolName(name, toolPrefix)),
+    ...customTools.map((t: any) => t.name),
+    prefixToolName("finish", toolPrefix),
+  ];
+  try {
+    session.setActiveToolsByName(activeToolNames);
+  } catch {
+    // setActiveToolsByName is best-effort — even if it fails the tool
+    // registry still contains the tools; only the system-prompt `Available
+    // tools:` listing might lag.
+  }
 
   // Wire event capture
   const finishToolName = prefixToolName("finish", toolPrefix);
