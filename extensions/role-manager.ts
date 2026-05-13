@@ -104,9 +104,19 @@ export function setAutonomousMode(enabled: boolean): void {
 // -- Extension entry point ------------------------------------------------
 
 export function activate(pi: ExtensionAPI) {
-  const config = loadRoleConfig();
-  currentRoles = config.roles;
-  autonomousModeEnabled = config.autonomousMode;
+  // Bootstrap in-memory `currentRoles` from disk so `getModelRole()`
+  // reflects persisted state immediately. Each event handler below
+  // re-reads from disk via `loadRoleConfig()` at invocation time to
+  // avoid a closure-staleness bug where preset-load + role-set
+  // interleavings (or external edits to providers.json) could clobber
+  // unrelated preset entries when the closure's `config.rolePresets`
+  // got written back to disk.
+  // See change: fix-pi-flows-end-to-end (Group 5 fix — reliable preset switch).
+  {
+    const boot = loadRoleConfig();
+    currentRoles = boot.roles;
+    autonomousModeEnabled = boot.autonomousMode;
+  }
 
   // ── Event API: Role Management ─────────────────────────────────────
 
@@ -121,6 +131,7 @@ export function activate(pi: ExtensionAPI) {
     const { role, modelId } = data;
     if (!role || !modelId) { data.success = false; return; }
 
+    const config = loadRoleConfig();
     config.roles[role] = modelId;
     currentRoles = { ...config.roles };
 
@@ -138,13 +149,13 @@ export function activate(pi: ExtensionAPI) {
 
   pi.events.on("flow:role-preset-load", (data: any) => {
     const { name } = data;
-    const cfg = loadRoleConfig();
-    const preset = (cfg.rolePresets ?? []).find((p) => p.name === name);
+    const config = loadRoleConfig();
+    const preset = (config.rolePresets ?? []).find((p) => p.name === name);
     if (!preset) { data.success = false; return; }
 
-    for (const [role, model] of Object.entries(preset.roles)) {
-      config.roles[role] = model;
-    }
+    // Replace `config.roles` wholesale with the preset's roles so missing
+    // keys are not preserved from the prior preset.
+    config.roles = { ...preset.roles };
     currentRoles = { ...config.roles };
     config.activePreset = name;
     saveRoleConfig(config);
@@ -155,6 +166,7 @@ export function activate(pi: ExtensionAPI) {
     const { name } = data;
     if (!name) { data.success = false; return; }
 
+    const config = loadRoleConfig();
     if (!config.rolePresets) config.rolePresets = [];
     const existing = config.rolePresets.findIndex((p) => p.name === name);
     const preset: RolePreset = { name, roles: { ...config.roles } };
@@ -169,8 +181,10 @@ export function activate(pi: ExtensionAPI) {
 
   pi.events.on("flow:role-preset-delete", (data: any) => {
     const { name } = data;
-    if (!name || !config.rolePresets) { data.success = false; return; }
+    if (!name) { data.success = false; return; }
 
+    const config = loadRoleConfig();
+    if (!config.rolePresets) { data.success = false; return; }
     const before = config.rolePresets.length;
     config.rolePresets = config.rolePresets.filter((p) => p.name !== name);
     if (config.rolePresets.length === before) { data.success = false; return; }

@@ -3,6 +3,7 @@ import { expandTemplateVariables, spawnAgent } from "./execution.js";
 import { resolveModel } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
+import { raceWithAbort } from "./abort-utils.js";
 import { globSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -327,8 +328,51 @@ async function runDagSegment(
       batch.push(step);
     }
 
-    // Execute batch in parallel
-    const results = await Promise.all(batch.map(step => executeAgentStep(step, ctx, options)));
+    // Execute batch in parallel.
+    //
+    // The Promise.all is wrapped in `raceWithAbort` so user abort unwinds the
+    // parent loop within a microtask of the signal firing, instead of waiting
+    // for every in-flight child to observe `options.signal?.aborted` at its
+    // own iteration boundary. Pending children still call `session.abort()`
+    // via their existing listener and clean up in the background; the
+    // catch-block below synthesises `cancelled: true` results for any step
+    // that hadn't returned yet so observers (TUI, dashboard) render accurate
+    // per-agent state.
+    //
+    // See change: fix-pi-flows-end-to-end (Group 3, tasks 3.1 + 3.3).
+    let results: (AgentResult | null)[];
+    try {
+      results = await raceWithAbort(
+        Promise.all(batch.map(step => executeAgentStep(step, ctx, options))),
+        options.signal,
+      );
+    } catch (err) {
+      if (err instanceof FlowCancelledError) {
+        // Synthesize cancelled results for every step that hadn't completed
+        // before the race tripped. Children may still resolve later; their
+        // results are discarded by the parent.
+        for (const step of batch) {
+          if (!completed.has(step.id)) {
+            completed.add(step.id);
+            const cancelledResult: AgentResult = {
+              success: false,
+              output: "",
+              stderr: "Cancelled by user",
+              exitCode: null,
+              result: parseResult(""),
+              toolCalls: [],
+              duration: 0,
+              tokens: { input: 0, output: 0 },
+              cancelled: true,
+            };
+            lastResult = cancelledResult;
+            storeResult(ctx, step.id, cancelledResult);
+          }
+        }
+        throw err; // Propagate up to runFlow's catch which produces clean FlowResult
+      }
+      throw err;
+    }
 
     // Store results and check for routing
     for (let i = 0; i < batch.length; i++) {
@@ -922,10 +966,6 @@ function storeResult(ctx: FlowContext, stepId: string, result: AgentResult): voi
   };
 }
 
-function getLastResultOutput(ctx: FlowContext): string {
-  const entries = Object.values(ctx.results);
-  return entries.length > 0 ? entries[entries.length - 1].fullOutput : "";
-}
 
 /**
  * Compute the set of active steps in a DAG segment starting from a root step.

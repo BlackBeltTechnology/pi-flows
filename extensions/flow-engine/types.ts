@@ -152,6 +152,11 @@ export interface AgentResult {
   tokens: { input: number; output: number };
   finishParams?: Record<string, any>; // Raw finish tool call args (if captured)
   typedOutputs?: Record<string, string>; // Extracted typed output values from declared agent outputs
+  /**
+   * True when the step did not complete because the run was cancelled
+   * mid-batch via AbortSignal. See change: fix-pi-flows-end-to-end (Group 3).
+   */
+  cancelled?: boolean;
 }
 
 export interface ToolCallRecord {
