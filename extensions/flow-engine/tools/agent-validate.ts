@@ -7,14 +7,8 @@
 // Used internally by agent-write.ts. Not registered as a standalone tool.
 // ---------------------------------------------------------------------------
 
-// ---- Diagnostic type (same as flow-validate) ------------------------------
-
-export interface Diagnostic {
-  line: number;
-  severity: "error" | "warning";
-  message: string;
-  suggestion?: string;
-}
+import type { Diagnostic } from "../types.js";
+export type { Diagnostic };
 
 // ---- Known constants ------------------------------------------------------
 

@@ -35,13 +35,6 @@ export function wipeStagingDir(projectRoot: string): void {
 }
 
 /**
- * Check if a staging directory exists (for crash recovery).
- */
-export function hasStagingDir(projectRoot: string): boolean {
-  return existsSync(join(projectRoot, STAGING_DIR));
-}
-
-/**
  * Promote staged files to their final locations and wipe staging.
  *
  * Returns the final flow file path, or null if no flow was staged.

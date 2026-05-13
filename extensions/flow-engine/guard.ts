@@ -10,14 +10,8 @@
 
 import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import type { AccessRules } from "./types.js";
 import { prefixToolName } from "./tool-prefix.js";
-
-
-interface AccessRules {
-  read?: string[];
-  write?: string[];
-  bash?: { deny: string[] };
-}
 
 export interface GuardOptions {
   allowedTools?: string[];

@@ -15,7 +15,7 @@ export { createAgentDetailOverlay } from "./agent-detail-overlay.js";
 export type { AgentDetailOverlayOptions } from "./agent-detail-overlay.js";
 export { createFlowPreviewOverlay } from "./flow-preview-overlay.js";
 export type { FlowPreviewOverlayOptions } from "./flow-preview-overlay.js";
-export { renderBox, padLine } from "./box-renderer.js";
+export { renderBox } from "./box-renderer.js";
 export type { BoxOptions } from "./box-renderer.js";
 
 export function activate(pi: ExtensionAPI) {

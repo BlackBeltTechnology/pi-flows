@@ -12,6 +12,7 @@
 
 import type {
   AgentConfig,
+  Diagnostic,
   FlowConfig,
   FlowStep,
   AgentStep,
@@ -21,16 +22,8 @@ import type {
   AgentLoopDecisionStep,
   FlowRefStep,
 } from "../types.js";
+export type { Diagnostic };
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
-
-// ---- Diagnostic type ------------------------------------------------------
-
-export interface Diagnostic {
-  line: number;
-  severity: "error" | "warning";
-  message: string;
-  suggestion?: string;
-}
 
 // ---- Line index -----------------------------------------------------------
 

@@ -10,7 +10,6 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
 import { getModelRole, isAutonomousMode, setAutonomousMode } from "../role-manager.js";
-import { registerSubagentTool } from "./tool.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
 import {
   registerSkillReadTool,
@@ -38,7 +37,6 @@ export type {
   AgentResult,
   FlowResult,
   TemplateContext,
-  SubagentEvent,
   ArchitectMeta,
   CardConfig,
 } from "./types.js";
@@ -48,7 +46,7 @@ export type { FlowRunOptions, FlowContext } from "./flow-execution.js";
 export { discoverAll, resolvePackageRoot } from "./discovery.js";
 export { resolveModel } from "./model-roles.js";
 export { parseResult, hasArtifactElement } from "./result-parser.js";
-export { parseAgentFile, parseAgentString } from "./agent-parser.js";
+export { parseAgentFile } from "./agent-parser.js";
 export { parseFlowYamlFile, parseFlowYamlString } from "./flow-parser-yaml.js";
 export type { FlowIOAdapter, FlowObserver, AskUserExtra, AskUserResult } from "./flow-io.js";
 export { FlowManager } from "./flow-manager.js";
@@ -315,20 +313,7 @@ export function activate(pi: ExtensionAPI) {
 
   pi.events?.on("flow:register-agent-extension", handleRegisterAgentExtension);
 
-  // Deprecated alias — kept for backward compatibility
-  pi.events?.on("flow:register-guard-extension", handleRegisterAgentExtension);
-
   // ── Register tools ──
-
-  registerSubagentTool(
-    pi,
-    () => agents,
-    (role) => getModelRole(role),
-    projectRoot,
-    () => sessionAuthStorage,
-    () => sessionModelRegistry,
-    () => [...extraAgentExtensions],
-  );
 
   registerAskUserTool(pi);
   registerSkillReadTool(pi, pkgRoot);

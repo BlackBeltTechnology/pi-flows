@@ -38,14 +38,6 @@ export const CORE_TOOL_NAMES = new Set([
 ]);
 
 /**
- * Check if an API key is an Anthropic OAuth token.
- * Matches the SDK's internal isOAuthToken check in pi-ai/providers/anthropic.ts.
- */
-export function isAnthropicOAuthToken(apiKey: string | undefined): boolean {
-  return !!apiKey && apiKey.includes("sk-ant-oat");
-}
-
-/**
  * Apply mcp__flows__ prefix to a tool name if needed.
  * Returns the name unchanged if:
  * - prefix is empty (not Anthropic OAuth)

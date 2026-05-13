@@ -135,20 +135,13 @@ export function activate(pi: ExtensionAPI) {
 
   pi.events.on("flow:delete-request", (data: any) => {
     const flowName = data?.flowName;
-    if (!flowName) {
-      pi.events.emit("flow:delete-result", { success: false, flowName, error: "Missing flowName" });
-      return;
-    }
+    if (!flowName) return;
 
     const flowFiles = getFlowFiles(projectRoot);
     const matching = flowFiles.find(f => f.name === flowName);
-    if (!matching) {
-      pi.events.emit("flow:delete-result", { success: false, flowName, error: "Flow not found" });
-      return;
-    }
+    if (!matching) return;
 
-    const result = deleteFlowFiles(pi, projectRoot, flowName, matching.path);
-    pi.events.emit("flow:delete-result", { ...result, flowName });
+    deleteFlowFiles(pi, projectRoot, flowName, matching.path);
   });
 
   // -- flow_results tool — LLM-callable access to flow results ----------------

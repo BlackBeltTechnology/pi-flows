@@ -8,7 +8,7 @@
 import { visibleWidth } from "@mariozechner/pi-tui";
 
 /** Pad a line (which may contain ANSI codes) with trailing spaces to exactly `targetWidth` visible characters. */
-export function padLine(line: string, targetWidth: number): string {
+function padLine(line: string, targetWidth: number): string {
   const vw = visibleWidth(line);
   if (vw >= targetWidth) return line;
   return line + " ".repeat(targetWidth - vw);

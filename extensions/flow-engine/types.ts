@@ -132,13 +132,6 @@ export interface FlowRefStep {
   on_error?: string;
 }
 
-// ---- Routing directives ---------------------------------------------------
-
-export interface StepRouting {
-  on_complete?: string;
-  on_error?: string;
-}
-
 // ---- Agent execution results ----------------------------------------------
 
 export interface AgentResult {
@@ -181,43 +174,6 @@ export interface ResultFile {
   action: "created" | "modified" | "read";
 }
 
-// ---- Subagent events ------------------------------------------------------
-
-export type SubagentEventType =
-  | "started"
-  | "complete"
-  | "tool_call"
-  | "tool_result";
-
-export interface SubagentEvent {
-  type: SubagentEventType;
-  agentName: string;
-  flowName?: string;
-  stepId?: string;
-  timestamp: number;
-  data: any; // Event-specific payload
-}
-
-export interface SubagentStartedEvent extends SubagentEvent {
-  type: "started";
-  data: { task: string; model: string };
-}
-
-export interface SubagentCompleteEvent extends SubagentEvent {
-  type: "complete";
-  data: AgentResult;
-}
-
-export interface SubagentToolCallEvent extends SubagentEvent {
-  type: "tool_call";
-  data: { toolName: string; input: any };
-}
-
-export interface SubagentToolResultEvent extends SubagentEvent {
-  type: "tool_result";
-  data: { toolName: string; output: any; isError: boolean };
-}
-
 // ---- Enriched flow result (returned by runFlow) ---------------------------
 
 export interface FlowResult {
@@ -248,4 +204,13 @@ export interface TemplateContext {
   >;
   loopCounters?: Record<string, number>;
   loopMaxIterations?: Record<string, number>;
+}
+
+// ---- Validation diagnostic ------------------------------------------------
+
+export interface Diagnostic {
+  line: number;
+  severity: "error" | "warning";
+  message: string;
+  suggestion?: string;
 }

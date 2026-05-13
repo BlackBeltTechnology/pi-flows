@@ -417,33 +417,4 @@ function overlayFrameInto(
 // Utility: text input submenu for SettingsList
 // ---------------------------------------------------------------------------
 
-/**
- * Create a text-input submenu factory for use with SettingsList items.
- * Returns a submenu function that shows an inline Input component.
- */
-export function textInputSubmenu(placeholder: string) {
-  return (_currentValue: string, submenuDone: (val?: string) => void) => {
-    const input = new Input();
-    input.focused = true;
-    const kb = getKeybindings();
-    return {
-      render: (w: number) => {
-        const lines = input.render(w);
-        lines.push(`  ${placeholder} · Enter: confirm · Esc: cancel`);
-        return lines;
-      },
-      invalidate: () => {},
-      handleInput: (data: string) => {
-        if (kb.matches(data, "tui.select.confirm")) {
-          const val = input.getValue().trim();
-          if (val) submenuDone(val);
-          else submenuDone(undefined);
-        } else if (kb.matches(data, "tui.select.cancel")) {
-          submenuDone(undefined);
-        } else {
-          input.handleInput(data);
-        }
-      },
-    };
-  };
-}
+
