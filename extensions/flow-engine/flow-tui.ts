@@ -6,13 +6,23 @@
 // ---------------------------------------------------------------------------
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AgentConfig, AgentResult, FlowConfig, FlowResult } from "./types.js";
+import type {
+  AgentConfig,
+  AgentResult,
+  FlowConfig,
+  FlowResult,
+} from "./types.js";
 import type { FlowObserver } from "./flow-io.js";
 import type { FlowManager } from "./flow-manager.js";
 import { GridComponent } from "../flow-dashboard/grid-component.js";
 import { createAgentDetailOverlay } from "../flow-dashboard/agent-detail-overlay.js";
 import { setFlowWidget } from "../shared/flow-widget.js";
-import { getSummaryState, setSummaryState, getLastEventLog, getLastCards } from "../flow-summary/index.js";
+import {
+  getSummaryState,
+  setSummaryState,
+  getLastEventLog,
+  getLastCards,
+} from "../flow-summary/index.js";
 import { Text } from "@mariozechner/pi-tui";
 import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { isAutonomousMode, setAutonomousMode } from "../role-manager.js";
@@ -53,7 +63,12 @@ function requestRender() {
   tui?.requestRender();
 }
 
-async function openDetailOverlay(agentName: string, status: string, summary: string | undefined, entries: any[]) {
+async function openDetailOverlay(
+  agentName: string,
+  status: string,
+  summary: string | undefined,
+  entries: any[],
+) {
   if (!uiCtx) return;
   overlayOpen = true;
   try {
@@ -165,7 +180,12 @@ function registerDashboardInputHandler(flowManager: FlowManager): () => void {
         if (name) {
           const card = db.getCard(name);
           const entries = db.getEventLog(name);
-          openDetailOverlay(name, card?.status || "unknown", undefined, entries);
+          openDetailOverlay(
+            name,
+            card?.status || "unknown",
+            undefined,
+            entries,
+          );
         }
       }
       // Navigate mode consumes ALL input — prevent typing into editor
@@ -220,7 +240,12 @@ function registerSummaryInputHandler(): void {
     }
 
     if (mode === "navigate") {
-      if (data === KEY_CTRL_O || data === KEY_ESC || data === KEY_BACKSPACE_1 || data === KEY_BACKSPACE_2) {
+      if (
+        data === KEY_CTRL_O ||
+        data === KEY_ESC ||
+        data === KEY_BACKSPACE_1 ||
+        data === KEY_BACKSPACE_2
+      ) {
         summaryState.mode = "summary";
         requestRender();
       } else if (data === KEY_UP) {
@@ -235,7 +260,12 @@ function registerSummaryInputHandler(): void {
         if (name) {
           const result = summaryState.flowResult?.results?.[name];
           const entries = getLastEventLog()?.get(name) || [];
-          openDetailOverlay(name, result?.status || "unknown", result?.summary, entries);
+          openDetailOverlay(
+            name,
+            result?.status || "unknown",
+            result?.summary,
+            entries,
+          );
         }
       }
       // Navigate mode consumes ALL input — prevent typing into editor
@@ -289,18 +319,16 @@ function wireDashboard(dashboard: any, ui: any, flowManager: FlowManager) {
     },
   };
 
-  setFlowWidget(
-    ui,
-    "flow-dashboard",
-    (tuiInstance: any, theme: any) => {
-      tuiRef = tuiInstance;
-      tui = tuiInstance;
-      themeRef = theme;
-      return component;
-    },
-  );
+  setFlowWidget(ui, "flow-dashboard", (tuiInstance: any, theme: any) => {
+    tuiRef = tuiInstance;
+    tui = tuiInstance;
+    themeRef = theme;
+    return component;
+  });
 
-  process.nextTick(() => { tuiRef?.requestRender(true); });
+  process.nextTick(() => {
+    tuiRef?.requestRender(true);
+  });
 
   const update = () => {
     if (disposed) return;
@@ -338,7 +366,11 @@ export class TuiFlowObserver implements FlowObserver {
     this.buildAgentDeps = options.buildAgentDeps;
   }
 
-  async onFlowStarted(flowName: string, flow: FlowConfig, _task: string): Promise<void> {
+  async onFlowStarted(
+    flowName: string,
+    flow: FlowConfig,
+    _task: string,
+  ): Promise<void> {
     try {
       const { AgentDashboard, resolveWorkflow } =
         await import("../flow-dashboard/index.js");
@@ -353,21 +385,34 @@ export class TuiFlowObserver implements FlowObserver {
         this.extractAgentConfigs(flow),
         this.buildAgentDeps(flow),
       );
-      this.renderDashboard = wireDashboard(this.dashboard, uiCtx, this.flowManager);
+      this.renderDashboard = wireDashboard(
+        this.dashboard,
+        uiCtx,
+        this.flowManager,
+      );
       this.renderDashboard();
     } catch {
       /* flow-dashboard not available */
     }
   }
 
-  onAgentStarted(agentName: string, _stepId: string, config?: AgentConfig, resolvedModel?: string): void {
+  onAgentStarted(
+    agentName: string,
+    _stepId: string,
+    config?: AgentConfig,
+    resolvedModel?: string,
+  ): void {
     if (this.dashboard) {
       this.dashboard.onAgentStarted(agentName, config, resolvedModel);
       this.renderDashboard!();
     }
   }
 
-  onAgentComplete(agentName: string, _stepId: string, result: AgentResult): void {
+  onAgentComplete(
+    agentName: string,
+    _stepId: string,
+    result: AgentResult,
+  ): void {
     if (this.dashboard) {
       this.dashboard.onAgentComplete(agentName, result);
       this.renderDashboard!();
@@ -379,14 +424,25 @@ export class TuiFlowObserver implements FlowObserver {
     }
   }
 
-  onToolCall(agentName: string, _stepId: string, toolName: string, input: any): void {
+  onToolCall(
+    agentName: string,
+    _stepId: string,
+    toolName: string,
+    input: any,
+  ): void {
     if (this.dashboard) {
       this.dashboard.onToolCall(agentName, toolName, input);
       this.renderDashboard!();
     }
   }
 
-  onToolResult(agentName: string, _stepId: string, toolName: string, output: any, isError: boolean): void {
+  onToolResult(
+    agentName: string,
+    _stepId: string,
+    toolName: string,
+    output: any,
+    isError: boolean,
+  ): void {
     if (this.dashboard) {
       this.dashboard.onToolResult(agentName, toolName, output, isError);
       this.renderDashboard!();
@@ -407,7 +463,12 @@ export class TuiFlowObserver implements FlowObserver {
     }
   }
 
-  onLoopIteration(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void {
+  onLoopIteration(
+    stepId: string,
+    iteration: number,
+    maxIterations: number,
+    loopTarget?: string,
+  ): void {
     if (this.dashboard && loopTarget) {
       // Only set loop badge on the loop target agent — this is the step
       // the loop jumps back to. Other agents outside the loop should not
@@ -469,7 +530,7 @@ export class EventEmitObserver implements FlowObserver {
   onFlowStarted(flowName: string, flow: FlowConfig, task: string): void {
     // Serialize minimal step metadata for external consumers (dashboards, etc.)
     // Avoids sending full AgentConfig.systemPrompt (can be very large)
-    const steps = flow.steps.map(step => ({
+    const steps = flow.steps.map((step) => ({
       id: step.id,
       stepType: step.stepType,
       agent: (step as any).agent,
@@ -488,22 +549,33 @@ export class EventEmitObserver implements FlowObserver {
     });
   }
 
-  onAgentStarted(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string): void {
+  onAgentStarted(
+    agentName: string,
+    stepId: string,
+    config?: AgentConfig,
+    resolvedModel?: string,
+  ): void {
     this.pi.events.emit("flow:agent-started", {
       agentName,
       stepId,
       resolvedModel,
-      config: config ? {
-        name: config.name,
-        description: config.description,
-        model: config.model,
-        card: config.card,
-        sourcePath: config.source,
-      } : undefined,
+      config: config
+        ? {
+            name: config.name,
+            description: config.description,
+            model: config.model,
+            card: config.card,
+            sourcePath: config.source,
+          }
+        : undefined,
     });
   }
 
-  onAgentComplete(agentName: string, stepId: string, result: AgentResult): void {
+  onAgentComplete(
+    agentName: string,
+    stepId: string,
+    result: AgentResult,
+  ): void {
     this.pi.events.emit("flow:agent-complete", {
       agentName,
       stepId,
@@ -511,7 +583,7 @@ export class EventEmitObserver implements FlowObserver {
         success: result.success,
         status: result.result?.status,
         summary: result.result?.summary,
-        files: result.result?.files?.map(f => f.path) || [],
+        files: result.result?.files?.map((f) => f.path) || [],
         tokens: result.tokens,
         duration: result.duration,
       },
@@ -526,20 +598,62 @@ export class EventEmitObserver implements FlowObserver {
     this.pi.events.emit("flow:thinking-text", { agentName, stepId, text });
   }
 
-  onToolCall(agentName: string, stepId: string, toolName: string, input: any): void {
-    this.pi.events.emit("flow:subagent-tool-call", { agentName, stepId, toolName, input });
+  onToolCall(
+    agentName: string,
+    stepId: string,
+    toolName: string,
+    input: any,
+  ): void {
+    this.pi.events.emit("flow:subagent-tool-call", {
+      agentName,
+      stepId,
+      toolName,
+      input,
+    });
   }
 
-  onToolResult(agentName: string, stepId: string, toolName: string, output: any, isError: boolean): void {
-    this.pi.events.emit("flow:subagent-tool-result", { agentName, stepId, toolName, output, isError });
+  onToolResult(
+    agentName: string,
+    stepId: string,
+    toolName: string,
+    output: any,
+    isError: boolean,
+  ): void {
+    this.pi.events.emit("flow:subagent-tool-result", {
+      agentName,
+      stepId,
+      toolName,
+      output,
+      isError,
+    });
   }
 
-  onAutoDecision(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void {
-    this.pi.events.emit("flow:auto-decision", { forkId, agentName, chosenBranch, targetStepId });
+  onAutoDecision(
+    forkId: string,
+    agentName: string,
+    chosenBranch: string,
+    targetStepId: string,
+  ): void {
+    this.pi.events.emit("flow:auto-decision", {
+      forkId,
+      agentName,
+      chosenBranch,
+      targetStepId,
+    });
   }
 
-  onLoopIteration(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void {
-    this.pi.events.emit("flow:loop-iteration", { stepId, iteration, maxIterations, loopTarget });
+  onLoopIteration(
+    stepId: string,
+    iteration: number,
+    maxIterations: number,
+    loopTarget?: string,
+  ): void {
+    this.pi.events.emit("flow:loop-iteration", {
+      stepId,
+      iteration,
+      maxIterations,
+      loopTarget,
+    });
   }
 
   onFlowComplete(_flowName: string, result: FlowResult): void {
@@ -555,18 +669,13 @@ export function getIsOverlayOpen(): boolean {
 
 // ---- Braille spinner frames (for summary widget) --------------------------
 
-
-
 // ---- setupFlowTui ----------------------------------------------------------
 
 /**
  * Wire TUI-specific flow infrastructure into the extension lifecycle.
  * Called from index.ts during activate() — only when ctx.hasUI is true.
  */
-export function setupFlowTui(
-  pi: ExtensionAPI,
-  flowManager: FlowManager,
-): void {
+export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
   piRef = pi;
 
   // ── Legacy prompt request/response handler REMOVED ──
@@ -593,7 +702,8 @@ export function setupFlowTui(
     try {
       const { parseFlowYamlString } = await import("./flow-parser-yaml.js");
       const flowConfig = parseFlowYamlString(content, "<preview>");
-      const { createFlowPreviewOverlay } = await import("../flow-dashboard/flow-preview-overlay.js");
+      const { createFlowPreviewOverlay } =
+        await import("../flow-dashboard/flow-preview-overlay.js");
       await uiCtx.custom(
         (tuiInstance: any, theme: any, _kb: any, done: (r: null) => void) => {
           return createFlowPreviewOverlay({
@@ -612,16 +722,22 @@ export function setupFlowTui(
           },
         },
       );
-    } catch { /* overlay not available */ }
-    finally { architectOverlayOpen = false; }
+    } catch {
+      /* overlay not available */
+    } finally {
+      architectOverlayOpen = false;
+    }
   }
 
-  async function mountArchitectWidget(resolveAgentType?: (name: string) => "built-in" | "local") {
+  async function mountArchitectWidget(
+    resolveAgentType?: (name: string) => "built-in" | "local",
+  ) {
     if (!uiCtx) return;
     // Clear stale summary input handler so it doesn't steal keybinds from architect
     unregisterSummaryInputHandler();
     try {
-      const { createArchitectWidget } = await import("../flow-dashboard/architect-widget.js");
+      const { createArchitectWidget } =
+        await import("../flow-dashboard/architect-widget.js");
       architectWidget = createArchitectWidget({ resolveAgentType });
       const wrappedFactory = (t: any, theme: any) => {
         widgetTuiRef = t;
@@ -629,7 +745,9 @@ export function setupFlowTui(
       };
       setFlowWidget(uiCtx, "flow-architect", wrappedFactory);
       architectWidget.setUpdateCallback(architectRender);
-    } catch { /* widget not available */ }
+    } catch {
+      /* widget not available */
+    }
   }
 
   function unmountArchitectWidget() {
@@ -672,7 +790,11 @@ export function setupFlowTui(
       }
 
       // Handle navigate mode keyboard input
-      if (architectWidget && architectWidget.getPreviewSubMode?.() === "navigate" && !architectOverlayOpen) {
+      if (
+        architectWidget &&
+        architectWidget.getPreviewSubMode?.() === "navigate" &&
+        !architectOverlayOpen
+      ) {
         if (data === KEY_UP) {
           const idx = architectWidget.getSelectedFlowIndex();
           if (idx > 0) architectWidget.setSelectedFlowIndex(idx - 1);
@@ -711,11 +833,19 @@ export function setupFlowTui(
             } else {
               const entries = architectWidget.getEventLog?.() || [];
               if (entries.length > 0) {
-                await openDetailOverlay("flow-architect", "running", undefined, entries);
+                await openDetailOverlay(
+                  "flow-architect",
+                  "running",
+                  undefined,
+                  entries,
+                );
               }
             }
-          } catch { /* overlay not available */ }
-          finally { architectOverlayOpen = false; }
+          } catch {
+            /* overlay not available */
+          } finally {
+            architectOverlayOpen = false;
+          }
         })();
         return { consume: true };
       }
@@ -724,14 +854,18 @@ export function setupFlowTui(
   }
 
   // Build resolveAgentType using discovered agents
-  function getResolveAgentType(piRef: ExtensionAPI): ((name: string) => "built-in" | "local") {
+  function getResolveAgentType(
+    piRef: ExtensionAPI,
+  ): (name: string) => "built-in" | "local" {
     const agentsQuery: any = {};
     piRef.events.emit("flow:get-agents", agentsQuery);
-    const discoveredAgentsMap: Map<string, any> = agentsQuery.agents ?? new Map();
+    const discoveredAgentsMap: Map<string, any> =
+      agentsQuery.agents ?? new Map();
     const piLocalPrefix = join(process.cwd(), ".pi");
     return (agentName: string): "built-in" | "local" => {
       const config = discoveredAgentsMap.get(agentName);
-      if (config?.source && config.source.startsWith(piLocalPrefix)) return "local";
+      if (config?.source && config.source.startsWith(piLocalPrefix))
+        return "local";
       return "built-in";
     };
   }
@@ -743,7 +877,10 @@ export function setupFlowTui(
     await mountArchitectWidget(resolveAgentType);
     registerArchitectKeyboard(pi);
     // Set architect model info if provided
-    const { resolvedModel, modelAlias } = (data || {}) as { resolvedModel?: string; modelAlias?: string };
+    const { resolvedModel, modelAlias } = (data || {}) as {
+      resolvedModel?: string;
+      modelAlias?: string;
+    };
     if (architectWidget && resolvedModel) {
       architectWidget.setModel(resolvedModel, modelAlias || "");
     }
@@ -760,7 +897,11 @@ export function setupFlowTui(
   // Architect lifecycle: tool result
   pi.events.on("flow:architect-tool-result", (data: unknown) => {
     if (!architectWidget) return;
-    const { toolName, output, isError } = data as { toolName: string; output: any; isError: boolean };
+    const { toolName, output, isError } = data as {
+      toolName: string;
+      output: any;
+      isError: boolean;
+    };
     architectWidget.onToolResult(toolName, output, isError);
     architectRender();
   });
@@ -821,7 +962,10 @@ export function setupFlowTui(
     if (d.mode === "edit") {
       uiCtx?.notify(`Flow "${d.flowName}" updated.`, "info");
     } else {
-      uiCtx?.notify(`Flow saved as "${d.flowName}" — available as /${d.commandName || d.flowName}`, "info");
+      uiCtx?.notify(
+        `Flow saved as "${d.flowName}" — available as /${d.commandName || d.flowName}`,
+        "info",
+      );
     }
   });
 
@@ -856,111 +1000,145 @@ export function setupFlowTui(
     // Register lifecycle-scoped summary input handler
     registerSummaryInputHandler();
 
-    setFlowWidget(uiCtx, "flow-summary", (_tui: any, theme: any) => {
-      const text = new Text("", 0, 1);
-      return {
-        render(width: number): string[] {
-          const state = getSummaryState();
-          if (!state) return [];
-          const inner = width - 4;
+    setFlowWidget(
+      uiCtx,
+      "flow-summary",
+      (_tui: any, theme: any) => {
+        const text = new Text("", 0, 1);
+        return {
+          render(width: number): string[] {
+            const state = getSummaryState();
+            if (!state) return [];
+            const inner = width - 4;
 
-          // ── Navigate mode: agent list with card metrics ──
-          if (state.mode === "navigate") {
-            const bi = width - 4;
-            const content: string[] = [];
+            // ── Navigate mode: agent list with card metrics ──
+            if (state.mode === "navigate") {
+              const bi = width - 4;
+              const content: string[] = [];
 
-            const navHeader = `${fr.flowName} · Select agent`;
-            content.push(theme.fg("accent", navHeader));
+              const navHeader = `${fr.flowName} · Select agent`;
+              content.push(theme.fg("accent", navHeader));
 
-            const lastCardsRef = getLastCards();
-            const lastEventLogRef = getLastEventLog();
+              const lastCardsRef = getLastCards();
+              const lastEventLogRef = getLastEventLog();
 
-            for (let i = 0; i < agentNames.length; i++) {
-              const name = agentNames[i];
-              const result = fr.results[name];
-              const sel = i === state.selectedIndex ? ">" : " ";
-              const statusStr = result?.status || "unknown";
-              const sIcon = statusStr === "complete" ? theme.fg("success", "✓")
-                : statusStr === "skipped" ? theme.fg("dim", "✓")
-                : statusStr === "blocked" ? theme.fg("warning", "⚠")
-                : statusStr === "error" ? theme.fg("error", "⚠")
-                : theme.fg("dim", "○");
+              for (let i = 0; i < agentNames.length; i++) {
+                const name = agentNames[i];
+                const result = fr.results[name];
+                const sel = i === state.selectedIndex ? ">" : " ";
+                const statusStr = result?.status || "unknown";
+                const sIcon =
+                  statusStr === "complete"
+                    ? theme.fg("success", "✓")
+                    : statusStr === "skipped"
+                      ? theme.fg("dim", "✓")
+                      : statusStr === "blocked"
+                        ? theme.fg("warning", "⚠")
+                        : statusStr === "error"
+                          ? theme.fg("error", "⚠")
+                          : theme.fg("dim", "○");
 
-              let metricStr = "";
-              const card = lastCardsRef?.get(name);
-              if (card) {
-                const metric = card.renderer.renderMetric(Math.max(10, bi - name.length - 8));
-                if (metric) metricStr = theme.fg("dim", "  " + metric.trim());
-              } else {
-                const eventCount = lastEventLogRef?.get(name)?.length ?? 0;
-                if (eventCount > 0) metricStr = theme.fg("dim", ` · ${eventCount} events`);
+                let metricStr = "";
+                const card = lastCardsRef?.get(name);
+                if (card) {
+                  const metric = card.renderer.renderMetric(
+                    Math.max(10, bi - name.length - 8),
+                  );
+                  if (metric) metricStr = theme.fg("dim", "  " + metric.trim());
+                } else {
+                  const eventCount = lastEventLogRef?.get(name)?.length ?? 0;
+                  if (eventCount > 0)
+                    metricStr = theme.fg("dim", ` · ${eventCount} events`);
+                }
+
+                content.push(`${sel} ${sIcon} ${name}${metricStr}`);
               }
 
-              content.push(`${sel} ${sIcon} ${name}${metricStr}`);
+              const lines = renderBox({
+                width,
+                theme,
+                content,
+                separatorAfter: [0],
+                footer: [
+                  theme.fg(
+                    "dim",
+                    "↑↓ navigate · Enter inspect · Backspace back",
+                  ),
+                ],
+              });
+
+              while (lines.length < state.summaryBoxHeight) lines.push("");
+              state.summaryBoxHeight = Math.max(
+                state.summaryBoxHeight,
+                lines.length,
+              );
+
+              text.setText(lines.join("\n"));
+              return text.render(width);
+            }
+
+            // ── Summary box mode (default) ──
+            const content: string[] = [];
+            const separators: number[] = [];
+
+            const header = `${statusIcon} ${fr.flowName} complete · ${stats.agentCount} agents · ${stats.duration}`;
+            content.push(theme.fg("accent", header));
+            separators.push(0);
+
+            for (const agent of stats.perAgent) {
+              const icon =
+                agent.status === "complete"
+                  ? theme.fg("success", "✓")
+                  : agent.status === "skipped"
+                    ? theme.fg("dim", "✓")
+                    : agent.status === "blocked"
+                      ? theme.fg("warning", "⚠")
+                      : agent.status === "error"
+                        ? theme.fg("error", "⚠")
+                        : theme.fg("dim", "○");
+              const detail =
+                agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
+              content.push(`${icon} ${agent.name}${detail}`);
+              // Show truncated finish summary if available
+              const agentSummary = fr.results[agent.name]?.summary;
+              if (agentSummary) {
+                const maxLen = inner - 4;
+                const trimmed =
+                  agentSummary.length > maxLen
+                    ? agentSummary.slice(0, maxLen - 1) + "…"
+                    : agentSummary;
+                content.push(theme.fg("dim", `  ${trimmed}`));
+              }
+            }
+
+            if (nextStep) {
+              separators.push(content.length - 1);
+              const nextLine = `Next: /${nextStep}`;
+              content.push(theme.fg("warning", nextLine));
             }
 
             const lines = renderBox({
               width,
               theme,
               content,
-              separatorAfter: [0],
-              footer: [theme.fg("dim", "↑↓ navigate · Enter inspect · Backspace back")],
+              separatorAfter: separators,
+              footer: [
+                theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss"),
+              ],
             });
 
-            while (lines.length < state.summaryBoxHeight) lines.push("");
-            state.summaryBoxHeight = Math.max(state.summaryBoxHeight, lines.length);
+            state.summaryBoxHeight = lines.length;
 
             text.setText(lines.join("\n"));
             return text.render(width);
-          }
-
-          // ── Summary box mode (default) ──
-          const content: string[] = [];
-          const separators: number[] = [];
-
-          const header = `${statusIcon} ${fr.flowName} complete · ${stats.agentCount} agents · ${stats.duration}`;
-          content.push(theme.fg("accent", header));
-          separators.push(0);
-
-          for (const agent of stats.perAgent) {
-            const icon = agent.status === "complete" ? theme.fg("success", "✓")
-              : agent.status === "skipped" ? theme.fg("dim", "✓")
-              : agent.status === "blocked" ? theme.fg("warning", "⚠")
-              : agent.status === "error" ? theme.fg("error", "⚠")
-              : theme.fg("dim", "○");
-            const detail = agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
-            content.push(`${icon} ${agent.name}${detail}`);
-            // Show truncated finish summary if available
-            const agentSummary = fr.results[agent.name]?.summary;
-            if (agentSummary) {
-              const maxLen = inner - 4;
-              const trimmed = agentSummary.length > maxLen ? agentSummary.slice(0, maxLen - 1) + "…" : agentSummary;
-              content.push(theme.fg("dim", `  ${trimmed}`));
-            }
-          }
-
-          if (nextStep) {
-            separators.push(content.length - 1);
-            const nextLine = `Next: /${nextStep}`;
-            content.push(theme.fg("warning", nextLine));
-          }
-
-          const lines = renderBox({
-            width,
-            theme,
-            content,
-            separatorAfter: separators,
-            footer: [theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss")],
-          });
-
-          state.summaryBoxHeight = lines.length;
-
-          text.setText(lines.join("\n"));
-          return text.render(width);
-        },
-        invalidate() { /* static content, no cleanup needed */ },
-      };
-    }, { placement: "aboveEditor" });
+          },
+          invalidate() {
+            /* static content, no cleanup needed */
+          },
+        };
+      },
+      { placement: "aboveEditor" },
+    );
   });
 
   // ── Dashboard-initiated dismiss: clear TUI summary widget ──
@@ -987,35 +1165,21 @@ export function setupFlowTui(
       render: (theme?: any) => {
         const label = "AUTO";
         if (!theme?.fg) return isAutonomousMode() ? label : null;
-        return isAutonomousMode() ? theme.fg("accent", label) : theme.fg("dim", label);
+        return isAutonomousMode()
+          ? theme.fg("accent", label)
+          : theme.fg("dim", label);
       },
       onRegistered: (invalidate: () => void) => {
         invalidateAutoFooter = invalidate;
       },
     });
-    if (ctx.hasUI) {
-      // Print help once at session start
-      const lines = [
-        "  /flows              Manage flows (new, edit, delete)",
-        "  /flows:new          Design & run a new flow",
-        "  /flows:edit         Edit an existing flow",
-        "  /flows:delete       Delete a flow",
-        "  /roles              Assign model roles",
-        "",
-        "  Ctrl+A              Toggle auto-routing",
-        "",
-      ];
-      pi.sendMessage({
-        customType: "pi-flows-help",
-        content: lines.join("\n"),
-        display: true,
-      });
-    }
     ctx.ui.onTerminalInput((data: string) => {
       // Global: Ctrl+A toggles autonomous mode anytime
       if (data === KEY_CTRL_A) {
         setAutonomousMode(!isAutonomousMode());
-        pi.events.emit("flow:autonomous-mode-changed", { enabled: isAutonomousMode() });
+        pi.events.emit("flow:autonomous-mode-changed", {
+          enabled: isAutonomousMode(),
+        });
         requestRender();
         invalidateAutoFooter?.();
         return { consume: true };
