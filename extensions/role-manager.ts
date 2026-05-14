@@ -83,7 +83,15 @@ function saveRoleConfig(roleConfig: RoleConfig): void {
 let currentRoles: Record<string, string> = { ...DEFAULT_ROLES };
 
 export function getModelRole(role: string): string | undefined {
-  return currentRoles[role];
+  // Re-read from disk per call so cross-session preset/role updates take
+  // effect without needing per-session event broadcast. Each pi session has
+  // its own module-scoped `currentRoles`; without this read, a preset switch
+  // routed to session A would leave session B spawning agents with stale
+  // role assignments. `loadRoleConfig` is a cheap sync read of a ~1 KB file
+  // and `getModelRole` is called once per agent spawn (not in a hot loop).
+  const cfg = loadRoleConfig();
+  currentRoles = cfg.roles;
+  return cfg.roles[role];
 }
 
 // -- Autonomous mode state ------------------------------------------------
