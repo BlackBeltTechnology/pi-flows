@@ -1,8 +1,15 @@
 {
-  "name": "pi-flows",
-  "version": "0.2.0",
+  "name": "@blackbelt-technology/pi-flows",
+  "version": "0.2.1",
   "description": "Flow engine, dashboard, and orchestration extensions for pi",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BlackBeltTechnology/pi-flows.git"
+  },
   "keywords": [
     "pi-package"
   ],
@@ -16,6 +23,13 @@
       "./extensions"
     ]
   },
+  "files": [
+    "extensions/",
+    "agents/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "dependencies": {
     "yaml": "^2.8.0"
   },
