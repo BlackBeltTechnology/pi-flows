@@ -197,6 +197,14 @@ export function activate(pi: ExtensionAPI) {
     config.rolePresets = config.rolePresets.filter((p) => p.name !== name);
     if (config.rolePresets.length === before) { data.success = false; return; }
 
+    // If we just deleted the active preset, clear the dangling reference.
+    // The user's effective roles (`config.roles`) are left untouched
+    // — the deleted preset stops existing but the current role assignments
+    // remain so flows in flight keep resolving the same models.
+    if (config.activePreset === name) {
+      config.activePreset = null;
+    }
+
     saveRoleConfig(config);
     data.success = true;
   });
