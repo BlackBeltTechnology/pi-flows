@@ -1,6 +1,6 @@
 {
   "name": "pi-flows",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Flow engine, dashboard, and orchestration extensions for pi",
   "license": "MIT",
   "keywords": [
@@ -20,15 +20,15 @@
     "yaml": "^2.8.0"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "^0.69.0",
-    "@mariozechner/pi-coding-agent": "^0.69.0",
-    "@mariozechner/pi-tui": "^0.69.0",
+    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-tui": "^0.74.0",
     "@sinclair/typebox": "^0.34.49"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "^0.69.0",
-    "@mariozechner/pi-coding-agent": "^0.69.0",
-    "@mariozechner/pi-tui": "^0.69.0",
+    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-tui": "^0.74.0",
     "@sinclair/typebox": "^0.34.49",
     "vitest": "^4.0.0"
   },
