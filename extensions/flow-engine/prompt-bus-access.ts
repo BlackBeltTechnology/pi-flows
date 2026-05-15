@@ -6,7 +6,7 @@
  * Falls back to the legacy event-based emitPromptAndAwait if no bus is available.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 interface PromptOptions {
   pipeline: string;

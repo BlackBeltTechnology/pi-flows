@@ -106,7 +106,7 @@ Extensions are declared in the package manifest:
 The module must export a default function:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function myExtension(pi: ExtensionAPI) {
   // Register commands, handlers, guards, etc.
@@ -127,7 +127,7 @@ export default function myExtension(pi: ExtensionAPI) {
 A typical domain package extension registers agents, flows, skills, custom tools, and guards:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -171,7 +171,7 @@ Agent extensions are loaded into spawned subagent sessions. They can enforce san
 
 ```typescript
 // extensions/my-guard.ts
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function myGuard(pi: ExtensionAPI) {
   pi.on("tool_call", (event) => {

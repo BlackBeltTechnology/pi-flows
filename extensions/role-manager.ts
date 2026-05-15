@@ -11,7 +11,7 @@
  *   flow:role-get-all / flow:role-set / flow:role-preset-load / flow:role-preset-save / flow:role-preset-delete
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { emitPromptAndAwait } from "./flow-engine/flow-prompt.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";

@@ -1,6 +1,6 @@
 import type { CardStatus, AgentCardRenderer } from "./types.js";
 import type { AgentResult } from "../flow-engine/types.js";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 /** Format token count in compact "k" notation. */
 function formatTokens(n: number): string {

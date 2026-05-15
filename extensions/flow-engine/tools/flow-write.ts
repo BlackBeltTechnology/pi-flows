@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../types.js";
 import { validateFlowContent } from "./flow-validate.js";
 import { writeFileSync, mkdirSync } from "node:fs";

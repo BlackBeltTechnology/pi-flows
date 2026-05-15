@@ -12,7 +12,7 @@
 //   - Preview mode when flow_write succeeds
 // ---------------------------------------------------------------------------
 
-import { Text, visibleWidth } from "@mariozechner/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { renderBox } from "./box-renderer.js";
 import { parseFlowYamlString } from "../flow-engine/flow-parser-yaml.js";
 import type { FlowConfig, AgentStep } from "../flow-engine/types.js";

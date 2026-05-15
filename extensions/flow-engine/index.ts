@@ -6,7 +6,7 @@
 // All TUI code lives in flow-tui.ts and flow-io-tui.ts.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
 import { getModelRole, isAutonomousMode, setAutonomousMode } from "../role-manager.js";

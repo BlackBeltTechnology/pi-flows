@@ -6,7 +6,7 @@
 // segments via flow:register-footer-segment events.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getFileStats, onFileStatsChange } from "./file-tracker.js";
 import { execSync } from "node:child_process";
 

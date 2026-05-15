@@ -6,11 +6,11 @@
 // auto-decide injection, notes prompt, etc.)
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { FlowIOAdapter, AskUserExtra, AskUserResult } from "./flow-io.js";
-import type { SelectItem } from "@mariozechner/pi-tui";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Container, Spacer, Text } from "@mariozechner/pi-tui";
+import type { SelectItem } from "@earendil-works/pi-tui";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { CheckboxSelectList } from "../shared/checkbox-select-list.js";
 import { FlowCancelledError } from "./flow-execution.js";
 import { isAutonomousMode, setAutonomousMode } from "../role-manager.js";

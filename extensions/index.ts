@@ -10,7 +10,7 @@
 // New extensions should be added at the appropriate position in the sequence.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { activate as activateRoleManager } from "./role-manager.js";
 import { activate as activateFileTracker } from "./file-tracker.js";

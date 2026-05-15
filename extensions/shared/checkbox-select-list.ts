@@ -12,7 +12,7 @@ import {
   type SelectItem,
   type SelectListTheme,
   getKeybindings,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 export class CheckboxSelectList {
   #items: SelectItem[];

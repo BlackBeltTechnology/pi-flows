@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { FlowResult } from "../flow-engine/types.js";
 import type { DetailEntry } from "../flow-dashboard/agent-dashboard.js";
 import type { AgentCard } from "../flow-dashboard/agent-card.js";

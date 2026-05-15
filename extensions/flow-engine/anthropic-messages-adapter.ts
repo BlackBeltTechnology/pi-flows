@@ -26,7 +26,7 @@
 //   entry in extraAgentExtensions.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 export const anthropicMessagesAgentFactory: ExtensionFactory = async (pi) => {
   try {

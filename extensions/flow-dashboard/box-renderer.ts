@@ -5,7 +5,7 @@
 // repeated ┌─┐ │pad│ └─┘ pattern used across overlays and widgets.
 // ---------------------------------------------------------------------------
 
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 /** Pad a line (which may contain ANSI codes) with trailing spaces to exactly `targetWidth` visible characters. */
 function padLine(line: string, targetWidth: number): string {

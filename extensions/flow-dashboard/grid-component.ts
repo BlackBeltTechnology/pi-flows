@@ -1,5 +1,5 @@
 import { AgentCard } from "./agent-card.js";
-import { visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
+import { visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
 
 export const MIN_CARD_WIDTH = 40;
 export const CARD_HEIGHT = 8;

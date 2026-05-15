@@ -5,7 +5,7 @@
 // Provides session-scoped file counts + insertions/deletions for the footer.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // ---- Types ----------------------------------------------------------------
 

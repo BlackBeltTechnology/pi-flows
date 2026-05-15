@@ -10,13 +10,13 @@
 // flow:architect-* lifecycle events). No ctx.ui references.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   generateSummary,
   buildSessionContext,
   getLatestCompactionEntry,
   type SessionEntry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS, STAGING_FLOWS } from "./staging.js";
 import { join } from "node:path";
@@ -586,7 +586,7 @@ async function handleNewFlow(
         if (model && spawnCtx.modelRegistry) {
           const auth = await spawnCtx.modelRegistry.getApiKeyAndHeaders(model);
           if (auth.ok) {
-            const { completeSimple } = await import("@mariozechner/pi-ai");
+            const { completeSimple } = await import("@earendil-works/pi-ai");
             const response = await completeSimple(model, {
               systemPrompt: SLUG_SYSTEM_PROMPT,
               messages: [{

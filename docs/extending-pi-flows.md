@@ -40,12 +40,12 @@ Declare pi-flows and pi-coding-agent as **peer dependencies** (not regular depen
     "extensions": ["./extensions/index"]
   },
   "peerDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-flows": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-flows": "*"
   },
   "devDependencies": {
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-flows": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-flows": "*",
     "@sinclair/typebox": "*",
     "typescript": "^5.0.0"
   },
@@ -61,7 +61,7 @@ The `pi.extensions` array tells the pi loader which entry points to activate. Pa
 
 ```typescript
 // extensions/index.ts
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

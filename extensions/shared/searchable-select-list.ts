@@ -16,9 +16,9 @@ import {
   type SelectItem,
   type SelectListTheme,
   getKeybindings,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
-export { type SelectItem } from "@mariozechner/pi-tui";
+export { type SelectItem } from "@earendil-works/pi-tui";
 
 export interface SearchableSelectListOptions {
   /** Placeholder text shown when input is empty */

@@ -94,8 +94,8 @@ The repo SHALL document, in `design.md`, how the pinned lower bound was chosen (
 
 #### Scenario: Pin reflects current working version
 
-- **WHEN** the pin is read for `@mariozechner/pi-coding-agent`
-- **THEN** the range SHALL include the version currently in `pi-flows/node_modules/@mariozechner/pi-coding-agent/package.json`
+- **WHEN** the pin is read for `@earendil-works/pi-coding-agent`
+- **THEN** the range SHALL include the version currently in `pi-flows/node_modules/@earendil-works/pi-coding-agent/package.json`
 - **AND** the range SHALL use the caret form (e.g., `^X.Y.Z`)
 
 ### Requirement: Integration architecture is documented

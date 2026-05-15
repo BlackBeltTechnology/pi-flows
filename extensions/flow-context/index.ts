@@ -7,9 +7,9 @@
 //   - /flows:delete <name> — delete a flow result + flow file
 // ---------------------------------------------------------------------------
 
-import { DynamicBorder, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { AutocompleteItem } from "@mariozechner/pi-tui";
-import { Container, type SelectItem, SelectList, Spacer, Text } from "@mariozechner/pi-tui";
+import { DynamicBorder, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteItem } from "@earendil-works/pi-tui";
+import { Container, type SelectItem, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { readFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, basename } from "node:path";

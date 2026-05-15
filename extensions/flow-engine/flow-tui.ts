@@ -5,7 +5,7 @@
 // Exports setupFlowTui() which wires everything into the extension lifecycle.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
   AgentConfig,
   AgentResult,
@@ -23,7 +23,7 @@ import {
   getLastEventLog,
   getLastCards,
 } from "../flow-summary/index.js";
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { isAutonomousMode, setAutonomousMode } from "../role-manager.js";
 import { join } from "node:path";

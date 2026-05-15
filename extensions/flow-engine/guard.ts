@@ -8,7 +8,7 @@
 // compatibility with direct --extension guard.ts usage.
 // ---------------------------------------------------------------------------
 
-import type { ExtensionAPI, ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { AccessRules } from "./types.js";
 import { prefixToolName } from "./tool-prefix.js";

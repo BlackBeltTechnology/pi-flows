@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
-import type { ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@mariozechner/pi-coding-agent";
+import type { ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   SessionManager,
@@ -12,9 +12,9 @@ import {
   createLsTool,
   createExtensionRuntime,
   createEventBus,
-} from "@mariozechner/pi-coding-agent";
-import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { getModel } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-coding-agent";
+import type { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { getModel } from "@earendil-works/pi-ai";
 import { resolveModel } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";

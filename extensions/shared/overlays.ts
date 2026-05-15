@@ -8,7 +8,7 @@
 //   import { selectOverlay, searchableOverlay, checkboxOverlay, settingsOverlay } from "./shared/overlays.js";
 // ---------------------------------------------------------------------------
 
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import {
   Container,
   Input,
@@ -21,11 +21,11 @@ import {
   Spacer,
   Text,
   getKeybindings,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import { SearchableSelectList } from "./searchable-select-list.js";
 import { CheckboxSelectList } from "./checkbox-select-list.js";
 
-export { type SelectItem } from "@mariozechner/pi-tui";
+export { type SelectItem } from "@earendil-works/pi-tui";
 
 // ---------------------------------------------------------------------------
 // Internal: shared frame builder
