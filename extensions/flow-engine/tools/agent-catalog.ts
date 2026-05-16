@@ -42,6 +42,7 @@ export function registerAgentCatalogTool(
 ): void {
   pi.registerTool({
     name: "agent_catalog",
+    label: "agent_catalog",
     description:
       "List all discovered agents with their descriptions, tools, inputs, card config, source info, and architect metadata. Use to understand available agents before building flows. Agents with source_type \"local\" are project-specific custom agents that can be read and modified with agent_write.",
     parameters: Type.Object({}),

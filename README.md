@@ -1,5 +1,7 @@
 # pi-flows
 
+[![CI](https://github.com/BlackBeltTechnology/pi-flows/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/BlackBeltTechnology/pi-flows/actions/workflows/ci.yml)
+
 A pi-package that adds multi-agent workflow orchestration to pi. Design flows as YAML DAGs, run them with automatic parallel scheduling, and watch everything in a live TUI dashboard — while the main session stays fully interactive.
 
 ---
@@ -228,6 +230,23 @@ Detailed documentation in the `docs/` folder:
 - [Creating Packages](docs/creating-packages.md) — Build domain packages with custom agents and flows
 - [Extending pi-flows](docs/extending-pi-flows.md) — Advanced customization
 - [Dashboard Integration](docs/dashboard-integration.md) — How pi-flows and pi-agent-dashboard connect
+
+## Releasing
+
+Releases are automated via `.github/workflows/publish.yml`. Two paths:
+
+**Workflow dispatch (recommended).** Open the GitHub Actions UI, run the `Release` workflow, type the version (e.g. `0.2.2`). The workflow bumps `package.json`, dates the matching `## [Unreleased]` (or undated `## [X.Y.Z]`) section in `CHANGELOG.md` to `## [vX.Y.Z] - <today>`, commits, tags, pushes, then publishes to npm with [provenance](https://docs.npmjs.com/generating-provenance-statements) via npm Trusted Publishing, and drafts a GitHub Release with the CHANGELOG body.
+
+**Tag push.** Locally bump the version + CHANGELOG yourself, commit, tag `vX.Y.Z`, and `git push --follow-tags`. The same publish + release jobs fire.
+
+Before the first release run, ensure:
+
+1. The npm package `@blackbelt-technology/pi-flows` has a [Trusted Publisher](https://docs.npmjs.com/trusted-publishers) configured pointing at this repo + `publish.yml` + the `npm-publish` environment.
+2. A GitHub repository environment named `npm-publish` exists (Settings → Environments). Add a required-reviewer rule there if you want a manual gate before every publish.
+
+Prep your CHANGELOG entry under `## [Unreleased]` before triggering the workflow — the heading-dating step rewrites it in place.
+
+See `docs/releasing.md` for the operator runbook.
 
 ## License
 

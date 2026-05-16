@@ -14,6 +14,7 @@ import { dirname } from "node:path";
 export function registerAgentWriteTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "agent_write",
+    label: "agent_write",
     description:
       "Validate and write an agent .md file. Validates internally first. If validation passes, writes the file and triggers agent re-discovery. Returns errors if invalid.",
     parameters: Type.Object({

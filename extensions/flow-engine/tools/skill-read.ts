@@ -24,6 +24,7 @@ export function findSkillDir(packageRoot: string, skillName: string): string | n
 export function registerSkillReadTool(pi: ExtensionAPI, packageRoot: string): void {
   pi.registerTool({
     name: "skill_read",
+    label: "skill_read",
     description: "Read a detail file from a skill. Skills provide framework documentation. Use to access detailed reference docs listed in a skill's SKILL.md.",
     parameters: Type.Object({
       skill: Type.String({ description: "Skill name (e.g., 'judo-backend-docs')" }),

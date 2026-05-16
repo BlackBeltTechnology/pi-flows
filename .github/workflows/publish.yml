@@ -1,0 +1,229 @@
+name: Release
+
+# Two triggers:
+#
+#   1. Push a tag matching `v*`. The `prepare` job extracts the version
+#      from the tag, then `publish` + `github-release` run.
+#
+#   2. Click "Run workflow" in the GitHub Actions UI (workflow_dispatch)
+#      and type the version string (e.g. "0.2.2"). The `prepare` job
+#      bumps `package.json`, dates the matching `## [Unreleased]` or
+#      `## [0.2.2]` section in CHANGELOG.md to `## [v0.2.2] - <today>`,
+#      commits + tags + pushes the branch, then `publish` + `github-release`
+#      run against the freshly-pushed tag.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.2.2)'
+        type: string
+        required: true
+
+jobs:
+  # ── prepare: resolve version + (on dispatch) bump + tag + push ───────────
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write  # Used on workflow_dispatch (commit + tag + push).
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag:     ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          else
+            version="${{ github.event.inputs.version }}"
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::'$version' is not valid semver X.Y.Z (prerelease segments not supported in this workflow)"
+              exit 1
+            fi
+            if git ls-remote --tags origin "v$version" | grep -q "refs/tags/v$version$"; then
+              echo "::error::tag v$version already exists on origin"
+              exit 1
+            fi
+            tag="v$version"
+          fi
+          echo "Resolved: version=$version tag=$tag"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: npm ci
+
+      - name: Bump package.json version
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Date CHANGELOG section
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG:     ${{ steps.resolve.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          today=$(date -u +%Y-%m-%d)
+          # Match either `## [Unreleased]` or `## [<version>]` (undated /
+          # pre-tagged) or `## [<version>] - <anything>` (already dated)
+          # and rewrite to `## [v<version>] - <today>`.
+          python3 - "$VERSION" "$today" <<'PY'
+          import re, sys
+          version, today = sys.argv[1], sys.argv[2]
+          with open("CHANGELOG.md", "r", encoding="utf-8") as f:
+              src = f.read()
+          target = f"## [v{version}] - {today}"
+          # Try in priority order: existing tagged heading (no-op rewrite to canonical form),
+          # bare-version heading, Unreleased heading.
+          patterns = [
+              rf"^## \[v?{re.escape(version)}\][^\n]*$",
+              r"^## \[Unreleased\][^\n]*$",
+          ]
+          for pat in patterns:
+              new, n = re.subn(pat, target, src, count=1, flags=re.MULTILINE)
+              if n:
+                  with open("CHANGELOG.md", "w", encoding="utf-8") as f:
+                      f.write(new)
+                  print(f"Rewrote heading matching /{pat}/ → {target}")
+                  sys.exit(0)
+          print(f"::warning::no CHANGELOG heading matched for {version} — release notes will fall back")
+          PY
+
+      - name: Commit, tag, and push
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "chore(release): ${TAG}"
+          git tag -a "${TAG}" -m "${TAG}"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+          git push origin "${TAG}"
+
+  # ── publish: OIDC Trusted Publishing to npm with provenance ──────────────
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: npm-publish  # GH environment gate (add required-reviewer
+                              # rule in Settings → Environments without
+                              # touching this workflow).
+    permissions:
+      contents: write
+      id-token: write  # Required for OIDC token exchange with npm.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing requires npm CLI ≥ 11.5.1.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - run: npm ci
+      - run: npm run typecheck  # Defence-in-depth — CI already ran, but
+                                # don't publish a broken build.
+
+      - name: Skip if already published
+        id: skip
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          if npm view "@blackbelt-technology/pi-flows@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::@blackbelt-technology/pi-flows@${VERSION} already published — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: ${{ steps.skip.outputs.skip == 'false' }}
+        run: npm publish --provenance --access public
+
+  # ── github-release: draft a Release with CHANGELOG-extracted body ────────
+  github-release:
+    needs: [prepare, publish]
+    if: ${{ always() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -u
+          if [ ! -f CHANGELOG.md ]; then
+            printf 'See [CHANGELOG.md](https://github.com/%s/blob/main/CHANGELOG.md) for full notes.\n' "${GITHUB_REPOSITORY}" > release-notes.md
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Capture content from `## [v<version>]` (or `## [<version>]`) up
+          # to (but not including) the next `## [` heading or EOF.
+          awk -v ver="${VERSION}" '
+            BEGIN { found=0 }
+            /^## \[/ {
+              if (found) exit
+              if ($0 ~ "^## \\[v?" ver "\\]") { found=1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            printf 'See [CHANGELOG.md](https://github.com/%s/blob/main/CHANGELOG.md) for full notes.\n' "${GITHUB_REPOSITORY}" > release-notes.md
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fallback=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "--- release-notes.md ---"
+          cat release-notes.md
+          echo "--- end ---"
+
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          body_path: release-notes.md
+          generate_release_notes: ${{ steps.notes.outputs.fallback == 'true' }}
+          draft: true

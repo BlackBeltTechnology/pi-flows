@@ -43,10 +43,17 @@
     "@earendil-works/pi-ai": "^0.74.0",
     "@earendil-works/pi-coding-agent": "^0.74.0",
     "@earendil-works/pi-tui": "^0.74.0",
+    "@eslint/js": "^10.0.1",
     "@sinclair/typebox": "^0.34.49",
+    "@types/node": "^25.8.0",
+    "eslint": "^10.4.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.3",
     "vitest": "^4.0.0"
   },
   "scripts": {
+    "lint": "eslint extensions __tests__",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   }

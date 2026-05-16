@@ -33,7 +33,7 @@ function parseFlowForDashboard(content: string): { name: string; description: st
     const steps = flow.steps.map(s => {
       const base: { id: string; agentName?: string; blockedBy: string[]; stepType?: string; loopTarget?: string; exitTarget?: string } = {
         id: s.id,
-        blockedBy: s.blockedBy || [],
+        blockedBy: ('blockedBy' in s ? s.blockedBy : undefined) || [],
         stepType: s.stepType,
       };
       if ("agent" in s && s.agent) base.agentName = s.agent as string;

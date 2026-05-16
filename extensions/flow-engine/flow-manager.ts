@@ -108,8 +108,13 @@ export class FlowManager {
       getModelRole: (role) => config.getModelRole()?.(role),
       getAgent: (agentName) => config.getAgents().get(agentName),
       getSkillContent: (skillName) => config.getSkillContent(skillName),
-      askUser: (question, type, askOptions, extra) =>
-        ioAdapter.askUser(question, type as any, askOptions, { ...extra, signal: abortController.signal }),
+      askUser: async (question, type, askOptions, extra) => {
+        const r = await ioAdapter.askUser(question, type as any, askOptions, { ...extra, signal: abortController.signal });
+        return {
+          answer: Array.isArray(r.answer) ? r.answer.join(', ') : r.answer,
+          notes: r.notes,
+        };
+      },
       onAgentStarted: (agentName: string, stepId: string, resolvedModel?: string) => {
         const agentConfig = config.getAgents().get(agentName);
         for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig, resolvedModel);

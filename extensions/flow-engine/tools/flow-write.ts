@@ -19,6 +19,7 @@ export function registerFlowWriteTool(
 ): void {
   pi.registerTool({
     name: "flow_write",
+    label: "flow_write",
     description:
       "Validate and write a flow YAML file. Validates internally first. If validation passes, writes the file to the specified path. Returns errors if invalid.",
     parameters: Type.Object({

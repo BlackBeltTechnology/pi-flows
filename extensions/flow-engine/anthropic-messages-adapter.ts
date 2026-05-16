@@ -30,6 +30,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 export const anthropicMessagesAgentFactory: ExtensionFactory = async (pi) => {
   try {
+    // @ts-ignore — optional peer dependency; package may not be installed.
     const mod = await import("@pi/anthropic-messages");
     if (typeof mod.default === "function") {
       await mod.default(pi);

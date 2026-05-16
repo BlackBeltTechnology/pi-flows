@@ -5,6 +5,24 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **CI workflow** (`.github/workflows/ci.yml`) — runs `lint + typecheck + test` on Node 20, 22, 24 for every push to `develop` and every pull request.
+- **Release workflow** (`.github/workflows/publish.yml`) — three jobs (`prepare`, `publish`, `github-release`). Triggered by tag-push (`v*`) or `workflow_dispatch` with version input. Publishes to npm with `--provenance` via Trusted Publishing (OIDC), gated by the `npm-publish` GitHub environment. Drafts a GitHub Release with notes extracted from the matching CHANGELOG section.
+- **`tsconfig.json`** at repo root — strict mode, `noEmit`, ES2022 / `bundler` resolution; powers the new `typecheck` script.
+- **ESLint flat config** (`eslint.config.js`) — `@eslint/js` + `typescript-eslint` recommended, tuned for the existing codebase.
+- **`docs/releasing.md`** + **`agent-docs/releasing.md`** — operator runbook for the release workflow (human + caveman mirror).
+- **CI status badge** in `README.md`.
+
+### Changed
+
+- Fixed 19 pre-existing TypeScript errors surfaced by the new `typecheck` step — API drift against `@earendil-works/pi-coding-agent@^0.74.0`. Touches: tool registrations (`label` field), `AgentResult` error-path returns, `ExtensionUIContext` stub, `FlowStep.blockedBy` narrowing, and small call-site signatures. No runtime behaviour change.
+- `package.json` — added `lint`, `typecheck` scripts; added `eslint`, `@eslint/js`, `typescript-eslint`, `typescript`, `@types/node` to `devDependencies`.
+- `AGENTS.md` — expanded "Running, Testing, Deploying" table to cover `lint`, `typecheck`, `CI`, and the new release workflow.
+- `.gitignore` — removed `package-lock.json` so the lockfile is committed (required by `npm ci` in CI).
+
 ## [0.2.0] - 2026-05-15
 
 ### Changed

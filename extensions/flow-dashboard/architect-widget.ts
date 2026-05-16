@@ -255,6 +255,8 @@ export function createArchitectWidget(opts?: ArchitectWidgetOptions): {
   onToolCall(toolName: string, input: any): void;
   onToolResult(toolName: string, output: any, isError: boolean): void;
   setReady(): void;
+  onAssistantText(text: string): void;
+  onThinkingText(text: string): void;
   getFlowContent(): string | null;
   hasFlowContent(): boolean;
   getFlowContents(): Array<{ name: string; content: string }>;

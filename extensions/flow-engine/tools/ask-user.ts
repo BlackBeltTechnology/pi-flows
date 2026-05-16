@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export function registerAskUserTool(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "ask_user",
+    label: "ask_user",
     description:
       "Ask the user a question with structured options. Use for decisions, confirmations, and freetext input.",
     parameters: Type.Object({
@@ -36,7 +37,7 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
       let answer: any;
 
       if (params.type === "confirm") {
-        answer = await ctx.ui.confirm(params.question);
+        answer = await ctx.ui.confirm(params.question, "");
       } else if (params.type === "input") {
         answer = await ctx.ui.input(params.question, params.defaultValue || "");
       } else if (params.type === "select") {
@@ -49,6 +50,7 @@ export function registerAskUserTool(pi: ExtensionAPI): void {
           for (const opt of options) {
             const yes = await ctx.ui.confirm(
               `${params.question}\n  Include "${opt}"?`,
+              "",
             );
             if (yes) selected.push(opt);
           }

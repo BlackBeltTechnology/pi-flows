@@ -83,7 +83,10 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
         const s = step as AgentStep;
         lines.push(`  ${fg("dim", num)} ${fg("accent", sym)} ${fg("accent", s.id)}`);
         if (s.task) lines.push(`     ${fg("muted", truncate("task: " + s.task, inner - 5))}`);
-        if (s.model) lines.push(`     ${fg("dim", "model: " + s.model)}`);
+        // AgentStep has no `model` field in the current type definitions; preserve
+        // any runtime-attached value via a permissive read.
+        const stepModel = (s as any).model;
+        if (stepModel) lines.push(`     ${fg("dim", "model: " + stepModel)}`);
         if (s.blockedBy?.length) lines.push(`     ${fg("dim", "blockedBy: " + s.blockedBy.join(", "))}`);
         if (s.inputs) {
           for (const [key, val] of Object.entries(s.inputs)) {

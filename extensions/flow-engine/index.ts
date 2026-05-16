@@ -262,7 +262,7 @@ export function activate(pi: ExtensionAPI) {
       init(pkgRoot, projectRoot);
       for (const [name, flow] of flows) {
         if (!oldFlowNames.has(name)) {
-          registerFlowCommand(pi, name, flow);
+          registerFlowCommand(pi, name);
         }
       }
     }

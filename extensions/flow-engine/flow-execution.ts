@@ -499,19 +499,27 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
         const filePath = resolved.slice(7);
         if (!filePath) {
           return {
+            success: false,
             output: `File input "${name}" resolved to empty path (was: ${expr})`,
             stderr: `file:// input "${name}" has empty path after template expansion`,
+            exitCode: 1,
             result: { status: "error" as const, files: [], artifacts: "", summary: "" },
             toolCalls: [],
+            duration: 0,
+            tokens: { input: 0, output: 0 },
           };
         }
         const absPath = resolve(options.cwd, filePath);
         if (!existsSync(absPath)) {
           return {
+            success: false,
             output: `File input "${name}" not found: ${absPath} (resolved from: ${expr})`,
             stderr: `file:// input "${name}" references missing file: ${absPath}`,
+            exitCode: 1,
             result: { status: "error" as const, files: [], artifacts: "", summary: "" },
             toolCalls: [],
+            duration: 0,
+            tokens: { input: 0, output: 0 },
           };
         }
         const content = readFileSync(absPath, "utf-8");
@@ -603,10 +611,14 @@ async function spawnForkDecisionAgent(
   if (!agentConfig) {
     return {
       agentResult: {
+        success: false,
         output: `Decision agent not found: "${step.agent || 'flow-decision'}". Ensure the agent exists in the catalog.`,
         stderr: `Decision agent "${step.agent || 'flow-decision'}" not found`,
+        exitCode: 1,
         result: { status: "error" as const, files: [], artifacts: "", summary: "" },
         toolCalls: [],
+        duration: 0,
+        tokens: { input: 0, output: 0 },
       },
     };
   }
