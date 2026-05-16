@@ -2,8 +2,8 @@
 
 ## Pre-flight (external — verify before workflow runs)
 
-- [ ] 1. Confirm npm Trusted Publisher is configured for `@blackbelt-technology/pi-flows` on npmjs.com (org → package → "Publishing access" → trusted publisher = `BlackBeltTechnology/pi-flows` GitHub repo, workflow filename = `publish.yml`, environment = `npm-publish`).
-- [ ] 2. Create GitHub repository environment named `npm-publish` (Settings → Environments → New environment). Leave protection rules empty for now; a required-reviewer rule can be added later without touching workflow YAML.
+- [x] 1. Confirm npm Trusted Publisher is configured for `@blackbelt-technology/pi-flows` on npmjs.com (org → package → "Publishing access" → trusted publisher = `BlackBeltTechnology/pi-flows` GitHub repo, workflow filename = `publish.yml`, environment = `npm-publish`).
+- [x] 2. Create GitHub repository environment named `npm-publish` (Settings → Environments → New environment). Leave protection rules empty for now; a required-reviewer rule can be added later without touching workflow YAML.
 
 ## Tooling scaffolding
 
@@ -56,7 +56,7 @@
 
 ## Smoke test
 
-- [ ] 12. Cut a test release: `workflow_dispatch` with `version: 0.2.2`. Verify the run: prepare commits + tags + pushes, publish lands on npm with `provenance: true` visible at `https://www.npmjs.com/package/@blackbelt-technology/pi-flows/v/0.2.2`, github-release creates a draft Release with the CHANGELOG body.
+- [x] 12. Cut a test release: `workflow_dispatch` with `version: 0.2.2`. Verify the run: prepare commits + tags + pushes, publish lands on npm with `provenance: true` visible at `https://www.npmjs.com/package/@blackbelt-technology/pi-flows/v/0.2.2`, github-release creates a draft Release with the CHANGELOG body.
 - [ ] 13. Retroactively tag `0.2.0` and `0.2.1` locally and `git push --tags` — only the new tag-push path fires for those (no version bump, since CHANGELOG entries already exist), publishing them with provenance for historical hygiene. **Skip if either version is already published to npm** — the idempotency check in step 10 will no-op cleanly.
 
 ## Documentation
