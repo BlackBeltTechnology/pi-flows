@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { activate as activateRoleManager } from "./role-manager.js";
+import { activate as activateAutonomousMode } from "./autonomous-mode.js";
 import { activate as activateFileTracker } from "./file-tracker.js";
 import { activate as activateFlowEngine } from "./flow-engine/index.js";
 import { activate as activateFlowDashboard } from "./flow-dashboard/index.js";
@@ -22,7 +22,7 @@ import { activate as activateFlowWorkspace } from "./flow-workspace/index.js";
 import { activate as activateFlowFooter } from "./flow-footer.js";
 
 export default function activate(pi: ExtensionAPI) {
-  activateRoleManager(pi);
+  activateAutonomousMode(pi);
   activateFileTracker(pi);
   activateFlowEngine(pi);
   activateFlowDashboard(pi);

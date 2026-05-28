@@ -9,7 +9,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
-import { getModelRole, isAutonomousMode, setAutonomousMode } from "../role-manager.js";
+import { isAutonomousMode, setAutonomousMode } from "../autonomous-mode.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
 import {
   registerSkillReadTool,
@@ -159,7 +159,7 @@ export function activate(pi: ExtensionAPI) {
   const flowManager = new FlowManager(
     {
       getAgents: () => agents,
-      getModelRole: () => getModelRole,
+      getPi: () => pi,
       getProjectRoot: () => projectRoot,
       getPkgRoot: () => pkgRoot,
       getAuthStorage: () => sessionAuthStorage,

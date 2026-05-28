@@ -7,13 +7,14 @@
 
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 
 // ---- Configuration (non-TUI deps) -----------------------------------------
 
 export interface FlowManagerConfig {
   getAgents: () => Map<string, AgentConfig>;
-  getModelRole: () => ((role: string) => string | undefined) | undefined;
+  getPi: () => ExtensionAPI;
   getProjectRoot: () => string;
   getPkgRoot: () => string;
   getAuthStorage: () => any;
@@ -105,7 +106,7 @@ export class FlowManager {
       onNotify: (message: string) => {
         ioAdapter.notify?.(message);
       },
-      getModelRole: (role) => config.getModelRole()?.(role),
+      pi: config.getPi(),
       getAgent: (agentName) => config.getAgents().get(agentName),
       getSkillContent: (skillName) => config.getSkillContent(skillName),
       askUser: async (question, type, askOptions, extra) => {

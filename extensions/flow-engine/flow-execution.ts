@@ -1,4 +1,5 @@
 import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult } from "./types.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent } from "./execution.js";
 import { resolveModel } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
@@ -49,7 +50,9 @@ export interface FlowRunOptions {
   extraAgentExtensions?: any[];
   /** Extension-registered custom tool definitions passed to spawned agent sessions. */
   extraCustomTools?: any[];
-  getModelRole?: (role: string) => string | undefined;
+  /** Extension API handle — threaded into `resolveModel` (event-bus) and
+   *  forwarded into `spawnAgent` so subagents share the same handle. */
+  pi: ExtensionAPI;
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
@@ -471,7 +474,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   // Resolve model early so it's available for onAgentStarted observers
   let resolvedModelId: string | undefined;
   try {
-    const { modelId } = resolveModel(agentConfig.model, agentConfig.thinking, options.getModelRole);
+    const { modelId } = resolveModel(options.pi, agentConfig.model, agentConfig.thinking);
     resolvedModelId = modelId;
   } catch {
     // Model resolution failed — will be caught again inside spawnAgent
@@ -573,7 +576,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     skillContents,
     preambleSections,
     fileInputs: Object.keys(fileInputs).length > 0 ? fileInputs : undefined,
-    getModelRole: options.getModelRole,
+    pi: options.pi,
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
@@ -646,7 +649,7 @@ async function spawnForkDecisionAgent(
     agent: agentConfig,
     task: decisionTask,
     templateContext: templateCtx,
-    getModelRole: options.getModelRole,
+    pi: options.pi,
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
@@ -828,7 +831,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     task: decisionTask,
     templateContext: templateCtx,
     skillContents,
-    getModelRole: options.getModelRole,
+    pi: options.pi,
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
@@ -902,7 +905,7 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
     task: decisionTask,
     templateContext: templateCtx,
     skillContents,
-    getModelRole: options.getModelRole,
+    pi: options.pi,
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,

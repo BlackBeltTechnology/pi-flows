@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
-import type { ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   SessionManager,
@@ -72,7 +72,9 @@ export interface SpawnOptions {
   preambleSections?: string[];
   /** File inputs (file:// resolved) — injected AFTER template expansion to prevent content from being parsed */
   fileInputs?: Record<string, string>;
-  getModelRole?: (role: string) => string | undefined;
+  /** Extension API handle — used by `resolveModel` to emit `model:resolve`
+   *  and fall back to `pi.modelRegistry`. */
+  pi: ExtensionAPI;
   cwd: string;
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
@@ -160,7 +162,7 @@ async function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any
 }
 
 export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
-  const { agent, task, templateContext, getModelRole, cwd } = options;
+  const { agent, task, templateContext, pi, cwd } = options;
   const startTime = Date.now();
   const toolCalls: ToolCallRecord[] = [];
 
@@ -182,7 +184,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Resolve model (skip if pre-resolved)
   const { modelId, thinking } = options.resolvedModelId
     ? { modelId: options.resolvedModelId, thinking: agent.thinking }
-    : resolveModel(agent.model, agent.thinking, getModelRole);
+    : resolveModel(pi, agent.model, agent.thinking);
 
   // Build system prompt: expand template variables in agent body
   let systemPrompt = expandTemplateVariables(agent.systemPrompt, templateContext);

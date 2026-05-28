@@ -25,7 +25,7 @@ import {
 } from "../flow-summary/index.js";
 import { Text } from "@earendil-works/pi-tui";
 import { renderBox } from "../flow-dashboard/box-renderer.js";
-import { isAutonomousMode, setAutonomousMode } from "../role-manager.js";
+import { isAutonomousMode, setAutonomousMode } from "../autonomous-mode.js";
 import { join } from "node:path";
 
 // ---- Module-scoped state ---------------------------------------------------

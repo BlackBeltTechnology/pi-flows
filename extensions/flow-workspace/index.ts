@@ -20,7 +20,6 @@ import {
 import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { createStagingDir, wipeStagingDir, promoteStagingToFinal, STAGING_AGENTS, STAGING_FLOWS } from "./staging.js";
 import { join } from "node:path";
-import { getModelRole } from "../role-manager.js";
 import { emitPromptAndAwait } from "../flow-engine/flow-prompt.js";
 import { parseFlowYamlString } from "../flow-engine/flow-parser-yaml.js";
 import { resolveModel } from "../flow-engine/model-roles.js";
@@ -119,7 +118,6 @@ const ARCHITECT_SUMMARY_INSTRUCTIONS =
  */
 async function generateArchitectContext(
   pi: ExtensionAPI,
-  getModelRoleFn: ((role: string) => string | undefined) | undefined,
 ): Promise<string | null> {
   // Get session entries via event (no ctx.sessionManager dependency)
   const sessionData: any = {};
@@ -137,16 +135,22 @@ async function generateArchitectContext(
   if (fallbackContext.length <= 50) return null;
 
   try {
-    // Resolve @compact model via event (no ctx.modelRegistry dependency)
-    const modelId = getModelRoleFn?.("compact");
+    // Resolve @compact via the shared model:resolve event (with registry fallback).
     const spawnCtx = getSpawnContext(pi);
-    if (!modelId || !spawnCtx.modelRegistry) {
+    let model: any;
+    try {
+      const resolved = resolveModel(pi, "@compact");
+      model = resolved.model;
+      if (!model && spawnCtx.modelRegistry && resolved.modelId) {
+        const [provider, ...modelParts] = resolved.modelId.split("/");
+        if (provider && modelParts.length > 0) {
+          model = spawnCtx.modelRegistry.find(provider, modelParts.join("/"));
+        }
+      }
+    } catch {
       return fallbackContext;
     }
-
-    const [provider, ...modelParts] = modelId.split("/");
-    const model = spawnCtx.modelRegistry.find(provider, modelParts.join("/"));
-    if (!model) {
+    if (!model || !spawnCtx.modelRegistry) {
       return fallbackContext;
     }
 
@@ -207,7 +211,6 @@ function getSpawnContext(pi: ExtensionAPI): { tools: any[]; authStorage: any; mo
 async function handleEditFlow(
   pi: ExtensionAPI,
   projectRoot: string,
-  getModelRoleFn: ((role: string) => string | undefined) | undefined,
   preselectedFlowName?: string,
   preselectedFlowPath?: string,
   preselectedModificationRequest?: string,
@@ -340,7 +343,7 @@ async function handleEditFlow(
 
   // Generate structured session summary
   pi.events.emit("flow:architect-context-generating", { mode: "edit" });
-  const editArchitectContext = await generateArchitectContext(pi, getModelRoleFn);
+  const editArchitectContext = await generateArchitectContext(pi);
   pi.events.emit("flow:architect-context-ready", { hasContext: !!editArchitectContext });
 
   const { spawnAgent } = await import("../flow-engine/execution.js");
@@ -361,7 +364,7 @@ async function handleEditFlow(
     let architectResolvedModel = "";
     let architectModelAlias = architectConfig.model || "";
     try {
-      const { modelId } = resolveModel(architectConfig.model, architectConfig.thinking, getModelRoleFn ? (r: string) => getModelRoleFn!(r) : undefined);
+      const { modelId } = resolveModel(pi, architectConfig.model, architectConfig.thinking);
       architectResolvedModel = modelId;
     } catch { /* model resolution may fail — non-fatal for display */ }
 
@@ -386,7 +389,7 @@ async function handleEditFlow(
       agent: architectConfig,
       task: currentTask,
       templateContext: { ...templateCtx, task: currentTask },
-      getModelRole: getModelRoleFn ? (role: string) => getModelRoleFn!(role) : undefined,
+      pi,
       cwd: projectRoot,
       authStorage: spawnCtx.authStorage,
       modelRegistry: spawnCtx.modelRegistry,
@@ -559,7 +562,6 @@ async function handleNewFlow(
   pi: ExtensionAPI,
   projectRoot: string,
   description: string | undefined,
-  getModelRoleFn: ((role: string) => string | undefined) | undefined,
 ): Promise<void> {
   // Step 1: Determine description
   let desc = description?.trim() || "";
@@ -576,12 +578,17 @@ async function handleNewFlow(
     if (convoContext.length > 50) {
       try {
         let model: any = null;
-        const modelId = getModelRoleFn?.("compact");
         const spawnCtx = getSpawnContext(pi);
-        if (modelId && spawnCtx.modelRegistry) {
-          const [provider, ...modelParts] = modelId.split("/");
-          model = spawnCtx.modelRegistry.find(provider, modelParts.join("/"));
-        }
+        try {
+          const resolved = resolveModel(pi, "@compact");
+          model = resolved.model;
+          if (!model && spawnCtx.modelRegistry && resolved.modelId) {
+            const [provider, ...modelParts] = resolved.modelId.split("/");
+            if (provider && modelParts.length > 0) {
+              model = spawnCtx.modelRegistry.find(provider, modelParts.join("/"));
+            }
+          }
+        } catch { /* fall through to ask user */ }
 
         if (model && spawnCtx.modelRegistry) {
           const auth = await spawnCtx.modelRegistry.getApiKeyAndHeaders(model);
@@ -668,11 +675,11 @@ async function handleNewFlow(
   if (description?.trim()) {
     // Description was provided upfront, so we haven't done context generation yet
     pi.events.emit("flow:architect-context-generating", { mode: "new" });
-    architectContext = await generateArchitectContext(pi, getModelRoleFn);
+    architectContext = await generateArchitectContext(pi);
     pi.events.emit("flow:architect-context-ready", { hasContext: !!architectContext });
   } else {
     // Context was already generated during the desc discovery phase above
-    architectContext = await generateArchitectContext(pi, getModelRoleFn);
+    architectContext = await generateArchitectContext(pi);
   }
 
   // Step 4: Spawn architect subagent (with replan loop)
@@ -695,7 +702,7 @@ async function handleNewFlow(
     let architectResolvedModel = "";
     let architectModelAlias = architectConfig.model || "";
     try {
-      const { modelId } = resolveModel(architectConfig.model, architectConfig.thinking, getModelRoleFn ? (r: string) => getModelRoleFn!(r) : undefined);
+      const { modelId } = resolveModel(pi, architectConfig.model, architectConfig.thinking);
       architectResolvedModel = modelId;
     } catch { /* model resolution may fail — non-fatal for display */ }
 
@@ -720,7 +727,7 @@ async function handleNewFlow(
       agent: architectConfig,
       task,
       templateContext: { ...templateCtx, task },
-      getModelRole: getModelRoleFn ? (role: string) => getModelRoleFn!(role) : undefined,
+      pi,
       cwd: projectRoot,
       authStorage: spawnCtx.authStorage,
       modelRegistry: spawnCtx.modelRegistry,
@@ -981,7 +988,7 @@ export function activate(pi: ExtensionAPI) {
     architectRunning = true;
     const description = (data as any)?.description || "";
     try {
-      await handleNewFlow(pi, projectRoot, description, getModelRole);
+      await handleNewFlow(pi, projectRoot, description);
     } finally {
       architectRunning = false;
     }
@@ -1003,7 +1010,7 @@ export function activate(pi: ExtensionAPI) {
       return;
     }
     try {
-      await handleEditFlow(pi, projectRoot, getModelRole, flowName, flowPath, modificationRequest);
+      await handleEditFlow(pi, projectRoot, flowName, flowPath, modificationRequest);
     } finally {
       architectRunning = false;
     }

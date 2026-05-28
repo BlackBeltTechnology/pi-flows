@@ -783,7 +783,7 @@ Every agent MUST have these frontmatter fields:
 |-------|----------|-------------|
 | `name` | Yes | Kebab-case unique identifier (e.g., `code-reviewer`) |
 | `description` | Yes | One-line purpose statement |
-| `model` | Yes | Role alias — see Model Roles below |
+| `model` | Yes | Role alias (e.g., `@coding`), `provider/model-id[:thinking]`, or bare `model-id[:thinking]` — see Model selection below |
 | `tools` | Yes | Comma-separated list of tools the agent needs |
 | `inputs` | No | Declared input names for flow wiring (e.g., `[implementation_summary, design_doc]`) |
 | `outputs` | No | Declared output names the agent produces (e.g., `[findings, verdict]`) |
@@ -799,6 +799,20 @@ Every agent MUST have these frontmatter fields:
 | `@compact` | Lightweight tasks like summarization |
 | `@vision` | Image and visual analysis |
 
+## Model selection — accepted forms
+
+The `model:` field accepts THREE forms. Use whichever fits the agent's portability needs:
+
+| Form | Example | When to use |
+|------|---------|-------------|
+| `@role` (preferred) | `model: @coding` | Default. Portable across operators — each environment maps roles to its own models via `/roles`. Survives upstream model id renames. |
+| `provider/model-id[:thinking]` | `model: anthropic/claude-haiku-4-5:high` | When a SPECIFIC model is required regardless of role config (e.g., a benchmark agent that must always run on the same model). |
+| Bare `model-id[:thinking]` | `model: claude-haiku-4-5` | When the user explicitly names a model but does not care which provider serves it (first matching registered model wins). |
+
+**Prefer `@role` by default.** Only generate `provider/model-id` or bare `model-id` when (a) a specific model is required regardless of role assignments, or (b) the user explicitly asks for a non-role model. Role aliases survive operator-side model changes; literal references do not.
+
+The `:thinking` suffix (`minimal` | `low` | `medium` | `high` | `xhigh` | `off`) attaches to any form.
+
 ## System Prompt Body
 
 The body of the `.md` file is the agent's system prompt. Structure it with:
@@ -810,6 +824,8 @@ The body of the `.md` file is the agent's system prompt. Structure it with:
 - **Task placeholder**: `${{task}}` to receive the runtime task
 
 ## Complete Example
+
+This example uses `@coding` for illustration. See "Model selection — accepted forms" above for the other two accepted forms (`provider/model-id[:thinking]`, bare `model-id`).
 
 ```
 ---
