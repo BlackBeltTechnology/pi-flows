@@ -5,6 +5,13 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Release workflow hardening** (`.github/workflows/publish.yml`) — the `publish` job now verifies `package.json` matches the resolved tag and fails loud on drift, instead of trusting an unbumped tag. `prepare` remains the single source of truth for versioning.
+- **`prepare` commit is skip-if-clean** — the `Commit, tag, and push` step no longer hard-fails when the tree is already at the target version (CHANGELOG already dated, no version delta). It skips the commit + branch-push and still tags + pushes the tag so `publish` proceeds.
+
 ## [v0.2.2] - 2026-06-05
 
 ### Added
@@ -22,7 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `package.json` — added `lint`, `typecheck` scripts; added `eslint`, `@eslint/js`, `typescript-eslint`, `typescript`, `@types/node` to `devDependencies`.
 - `AGENTS.md` — expanded "Running, Testing, Deploying" table to cover `lint`, `typecheck`, `CI`, and the new release workflow.
 - `.gitignore` — removed `package-lock.json` so the lockfile is committed (required by `npm ci` in CI).
-- **Release workflow hardening** (`.github/workflows/publish.yml`) — the `publish` job now verifies `package.json` matches the resolved tag and fails loud on drift, instead of trusting an unbumped tag. `prepare` remains the single source of truth for versioning.
 
 ## [0.2.0] - 2026-05-15
 
