@@ -159,6 +159,25 @@ jobs:
       - run: npm run typecheck  # Defence-in-depth — CI already ran, but
                                 # don't publish a broken build.
 
+      - name: Verify package.json matches resolved version
+        # `prepare` owns versioning: on workflow_dispatch it bumps + commits
+        # + tags; on tag-push the tag's tree already carries the bumped
+        # package.json. Publish does NOT mutate the version — it asserts the
+        # checked-out tree matches the tag and fails loud on drift (a
+        # hand-pushed tag whose package.json was never bumped). Surfacing the
+        # mismatch beats silently re-stamping it.
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(node -p "require('./package.json').version")
+          if [ "$actual" != "$VERSION" ]; then
+            echo "::error::package.json version ($actual) does not match release version ($VERSION). The tag must point at a commit whose package.json was bumped by the prepare job."
+            exit 1
+          fi
+          echo "package.json version $actual matches release version $VERSION"
+
       - name: Skip if already published
         id: skip
         env:
