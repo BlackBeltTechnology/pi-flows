@@ -126,9 +126,17 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json CHANGELOG.md
-          git commit -m "chore(release): ${TAG}"
+          # Skip the commit + branch-push when nothing changed (e.g. the tree
+          # is already at this version and CHANGELOG already dated). Still tag
+          # + push the tag so publish can proceed. Mirrors the subagents
+          # release workflow guard.
+          if git diff --cached --quiet; then
+            echo "::notice::nothing to commit — tree already at ${TAG}"
+          else
+            git commit -m "chore(release): ${TAG}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
           git tag -a "${TAG}" -m "${TAG}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
           git push origin "${TAG}"
 
   # ── publish: OIDC Trusted Publishing to npm with provenance ──────────────
