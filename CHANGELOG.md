@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `package.json` — added `lint`, `typecheck` scripts; added `eslint`, `@eslint/js`, `typescript-eslint`, `typescript`, `@types/node` to `devDependencies`.
 - `AGENTS.md` — expanded "Running, Testing, Deploying" table to cover `lint`, `typecheck`, `CI`, and the new release workflow.
 - `.gitignore` — removed `package-lock.json` so the lockfile is committed (required by `npm ci` in CI).
+- **Release workflow hardening** (`.github/workflows/publish.yml`) — the `publish` job now verifies `package.json` matches the resolved tag and fails loud on drift, instead of trusting an unbumped tag. `prepare` remains the single source of truth for versioning.
 
 ## [0.2.0] - 2026-05-15
 
