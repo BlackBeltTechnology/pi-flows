@@ -300,7 +300,13 @@ export function activate(pi: ExtensionAPI) {
   const handleRegisterAgentExtension = (data: unknown) => {
     const entry = data as { factory?: any; path?: string };
     if (entry.factory) {
-      extraAgentExtensions.push(entry.factory);
+      // Dedupe by reference: producers (e.g. the dashboard
+      // flows-anthropic-bridge plugin) re-announce the SAME stable factory on
+      // every session_start so it survives this array being re-seeded. Only
+      // push the first time to avoid registering the bridge N times per spawn.
+      if (!extraAgentExtensions.includes(entry.factory)) {
+        extraAgentExtensions.push(entry.factory);
+      }
     } else if (entry.path) {
       const filePath = entry.path;
       const factory = async (piApi: any) => {
