@@ -5,12 +5,16 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v0.2.3] - 2026-06-05
+## [Unreleased]
 
 ### Added
 
 - **Flow-run session persistence** (`extensions/flow-engine/flow-persist.ts`) — the `EventEmitObserver` now durably records every flow-run lifecycle event into the pi session via `pi.appendEntry("flow-event", …)` (record shape `FlowEventRecord { seq, eventType, data, flowRunId }`, `eventType` = the mapped dashboard protocol name). Persistence is additive and best-effort. This is the engine half of reload survival; the dashboard replay half is delegated (see `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md`). Architect events are a scoped-out follow-up.
 - **`flow:agent-error` event** — emitted for step-level agent failures (derived at the `FlowManager.onAgentComplete` fan-out when `result.success === false`), giving the dashboard `{kind:"error"}` timeline entry a producer. Added `onError` to the `FlowObserver` interface. Tool errors still travel via `flow:subagent-tool-result`.
+- **Orphaned-flow reconciliation on resume** (`flow-orphan-reconciliation` capability) — a flow lives and dies with its parent process, so a hard kill left a non-terminal persisted stream that hung the dashboard card on "running" with a no-op Abort. On `session_start`, `findOrphanedRun()` now scans persisted `flow-event` entries; a run with no terminal `flow_complete` is reconciled by emitting `flow:complete` live and persisting a `flow_complete` tagged with the orphan's `flowRunId` (status `aborted`), with `seedSeq()` keeping the synthesized terminal ordered after mid-run events. `flow:abort` now reconciles when no flow is live instead of silently no-opping. No `pi-agent-dashboard` change required.
+- **Flush-gate marker swallow fix** — `FlowEventPersister` markers now carry a complete zero `Usage` (incl. `cost`). Without it, on resume pi's `_findLastAssistantMessage()` returns the marker and the next user send threw in `calculateContextTokens(usage.totalTokens)`; the throw was swallowed by `emitError`, silently dropping the user's message.
+
+## [v0.2.3] - 2026-06-05
 
 ### Changed
 
