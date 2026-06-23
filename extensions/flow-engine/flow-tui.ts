@@ -13,6 +13,7 @@ import type {
   FlowResult,
 } from "./types.js";
 import type { FlowObserver } from "./flow-io.js";
+import { FlowEventPersister, type OrphanedRun } from "./flow-persist.js";
 import type { FlowManager } from "./flow-manager.js";
 import { GridComponent } from "../flow-dashboard/grid-component.js";
 import { createAgentDetailOverlay } from "../flow-dashboard/agent-detail-overlay.js";
@@ -525,7 +526,18 @@ export class TuiFlowObserver implements FlowObserver {
 // ---- EventEmitObserver -----------------------------------------------------
 
 export class EventEmitObserver implements FlowObserver {
-  constructor(private pi: ExtensionAPI) {}
+  private persister: FlowEventPersister;
+
+  constructor(private pi: ExtensionAPI, getSessionManager?: () => any) {
+    this.persister = new FlowEventPersister(pi, getSessionManager);
+  }
+
+  // Emit the event live AND durably record it (best-effort) so the run
+  // survives /resume and dashboard reload. See flow-persist.ts.
+  private emit(channel: string, data: any): void {
+    this.pi.events.emit(channel, data);
+    this.persister.persist(channel, data);
+  }
 
   onFlowStarted(flowName: string, flow: FlowConfig, task: string): void {
     // Serialize minimal step metadata for external consumers (dashboards, etc.)
@@ -538,7 +550,7 @@ export class EventEmitObserver implements FlowObserver {
       loopTarget: (step as any).loop_target,
       exitTarget: (step as any).exit_target,
     }));
-    this.pi.events.emit("flow:flow-started", {
+    this.emit("flow:flow-started", {
       flowName,
       task,
       steps,
@@ -547,6 +559,10 @@ export class EventEmitObserver implements FlowObserver {
       autonomousMode: isAutonomousMode(),
       source: flow.source,
     });
+    // Open the flush gate at START so the session file exists for the whole
+    // run — mid-run stop+resume reattaches under the same id, and a mid-run
+    // reload survives. (Completion marker still fires in onFlowComplete.)
+    this.persister.emitStartMarker(flowName);
   }
 
   onAgentStarted(
@@ -555,7 +571,7 @@ export class EventEmitObserver implements FlowObserver {
     config?: AgentConfig,
     resolvedModel?: string,
   ): void {
-    this.pi.events.emit("flow:agent-started", {
+    this.emit("flow:agent-started", {
       agentName,
       stepId,
       resolvedModel,
@@ -576,7 +592,7 @@ export class EventEmitObserver implements FlowObserver {
     stepId: string,
     result: AgentResult,
   ): void {
-    this.pi.events.emit("flow:agent-complete", {
+    this.emit("flow:agent-complete", {
       agentName,
       stepId,
       result: {
@@ -591,11 +607,11 @@ export class EventEmitObserver implements FlowObserver {
   }
 
   onAssistantText(agentName: string, stepId: string, text: string): void {
-    this.pi.events.emit("flow:assistant-text", { agentName, stepId, text });
+    this.emit("flow:assistant-text", { agentName, stepId, text });
   }
 
   onThinkingText(agentName: string, stepId: string, text: string): void {
-    this.pi.events.emit("flow:thinking-text", { agentName, stepId, text });
+    this.emit("flow:thinking-text", { agentName, stepId, text });
   }
 
   onToolCall(
@@ -604,7 +620,7 @@ export class EventEmitObserver implements FlowObserver {
     toolName: string,
     input: any,
   ): void {
-    this.pi.events.emit("flow:subagent-tool-call", {
+    this.emit("flow:subagent-tool-call", {
       agentName,
       stepId,
       toolName,
@@ -619,7 +635,7 @@ export class EventEmitObserver implements FlowObserver {
     output: any,
     isError: boolean,
   ): void {
-    this.pi.events.emit("flow:subagent-tool-result", {
+    this.emit("flow:subagent-tool-result", {
       agentName,
       stepId,
       toolName,
@@ -634,7 +650,7 @@ export class EventEmitObserver implements FlowObserver {
     chosenBranch: string,
     targetStepId: string,
   ): void {
-    this.pi.events.emit("flow:auto-decision", {
+    this.emit("flow:auto-decision", {
       forkId,
       agentName,
       chosenBranch,
@@ -648,7 +664,7 @@ export class EventEmitObserver implements FlowObserver {
     maxIterations: number,
     loopTarget?: string,
   ): void {
-    this.pi.events.emit("flow:loop-iteration", {
+    this.emit("flow:loop-iteration", {
       stepId,
       iteration,
       maxIterations,
@@ -656,8 +672,51 @@ export class EventEmitObserver implements FlowObserver {
     });
   }
 
-  onFlowComplete(_flowName: string, result: FlowResult): void {
+  onFlowComplete(flowName: string, result: FlowResult): void {
+    // Persist the completion event first (buffered if the gate is closed)…
+    this.emit("flow:complete", result);
+    // …then append the non-empty marker that opens the sticky flush gate, so
+    // the whole buffered flow-event stream is written to disk for /resume.
+    this.persister.emitCompletionMarker(flowName);
+  }
+
+  onError(agentName: string, stepId: string, text: string): void {
+    this.emit("flow:agent-error", { agentName, stepId, text });
+  }
+
+  // Drive an orphaned flow run (one with no terminal record) to a terminal
+  // state: emit `flow:complete` live so connected clients clear immediately,
+  // and persist a `flow_complete` record tagged with the ORPHANED run's
+  // flowRunId so the next cold resume is idempotent. seq is seeded past the
+  // run's mid-run events so the terminal record replays last.
+  //
+  // NOT routed through `this.emit`: that would persist with the channel-driven
+  // flowRunId (empty on a resumed persister) — we need the orphan's id.
+  reconcileOrphanedRun(orphan: OrphanedRun, reason: "session-close" | "user-abort"): void {
+    this.persister.seedSeq(orphan.maxSeq);
+    const summary = reason === "session-close"
+      ? "Flow interrupted \u2014 parent session closed"
+      : "Flow aborted (no live run)";
+    const result: FlowResult = {
+      lastResult: {
+        success: false,
+        output: "",
+        stderr: "",
+        exitCode: null,
+        result: { status: "error", files: [], summary, artifacts: "" },
+        toolCalls: [],
+        duration: 0,
+        tokens: { input: 0, output: 0 },
+      },
+      results: {},
+      forks: {},
+      flowName: orphan.flowName,
+      stepCount: 0,
+      totalDuration: 0,
+      status: "aborted",
+    };
     this.pi.events.emit("flow:complete", result);
+    this.persister.persistTerminal(orphan.flowRunId, result);
   }
 }
 

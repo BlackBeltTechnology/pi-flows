@@ -121,6 +121,15 @@ export class FlowManager {
         for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig, resolvedModel);
       },
       onAgentComplete: (agentName: string, stepId: string, result: any) => {
+        // Step-level (message-level) agent failure: surface as a discrete
+        // timeline error entry BEFORE the status flip, so observers (and the
+        // persisted stream) capture it. Tool errors travel via onToolResult.
+        if (result && result.success === false) {
+          const text = String(
+            result.result?.summary || result.output || result.stderr || "Agent failed",
+          );
+          for (const obs of observers) obs.onError?.(agentName, stepId, text);
+        }
         for (const obs of observers) obs.onAgentComplete?.(agentName, stepId, result);
       },
       onExtensionUIRequest: (agentName: string, request: any, respond: (response: any) => void) => {

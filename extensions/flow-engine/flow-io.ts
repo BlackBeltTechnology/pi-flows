@@ -77,5 +77,9 @@ export interface FlowObserver {
   onThinkingText?(agentName: string, stepId: string, text: string): void;
   onLoopIteration?(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void;
   onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void;
+  // Step-level (message-level) agent failure, distinct from a tool result with
+  // isError:true (which travels via onToolResult). Surfaces as a discrete
+  // {kind:"error"} timeline entry.
+  onError?(agentName: string, stepId: string, text: string): void;
   onFlowComplete?(flowName: string, result: FlowResult): void;
 }

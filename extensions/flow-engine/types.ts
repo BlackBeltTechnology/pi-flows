@@ -206,6 +206,25 @@ export interface TemplateContext {
   loopMaxIterations?: Record<string, number>;
 }
 
+// ---- Persisted flow-event record ------------------------------------------
+
+// Shape of the custom session entry (customType "flow-event") written via
+// pi.appendEntry for each flow-run lifecycle event. This is the cross-repo
+// contract the dashboard's replay path consumes to rebuild flow cards on
+// reload. See openspec/changes/persist-flow-runs.
+export interface FlowEventRecord {
+  // Monotonic per session; replay orders by this to reproduce live ordering.
+  seq: number;
+  // The dashboard PROTOCOL event name (mapped), e.g. "flow_tool_call" — NOT
+  // the raw "flow:*" channel name. Lets a consumer re-forward verbatim.
+  eventType: string;
+  // The exact payload the bridge would have forwarded for this event.
+  data: unknown;
+  // Identifies the originating flow run (disambiguates multiple runs in one
+  // session; also the supersede key for any future terminal-collapse entry).
+  flowRunId: string;
+}
+
 // ---- Validation diagnostic ------------------------------------------------
 
 export interface Diagnostic {

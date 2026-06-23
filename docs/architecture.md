@@ -219,6 +219,44 @@ Extensions hook into the pi-coding-agent lifecycle:
 8. Cleanup on session end
 ```
 
+## Flow Lifecycle on Session Close & Resume Reconciliation
+
+A flow runs entirely in-process inside the parent pi session: `FlowManager` holds an in-memory promise plus an `AbortController`, and subagents are in-memory sessions. Closing the parent session destroys all of this mid-run. There is no checkpoint and no graceful-shutdown hook — **flows are not resumable** (executable state is never re-driven).
+
+The only durable trace is the persisted `flow-event` stream. `FlowEventPersister` writes one entry per lifecycle event as `{ seq, eventType, data, flowRunId }`. The terminal `flow_complete` record is written only when the in-process promise settles, so a hard kill leaves a stream with **no terminal record**. Replaying such a stream on resume previously left the flow card hung on "running" forever, and the Abort button was a no-op (its `flow:abort` handler was gated by `if (flowManager.isRunning)`, which is `false` on a resumed session).
+
+### Resume-time reconciliation
+
+On `session_start`, pi-flows scans persisted `flow-event` entries via `findOrphanedRun()`:
+
+1. Group records by `flowRunId`, pick the latest run (highest `seq`).
+2. If that run has no `flow_complete` record, it is **orphaned**.
+3. For an orphaned run, synthesize a terminal event: emit `flow:complete` live (clearing connected dashboard clients) **and** persist a `flow_complete` record tagged with the orphaned run's `flowRunId` (making the next cold resume idempotent). The synthesized `FlowResult` has `status: "aborted"` and summary `"Flow interrupted — parent session closed"`.
+4. Seed the resumed persister's `seq` counter past the orphan's max `seq` via `seedSeq(maxSeq)`, so the synthesized terminal record replays **after** the run's mid-run events (ordering correctness).
+
+The `flow:abort` handler also reconciles when there is no live flow:
+
+```
+if (flowManager.isRunning) flowManager.abort();
+else reconcileOrphanedFlow("user-abort");   // summary: "Flow aborted (no live run)"
+```
+
+Reconciliation is idempotent: once a run has a `flow_complete` record — from clean completion, prior resume reconciliation, or abort reconciliation — it is no longer orphaned.
+
+```mermaid
+flowchart TD
+    A[session_start] --> B[findOrphanedRun]
+    B --> C{latest run has<br/>flow_complete?}
+    C -->|yes| D[no-op — already terminal]
+    C -->|no| E[orphaned run]
+    E --> F[emit flow:complete live<br/>clears dashboard clients]
+    E --> G["persist flow_complete<br/>status: aborted"]
+    E --> H["seedSeq maxSeq<br/>terminal replays last"]
+    G --> I[idempotent on next resume]
+```
+
+No dashboard-side code change is required — the synthesized `flow_complete` rides the existing replay/reducer path. Explicit non-goals: no re-driving of executable state, no `SIGTERM` handler.
+
 ## FlowManager Architecture
 
 The `FlowManager` class is the central orchestration component. It uses an adapter pattern to decouple execution logic from UI:

@@ -116,6 +116,35 @@ export const FLOW_EVENT_MAP: Record<string, string> = {
 
 **Fast-path observability without round-tripping dashboard PR**: emit companion event whose name already in `FLOW_EVENT_MAP`. Works ONLY when companion event's reducer handler does not depend on prior state. Architect lifecycle reducer rejects `architect_error` when `state === null` (before `architect_started` / `architect_context_generating`), so init-errors emitted before any architect state exists cannot surface via `flow:architect-error` companion. Remain TUI-only via unmapped `flow:architect-init-error` event. Tracked in `openspec/changes/archive/2026-05-11-align-with-dashboard-plugins/DASHBOARD-DELEGATION-BRIEF.md` for future dashboard-side reducer fix.
 
+## Flow-run session persistence (reload survival)
+
+**Problem:** flow `flow:*` events forwarded live-only (ephemeral). Never persisted. Cards vanish on `/resume`, browser refresh, dashboard server restart. `replayEntriesAsEvents` replays only `message` + `model_change` entries, not `flow:*` events.
+
+**Solution in pi-flows:** `EventEmitObserver` (extensions/flow-engine/flow-tui.ts) records each flow-run lifecycle event to pi session via `pi.appendEntry("flow-event", record)`. Implemented in extensions/flow-engine/flow-persist.ts.
+
+- **`FlowEventPersister`** manages recording.
+- **`FLOW_EVENT_NAME_MAP`** maps pi-flows event names → dashboard protocol names (e.g. `flow:agent-started` → `flow_agent_started`). Consumer re-forwards verbatim.
+- **`FlowEventRecord`** shape (extensions/flow-engine/types.ts): `{ seq, eventType, data, flowRunId }` where `eventType` is already the mapped dashboard protocol name (e.g. `flow_tool_call`). `flowRunId` identifies which flow-run owns the event.
+
+Persistence additive, best-effort. Live path never blocked. Entries recorded as `type: "custom"` (out of LLM context, not displayed).
+
+**New event: `flow:agent-error { agentName, stepId, text }`** 
+- Fires from `FlowManager.onAgentComplete` fan-out when `result.success === false`.
+- Step-level agent failure event. Gives dashboard `{kind: "error"}` timeline entry a producer.
+- Tool errors still travel via `flow:subagent-tool-result` (`isError`).
+
+**Reconstruction: dashboard's job.** Branch in `pi-agent-dashboard/packages/shared/src/state-replay.ts` must:
+- Extract re-forward `flow-event` entries (ordered by `seq`).
+- Feed through `reduceFlowEvent` to rebuild cards (idempotent).
+- Add `FLOW_EVENT_MAP["flow:agent-error"] = "flow_agent_error"` to wire protocol.
+- Add `flow_agent_error` reducer case in flows-plugin state-store.
+
+See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md`.
+
+**Scope:** Architect events (`flow:architect-*`) not yet persisted (separate lifecycle, follow-up). Helper reusable.
+
+**Landing:** Two repos land independently. Reload survival visible once both ship.
+
 ## TUI overlay vs server-driven renderer
 
 Both render same `flow:*` event stream to different targets:

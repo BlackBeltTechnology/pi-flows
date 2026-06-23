@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [v0.2.3] - 2026-06-05
 
+### Added
+
+- **Flow-run session persistence** (`extensions/flow-engine/flow-persist.ts`) — the `EventEmitObserver` now durably records every flow-run lifecycle event into the pi session via `pi.appendEntry("flow-event", …)` (record shape `FlowEventRecord { seq, eventType, data, flowRunId }`, `eventType` = the mapped dashboard protocol name). Persistence is additive and best-effort. This is the engine half of reload survival; the dashboard replay half is delegated (see `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md`). Architect events are a scoped-out follow-up.
+- **`flow:agent-error` event** — emitted for step-level agent failures (derived at the `FlowManager.onAgentComplete` fan-out when `result.success === false`), giving the dashboard `{kind:"error"}` timeline entry a producer. Added `onError` to the `FlowObserver` interface. Tool errors still travel via `flow:subagent-tool-result`.
+
 ### Changed
 
 - **Release workflow hardening** (`.github/workflows/publish.yml`) — the `publish` job now verifies `package.json` matches the resolved tag and fails loud on drift, instead of trusting an unbumped tag. `prepare` remains the single source of truth for versioning.

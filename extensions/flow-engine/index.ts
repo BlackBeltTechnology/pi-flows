@@ -27,6 +27,7 @@ import { FlowManager } from "./flow-manager.js";
 import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
 import { emitPromptAndAwait } from "./flow-prompt.js";
 import { TuiFlowObserver, EventEmitObserver, setupFlowTui, getIsOverlayOpen } from "./flow-tui.js";
+import { findOrphanedRun } from "./flow-persist.js";
 import { registerArchitectUIAdapter } from "./architect-ui-adapter.js";
 import { listenForPromptBus } from "./prompt-bus-access.js";
 
@@ -126,6 +127,9 @@ export function activate(pi: ExtensionAPI) {
   // Track authStorage and modelRegistry from session context
   let sessionAuthStorage: any = undefined;
   let sessionModelRegistry: any = undefined;
+  // Captured on session_start; used by EventEmitObserver to append the
+  // flow-completion marker that opens pi's persistence flush gate.
+  let sessionManager: any = undefined;
 
   // ── Helpers for FlowManager config ──
 
@@ -154,7 +158,18 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Create FlowManager with headless adapter (upgraded on session_start if hasUI) ──
 
-  const eventEmitObserver = new EventEmitObserver(pi);
+  const eventEmitObserver = new EventEmitObserver(pi, () => sessionManager);
+
+  // Drive a flow run that was interrupted by parent-session close (or for which
+  // abort arrives with no live flow) to a terminal state, so a replayed
+  // dashboard card reaches a clearable status instead of hanging "running".
+  // Idempotent: findOrphanedRun returns null once the run has a terminal record.
+  function reconcileOrphanedFlow(reason: "session-close" | "user-abort"): void {
+    let entries: unknown = [];
+    try { entries = sessionManager?.getEntries?.() ?? []; } catch { entries = []; }
+    const orphan = findOrphanedRun(entries);
+    if (orphan) eventEmitObserver.reconcileOrphanedRun(orphan, reason);
+  }
 
   const flowManager = new FlowManager(
     {
@@ -179,8 +194,6 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Session start: wire TUI or headless ──
 
-  let sessionManager: any = undefined;
-
   pi.on("session_start", (_event: any, ctx: any) => {
     if (ctx.modelRegistry) {
       sessionModelRegistry = ctx.modelRegistry;
@@ -188,6 +201,10 @@ export function activate(pi: ExtensionAPI) {
     }
     if (ctx.sessionManager) {
       sessionManager = ctx.sessionManager;
+      // Resume-time reconciliation: a flow interrupted by a prior parent-session
+      // close left a non-terminal event stream. Synthesize its terminal event
+      // now (before any new flow can launch) so the replayed card clears.
+      reconcileOrphanedFlow("session-close");
     }
     if (ctx.hasUI) {
       // Upgrade to TUI adapter
@@ -451,6 +468,9 @@ export function activate(pi: ExtensionAPI) {
   // External abort (e.g., from dashboard bridge)
   pi.events.on("flow:abort", () => {
     if (flowManager.isRunning) flowManager.abort();
+    // No live flow (e.g. abort on a resumed session): clear the stuck card by
+    // reconciling the latest orphaned run instead of silently no-opping.
+    else reconcileOrphanedFlow("user-abort");
   });
 
   // External autonomous mode toggle (e.g., from dashboard bridge)
