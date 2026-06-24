@@ -38,8 +38,8 @@ pi-flows is the **engine**. pi-agent-dashboard is the **renderer**. The two repo
 │     render-actions.ts (state → IntentNode tree)      │
 │     │                                                │
 │     │  state-store runs the existing flow-reducer    │
-│     │  + architect-reducer on incoming protocol      │
-│     │  events, then renders a fresh intent tree:     │
+│     │  on incoming protocol events, then renders     │
+│     │  a fresh intent tree:                           │
 │     │     { primitive: "ui:action-list",             │
 │     │       props: { actions: [...] } }              │
 │     ▼                                                │
@@ -73,7 +73,7 @@ pi-flows is the **engine**. pi-agent-dashboard is the **renderer**. The two repo
 └──────────────────────────────────────────────────────┘
 ```
 
-Legacy claims (`FlowDashboard`, `FlowArchitect`, `FlowAgentDetail`, `FlowGraph`, and any others still on the per-client React path) continue to render through the old slot-consumer mechanism in `packages/flows-plugin/src/client/` until their migration ships. The two paths coexist; the new server-driven path takes precedence for slots that have migrated.
+Legacy claims (`FlowDashboard`, `FlowAgentDetail`, `FlowGraph`, and any others still on the per-client React path) continue to render through the old slot-consumer mechanism in `packages/flows-plugin/src/client/` until their migration ships. The two paths coexist; the new server-driven path takes precedence for slots that have migrated.
 
 ## Where things live
 
@@ -94,7 +94,7 @@ Legacy claims (`FlowDashboard`, `FlowArchitect`, `FlowAgentDetail`, `FlowGraph`,
 
 A new event has to be added in **two places**, possibly three:
 
-**1. Emit it in pi-flows.** Pick a name in the `flow:*` (or `flow:architect-*`) family. Emit at the lifecycle point where the event makes sense:
+**1. Emit it in pi-flows.** Pick a name in the `flow:*` family. Emit at the lifecycle point where the event makes sense:
 
 ```typescript
 pi.events.emit("flow:my-new-event", {
@@ -114,7 +114,7 @@ export const FLOW_EVENT_MAP: Record<string, string> = {
 
 **3. (If the dashboard server should react to it)** Handle the resulting protocol event in `pi-agent-dashboard/packages/flows-plugin/src/server/state-store.ts` so the canonical state-store mutates and a fresh intent tree gets broadcast. If the event only needs recording for replay (no UI change), step 2 is sufficient.
 
-**Fast-path observability without round-tripping a dashboard PR**: emit a companion event whose name is already in `FLOW_EVENT_MAP`. This works ONLY when the companion event's reducer handler does not depend on prior state. The architect lifecycle reducer rejects `architect_error` when `state === null` (i.e., before `architect_started` / `architect_context_generating`), so init-errors emitted before any architect state exists cannot be surfaced via the `flow:architect-error` companion. They remain TUI-only via the unmapped `flow:architect-init-error` event. Tracked in `openspec/changes/archive/2026-05-11-align-with-dashboard-plugins/DASHBOARD-DELEGATION-BRIEF.md` for a future dashboard-side reducer fix.
+**Fast-path observability without round-tripping a dashboard PR**: emit a companion event whose name is already in `FLOW_EVENT_MAP`. This works ONLY when the companion event's reducer handler does not depend on prior state.
 
 ## Flow-run session persistence (reload survival)
 
@@ -150,7 +150,7 @@ This event fires from `FlowManager.onAgentComplete` (the fan-out point where all
 
 See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md` for the full dashboard-side specification.
 
-**Scope note:** Architect lifecycle events (the `flow:architect-*` family) are not yet persisted; they have a separate lifecycle and are deferred to a follow-up. The persistence helper is reusable for that future work.
+**Scope note:** Architect events have been removed. Authoring now happens as ordinary main-session tool calls (`flow_agents`, `flow_write`) via the `flow_agents`/`flow_write` tools (gated by the `flows.editFlow` setting), not via `flow:architect-*` events. The **pi-agent-dashboard** companion repo must drop all `flow:architect-*` entries from its `FLOW_EVENT_MAP` in `packages/extension/src/flow-event-wiring.ts`.
 
 **Landing:** The two repos (pi-flows and pi-agent-dashboard) land independently. Reload survival is visible to end users once **both** ship.
 

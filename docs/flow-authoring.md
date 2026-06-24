@@ -4,6 +4,36 @@ This document is the complete format reference for agent `.md` files and flow `.
 
 ---
 
+## Flow and Agent Authoring Workflow
+
+To author a flow or agent in the main session, enable the authoring tools by setting `flows.editFlow: true` in `.pi/settings.json` (e.g. `{ "flows": { "editFlow": true } }`). At each session start pi-flows reads this setting and activates the two tools (`flow_agents` and `flow_write`); the change takes effect at the next session start. Once active, author with `flow_agents` and `flow_write`. Load `/skill:edit-flow` for the **`edit-flow`** skill — a native pi skill that guides agent and flow creation, available regardless of the setting.
+
+### Edit-flow tools
+
+Both tools perform validation and write to discoverable locations (no raw `path` arguments):
+
+- **`flow_agents`** — Agent catalog management.
+  - `op: list` — Discover all available agents. Displays agent metadata from the frontmatter.
+  - `op: write` — Validate agent `.md` frontmatter and body, then write to `.pi/flows/agents/<name>.md` (name extracted from frontmatter).
+
+- **`flow_write`** — Flow file creation and editing.
+  - Parameters: `namespace` (default: `custom`), `name`, `content`.
+  - Validates the flow YAML, writes to `.pi/flows/flows/<namespace>/<name>.yaml`.
+  - Automatically registers as `/<namespace>:<name>` slash-command.
+  - To edit an existing flow, read it, then call `flow_write` with the same `namespace` and `name` to overwrite.
+
+### Model field guidance
+
+The `model:` field in agent frontmatter accepts three forms:
+
+1. **Role alias (preferred):** `@coding`, `@planning`, `@fast`, `@architect`. Resolved via active role-to-model mapping set with `/roles`.
+2. **Model ID with thinking:** `claude-sonnet-4-20250514:high`. Explicit model; `:high` sets thinking level unless overridden by `thinking:` field.
+3. **Bare model ID:** `claude-haiku-3-5-20241022`. Used as-is; thinking comes from `thinking:` field or none.
+
+The `edit-flow` skill documents these forms in detail for interactive guidance.
+
+---
+
 ## Agent Files (`.md`)
 
 Agent files are Markdown documents with YAML frontmatter. The frontmatter configures the agent; the Markdown body is the system prompt.
@@ -65,7 +95,7 @@ Target file: ${{input.target_file}}
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `string` | Unique agent identifier. Referenced in flow steps (`agent: my-agent`) and in `agent_catalog`. Must be unique across all registered agents. |
+| `name` | `string` | Unique agent identifier. Referenced in flow steps (`agent: my-agent`) and in the `flow_agents` catalog (op `list`). Must be unique across all registered agents. |
 | `description` | `string` | Human-readable description. Shown in listings and used by the Architect to understand the agent's purpose. |
 | `model` | `string` | Model reference. See **Model references** below. |
 | `tools` | `string` | Comma-separated list of tools the agent may use. The guard blocks any tool not in this list. |
@@ -243,7 +273,7 @@ architect:
 | `architect.depends_on` | What must run before this agent. Guides dependency ordering. |
 | `architect.domain` | Logical domain grouping: `"research"`, `"implementation"`, `"review"`, `"orchestration"`, etc. |
 
-The Architect agent (`flow-architect`) reads these fields from `agent_catalog` when designing flows.
+The `architect:` metadata block guides agent discovery via the `flow_agents` list operation, helping you compose flows from available agents.
 
 ---
 

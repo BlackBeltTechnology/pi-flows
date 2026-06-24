@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 /** All widget keys managed by the flow system. */
-const FLOW_WIDGET_KEYS = ["flow-dashboard", "flow-summary", "flow-architect"] as const;
+const FLOW_WIDGET_KEYS = ["flow-dashboard", "flow-summary"] as const;
 
 export type FlowWidgetKey = (typeof FLOW_WIDGET_KEYS)[number];
 

@@ -2,7 +2,7 @@
 
 ### Requirement: Architect init-error event is emitted via `flow:architect-init-error`
 
-**Reason**: The flow-architect agent and its entire event lifecycle are deleted. Authoring moves to the main session via the `flow-authoring` skill and gated `flow_agents` / `flow_write` tools, which surface errors as ordinary tool diagnostics. There is no longer an architect init phase to fail.
+**Reason**: The flow-architect agent and its entire event lifecycle are deleted. Authoring moves to the main session via the `edit-flow` skill and gated `flow_agents` / `flow_write` tools, which surface errors as ordinary tool diagnostics. There is no longer an architect init phase to fail.
 
 **Migration**: Dashboard observers SHALL drop `flow:architect-init-error` from `FLOW_EVENT_MAP`. Authoring failures now appear as normal main-session tool-result diagnostics; no dashboard event replaces this one.
 

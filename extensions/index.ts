@@ -18,7 +18,6 @@ import { activate as activateFlowEngine } from "./flow-engine/index.js";
 import { activate as activateFlowDashboard } from "./flow-dashboard/index.js";
 import { activate as activateFlowSummary } from "./flow-summary/index.js";
 import { activate as activateFlowContext } from "./flow-context/index.js";
-import { activate as activateFlowWorkspace } from "./flow-workspace/index.js";
 import { activate as activateFlowFooter } from "./flow-footer.js";
 
 export default function activate(pi: ExtensionAPI) {
@@ -28,6 +27,5 @@ export default function activate(pi: ExtensionAPI) {
   activateFlowDashboard(pi);
   activateFlowSummary(pi);
   activateFlowContext(pi);
-  activateFlowWorkspace(pi);
   activateFlowFooter(pi);
 }

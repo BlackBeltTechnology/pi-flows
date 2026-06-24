@@ -22,7 +22,7 @@ card:                             # Dashboard rendering
   type: developer                 # Maps to card renderer class
   metric: developer               # Metric tracking category
   label: "Display Name"           # Human-readable label
-architect:                        # Flow-architect metadata
+architect:                        # Agent-discovery metadata (surfaced by flow_agents op list)
   domain: backend                 # Domain classification
   use_when: "When to select this agent"
   produces: "What this agent outputs"

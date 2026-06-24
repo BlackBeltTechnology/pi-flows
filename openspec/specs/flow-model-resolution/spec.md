@@ -5,9 +5,7 @@
 Defines how pi-flows resolves `model:` references found in agent definitions and flow YAML into concrete `Model` objects passed to pi-coding-agent's agent-session constructor.
 
 pi-flows is a **consumer** of the shared `model:resolve` event: it emits a probe and reads the result. The event handler (typically pi-agent-dashboard) owns interpretation of `@role` prefixes, the `:thinking` suffix, and `~/.pi/agent/providers.json#roles`. When no handler answers, pi-flows falls back to in-process `pi.modelRegistry` resolution for the two literal forms (`provider/model[:thinking]` and bare `model-id[:thinking]`) and refuses `@role` with an actionable error.
-
 ## Requirements
-
 ### Requirement: pi-flows SHALL resolve `model:` references via the shared `model:resolve` event
 
 When the flow engine encounters a `model:` field in an agent definition or flow YAML, it SHALL emit `pi.events.emit("model:resolve", probe)` exactly once with a probe object of shape:
@@ -147,21 +145,22 @@ The autonomous-mode toggle (currently bundled with role state under `providers.j
 - **AND** `setAutonomousMode(false)` SHALL persist `autonomousMode: false` to the SAME on-disk file
 - **AND** any preexisting `roles` / `rolePresets` / `activePreset` fields in the file SHALL NOT be touched by pi-flows
 
-### Requirement: The flow-architect prompt SHALL teach all three `model:` reference forms
+### Requirement: The edit-flow skill SHALL teach all three `model:` reference forms
 
-The system prompt in `agents/flow-architect.md` SHALL document the three accepted `model:` field forms with examples, so the architect can generate agent definitions using any form (not only `@role`). The prompt SHALL state which form is preferred (`@role`) and when the others are appropriate.
+The `edit-flow` skill (`skills/edit-flow/SKILL.md`) SHALL document the three accepted `model:` field forms with examples, so the main session can author agent definitions using any form (not only `@role`). The skill SHALL state which form is preferred (`@role`) and when the others are appropriate. (Previously this requirement targeted the deleted `agents/flow-architect.md` prompt; the teaching responsibility moves to the shipped skill.)
 
-#### Scenario: All three forms are documented in the architect's prompt
+#### Scenario: All three forms are documented in the skill
 
-- **WHEN** a developer reads `agents/flow-architect.md`
-- **THEN** the prompt body SHALL include a section listing the three forms: `@role`, `provider/model[:thinking]`, and bare `model-id`
+- **WHEN** a developer reads `skills/edit-flow/SKILL.md`
+- **THEN** the content SHALL include a section listing the three forms: `@role`, `provider/model[:thinking]`, and bare `model-id`
 - **AND** the section SHALL include one example of each form
 - **AND** the section SHALL state that `@role` is the preferred default
 - **AND** the section SHALL state that `provider/model` and bare `model-id` are appropriate when (a) a specific model is required regardless of role config, or (b) the user explicitly asks for a non-role model
 
-#### Scenario: Generated agent definitions can use any form
+#### Scenario: Authored agent definitions can use any form
 
-- **GIVEN** the architect has been told "make me an agent that always uses anthropic/claude-haiku-4-5:high"
-- **WHEN** the architect generates the agent's frontmatter
+- **GIVEN** the user has asked for "an agent that always uses anthropic/claude-haiku-4-5:high"
+- **WHEN** the main session authors the agent's frontmatter via `flow_agents`
 - **THEN** the generated `model:` field MAY contain the literal `"anthropic/claude-haiku-4-5:high"`
-- **AND** the resulting file SHALL be valid YAML and SHALL resolve correctly at runtime via the new resolveModel implementation
+- **AND** the resulting file SHALL be valid YAML and SHALL resolve correctly at runtime via the resolveModel implementation
+

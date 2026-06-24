@@ -76,9 +76,8 @@ pi install /path/to/pi-flows
 
 | Command | Description |
 |---------|-------------|
-| `/flows` | Manage flows (new, edit, delete) |
-| `/flows:new` | Design & run a new flow with the Flow Architect |
-| `/flows:edit` | Edit an existing flow |
+| `/flows` | List and manage flows (run, delete) |
+| `/skill:edit-flow` | Load the flow/agent create-and-edit reference skill |
 | `/flows:delete` | Delete a flow |
 | `/roles` | Assign models to role tiers (@coding, @planning, etc.) |
 | `Ctrl+A` | Toggle auto-routing (agents decide fork branches autonomously) |
@@ -92,7 +91,7 @@ Flows also register as slash commands based on file path: `.pi/flows/flows/revie
 - **Flows** — YAML files defining a DAG of steps connected via `blockedBy`. The engine schedules independent steps in parallel, up to `max_concurrent`.
 - **Template variables** — `${{task}}`, `${{result.step-id.summary}}`, `${{input.name}}` wire data between steps at dispatch time.
 - **Model roles** — `@coding`, `@planning`, `@research`, `@compact` map to concrete models via `/roles`. Each agent declares which tier it needs.
-- **Flow Architect** — A built-in AI agent (`/flows:new`) that analyzes your conversation context, selects agents from the catalog, and designs a complete flow DAG.
+- **Edit flow** — Create and edit flows/agents conversationally in the main session using the `flow_agents` and `flow_write` tools. These tools are off by default; enable them per project or globally with `flows.editFlow: true` in `.pi/settings.json`. Load `/skill:edit-flow` for the format reference.
 
 ## Writing Agents
 
@@ -211,7 +210,6 @@ See [`docs/dashboard-integration.md`](docs/dashboard-integration.md) for the arc
 
 | Agent | Role | Description |
 |-------|------|-------------|
-| `flow-architect` | Orchestrator | Designs flows from conversation context using `agent_catalog` |
 | `flow-decision` | Router | Makes branch/loop decisions for fork and loop steps |
 | `project-context-reader` | Researcher | Reads and summarizes project structure |
 

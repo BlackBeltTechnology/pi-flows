@@ -189,8 +189,7 @@ All sub-extensions are loaded through a single entry point (`extensions/index.ts
 4. flow-dashboard     — TUI card grid, navigation, workflow breadcrumbs
 5. flow-summary       — Post-flow summary widget with expandable step results
 6. flow-context       — #flows: inline reference and flow_results tool for main session
-7. flow-workspace     — /flows command: create, edit, delete, and Flow Architect
-8. flow-footer        — Footer segments: provider, git, file stats, context usage
+7. flow-footer        — Footer segments: provider, git, file stats, context usage
 ```
 
 ## Extension Lifecycle

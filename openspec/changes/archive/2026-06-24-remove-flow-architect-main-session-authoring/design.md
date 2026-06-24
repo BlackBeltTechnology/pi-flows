@@ -15,7 +15,7 @@ Constraints:
 
 **Goals:**
 - Author and edit flows/agents conversationally in the main session the user already controls.
-- Ship a single `flow-authoring` skill (native pi skill) that teaches the syntax and is invocable as `/skill:flow-authoring`.
+- Ship a single `edit-flow` skill (native pi skill) that teaches the syntax and is invocable as `/skill:edit-flow`.
 - Reduce the writing surface to two discovery-based tools (`flow_agents`, `flow_write`) with no raw paths.
 - Keep the authoring tools out of every session's prompt by default; activate them only on opt-in.
 - Delete the architect agent, widget, adapter, staging, summary, and event lifecycle.
@@ -30,7 +30,7 @@ Constraints:
 ## Decisions
 
 ### D1 — Native pi skill, not the pi-flows skill_read path
-Ship `skills/flow-authoring/SKILL.md` and add `skills/` to `package.json#files`. pi auto-discovers package `skills/` dirs and exposes `/skill:flow-authoring`; descriptions sit in the system prompt, full content loads on `read` / `/skill:`. One skill covers create AND edit (edit = `read` the existing file, then rewrite).
+Ship `skills/edit-flow/SKILL.md` and add `skills/` to `package.json#files`. pi auto-discovers package `skills/` dirs and exposes `/skill:edit-flow`; descriptions sit in the system prompt, full content loads on `read` / `/skill:`. One skill covers create AND edit (edit = `read` the existing file, then rewrite).
 
 *Alternative considered:* register the content through pi-flows' own `flow:register-skills-dir` + `skill_read` tool. Rejected — that path is for subagents and requires the model to know the `skill_read` tool; the native path gives a first-class `/skill:` command and standard progressive disclosure for free.
 
@@ -42,10 +42,10 @@ The raw `path` parameter was an artifact of the staging model. The engine now de
 
 *Alternative considered:* keep three single-purpose tools with an added `namespace`. Rejected — the user asked to minimize prompt overhead; merging catalog+write under `flow_agents` and dropping the separate edit path cuts the surface.
 
-### D3 — Gate behind `/flows:author` via setActiveTools
-Register `flow_agents` and `flow_write` at activation but keep them **inactive** (excluded from `setActiveTools`), so they are absent from every session's prompt by default. A thin `/flows:author` command activates them (`pi.setActiveTools([...current, "flow_agents", "flow_write"])`) and primes the `flow-authoring` skill in one shot. Tools go live only on explicit opt-in.
+### D3 — Gate via the `flows.editFlow` setting at session_start
+Register `flow_agents` and `flow_write` at activation but keep them **inactive** by default. At each `session_start`, read the `flows.editFlow` boolean from settings and reconcile the active set with `pi.setActiveTools()` — add the two tools when enabled, remove them when not. Project `.pi/settings.json` is honored only for trusted projects and overrides the global `~/.pi/agent/settings.json`; default is disabled. The `edit-flow` skill stays available as `/skill:edit-flow` regardless. (A top-level `flowsEditFlow` boolean is also accepted as an alias.)
 
-*Alternatives considered:* (a) always-on (2 tools, low overhead) — rejected, user wanted gating; (b) settings opt-in flag at `session_start` — rejected, less discoverable than a command and requires a session restart to flip.
+*Alternatives considered:* (a) always-on (2 tools, low overhead) — rejected, user wanted gating; (b) a thin `/flows:author` command that activates the tools and primes the skill — implemented first, then **replaced** at user request with the settings flag (config opt-in, no per-session command); trade-off is that flipping it requires a session restart.
 
 ### D4 — Delete the architect machinery wholesale
 Remove `agents/flow-architect.md`, `flow-dashboard/architect-widget.ts`, `flow-engine/architect-ui-adapter.ts`, `flow-workspace/staging.ts`, the `flow-architect` key in `shared/flow-widget.ts`, the architect widget/keyboard/event routing in `flow-tui.ts`, and the architect spawn path + SDK conversation-summary code + `flow:architect-*` emissions in `flow-workspace/index.ts`. Delete `/flows:new` and `/flows:edit` commands and their request emitters in `flow-context/index.ts`. The main session already holds the conversation, so no summary step is needed.
@@ -56,16 +56,16 @@ All `flow:architect-*` events are removed. Authoring now appears as ordinary mai
 ## Risks / Trade-offs
 
 - **[Breaking change for dashboard observers]** → Removing `flow:architect-*` breaks any consumer keyed on them. Mitigation: coordinate a companion pi-agent-dashboard change to drop `FLOW_EVENT_MAP` architect entries; document in `dashboard-integration.md`.
-- **[Breaking change for users of `/flows:new` / `/flows:edit`]** → Those commands disappear. Mitigation: README + `/flows` menu point to `/flows:author` and `/skill:flow-authoring`; CHANGELOG calls out the migration.
-- **[Model may not load the skill before writing]** → Without the architect's structured loop, the LLM could call `flow_write` with malformed YAML. Mitigation: `/flows:author` primes the skill; `flow_write`/`flow_agents` validate before writing and return diagnostics for self-correction (existing behavior preserved).
+- **[Breaking change for users of `/flows:new` / `/flows:edit`]** → Those commands disappear. Mitigation: README + `/flows` menu point to the `flows.editFlow` setting and `/skill:edit-flow`; CHANGELOG calls out the migration.
+- **[Model may not load the skill before writing]** → Without the architect's structured loop, the LLM could call `flow_write` with malformed YAML. Mitigation: `/skill:edit-flow` teaches the format; `flow_write`/`flow_agents` validate before writing and return diagnostics for self-correction (existing behavior preserved).
 - **[Loss of staged preview/replan UX]** → No more approve/replan widget. Mitigation: writes go to disk via validated tools and are visible as normal file changes the user can inspect/revert; iteration happens conversationally.
-- **[Tool-gating leaves tools unusable if user never runs `/flows:author`]** → Acceptable by design — that is the opt-in. The skill description and `/flows` menu surface the entry point.
+- **[Tool-gating leaves tools unusable until the setting is enabled]** → Acceptable by design — that is the opt-in. The skill (when loaded) and `/flows` menu surface the `flows.editFlow` entry point. Flipping the setting requires a session restart.
 
 ## Migration Plan
 
-1. Add `skills/flow-authoring/SKILL.md`; add `skills/` to `package.json#files`.
+1. Add `skills/edit-flow/SKILL.md`; add `skills/` to `package.json#files`.
 2. Consolidate tools (`flow_agents`, `flow_write`) with discovery-based writes; register inactive.
-3. Add `/flows:author` command (activate tools + prime skill).
+3. Gate the tools behind the `flows.editFlow` setting (reconcile active set at `session_start`).
 4. Delete architect agent, widget, adapter, staging, summary, events; delete `/flows:new` / `/flows:edit`; trim `/flows` menu.
 5. Update docs (`tools-reference.md`, `flow-authoring.md`, `README.md`, `dashboard-integration.md`) in both `docs/` and `agent-docs/`.
 6. Coordinate companion pi-agent-dashboard change to drop `flow:architect-*` from `FLOW_EVENT_MAP`.
@@ -75,4 +75,4 @@ Rollback: revert the change set; the architect path is self-contained and restor
 ## Open Questions
 
 - Exact default `namespace` value — `custom` is assumed (matches existing `discovery.ts` behavior). Confirm during implementation if a different default is preferred.
-- Whether `/flows:author` should also accept an optional inline description argument (appended as the priming turn) or always start interactive. Default: interactive; revisit if friction emerges.
+- Whether to also offer a runtime toggle (command/keybinding) so enabling authoring does not require a session restart. Deferred — the setting is the chosen opt-in surface.

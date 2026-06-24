@@ -16,11 +16,11 @@ import {
   registerExtraSkillsDir,
   findSkillDir,
 } from "./tools/skill-read.js";
-import { registerAgentCatalogTool } from "./tools/agent-catalog.js";
+import { registerFlowAgentsTool } from "./tools/flow-agents.js";
 import { anthropicMessagesAgentFactory } from "./anthropic-messages-adapter.js";
-import { registerAgentWriteTool } from "./tools/agent-write.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
-import { existsSync, rmSync, readFileSync } from "node:fs";
+import { isEditFlowEnabled } from "./edit-flow-config.js";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { FlowManager } from "./flow-manager.js";
@@ -28,7 +28,6 @@ import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
 import { emitPromptAndAwait } from "./flow-prompt.js";
 import { TuiFlowObserver, EventEmitObserver, setupFlowTui, getIsOverlayOpen } from "./flow-tui.js";
 import { findOrphanedRun } from "./flow-persist.js";
-import { registerArchitectUIAdapter } from "./architect-ui-adapter.js";
 import { listenForPromptBus } from "./prompt-bus-access.js";
 
 // Re-export public API
@@ -115,14 +114,6 @@ export function activate(pi: ExtensionAPI) {
 
   // Initial discovery
   init(pkgRoot, projectRoot);
-
-  // Crash recovery: clean up orphaned staging directory
-  {
-    const stagingDir = join(projectRoot, ".pi", "flows", ".staging");
-    if (existsSync(stagingDir)) {
-      try { rmSync(stagingDir, { recursive: true, force: true }); } catch { /* ignore */ }
-    }
-  }
 
   // Track authStorage and modelRegistry from session context
   let sessionAuthStorage: any = undefined;
@@ -232,30 +223,6 @@ export function activate(pi: ExtensionAPI) {
   // Listen for the bus request function from the dashboard bridge
   listenForPromptBus(pi);
 
-  // ── PromptBus TUI + Architect adapter registration ──
-  // Register the prompt:ctx-originals listener early (during activate) so it
-  // exists before the dashboard bridge's session_start handler emits the event.
-  // The actual adapter registration + bus wiring happens on session_start when
-  // ctx.hasUI is true, but the event listener must be in place before that.
-  //
-  // NOTE: registerArchitectUIAdapter MUST happen in session_start (not activate)
-  // because it emits "prompt:register-adapter" which the bridge's session_start
-  // handler listens for. The event bus is fire-and-forget — emitting during
-  // activate would fire before the listener exists.
-  {
-    let architectAdapterRegistered = false;
-
-    pi.on("session_start", (_ev: any, _ctx: any) => {
-      // Architect adapter: claims architect-* prompts with widget-bar component.
-      // Registered for ALL sessions (including headless) — it doesn't need ctx.ui,
-      // it just tells the dashboard how to render the prompt.
-      if (!architectAdapterRegistered) {
-        architectAdapterRegistered = true;
-        registerArchitectUIAdapter(pi);
-      }
-    });
-  }
-
   // ── Event listeners for dependent package registration ──
 
   pi.events?.on("flow:register-gate", (data) => {
@@ -341,26 +308,29 @@ export function activate(pi: ExtensionAPI) {
   registerAskUserTool(pi);
   registerSkillReadTool(pi, pkgRoot);
 
-  // Tool name dedup set — shared between subagentOnlyPi and flow:register-tool handler.
+  // Tool name dedup set — used by the flow:register-tool handler.
   const seenToolNames = new Set<string>();
 
-  // Capture full ToolDefinition objects (with .execute()) for subagent sessions.
-  // These tools are NOT registered on the main session — they are only available
-  // to subagents (e.g., flow-architect) via extraCustomTools.
-  const subagentOnlyPi = {
-    ...pi,
-    registerTool: (tool: any) => {
-      if (!seenToolNames.has(tool.name)) {
-        seenToolNames.add(tool.name);
-        registeredExtensionTools.push(tool);
-      }
-      // Intentionally NOT calling pi.registerTool() — these tools should not
-      // appear in the main session's system prompt or be callable by the main LLM.
-    },
-  };
-  registerAgentCatalogTool(subagentOnlyPi as any, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
-  registerAgentWriteTool(subagentOnlyPi as any);
-  registerFlowWriteTool(subagentOnlyPi as any, () => agents);
+  // ── Edit-flow tools (gated by the `flows.editFlow` setting) ──
+  // Registered on the main session but kept INACTIVE by default so they do not
+  // appear in any session's system prompt. Activated per session only when
+  // settings enable them (`flows.editFlow: true` in .pi/settings.json —
+  // project value, when trusted, overrides the global value). The
+  // edit-flow skill stays available as /skill:edit-flow regardless.
+  const EDIT_FLOW_TOOLS = ["flow_agents", "flow_write"];
+  registerFlowAgentsTool(pi, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
+  registerFlowWriteTool(pi, () => agents, projectRoot);
+
+  // Reconcile edit-flow-tool activation with the setting at each session start.
+  pi.on("session_start", (_ev: any, ctx: any) => {
+    const trusted = (() => {
+      try { return ctx?.isProjectTrusted?.() ?? false; } catch { return false; }
+    })();
+    const enabled = isEditFlowEnabled(projectRoot, { projectTrusted: trusted });
+    const active = pi.getActiveTools().filter((n) => !EDIT_FLOW_TOOLS.includes(n));
+    if (enabled) active.push(...EDIT_FLOW_TOOLS);
+    pi.setActiveTools(active);
+  });
 
   // ── Register flow commands ──
 
@@ -479,7 +449,7 @@ export function activate(pi: ExtensionAPI) {
     pi.events.emit("flow:autonomous-mode-changed", { enabled: isAutonomousMode() });
   });
 
-  // Provide spawn context for subagent sessions (flow-workspace, architect)
+  // Provide spawn context for subagent sessions
   pi.events.on("flow:get-spawn-context", (data: any) => {
     data.authStorage = sessionAuthStorage;
     data.modelRegistry = sessionModelRegistry;

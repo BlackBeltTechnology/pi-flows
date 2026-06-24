@@ -548,7 +548,7 @@ Force full re-discovery of agents and flows from all registered directories.
 pi.events.emit("flow:rediscover", {});
 ```
 
-Called automatically by `flow_write` and `agent_write` tools after writing files.
+Called automatically by `flow_write` and `flow_agents` (op `write`) after writing files.
 
 ---
 

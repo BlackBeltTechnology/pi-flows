@@ -1,12 +1,17 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: The flow-architect prompt SHALL teach all three `model:` reference forms`
+- TO: `### Requirement: The edit-flow skill SHALL teach all three `model:` reference forms`
+
 ## MODIFIED Requirements
 
-### Requirement: The flow-authoring skill SHALL teach all three `model:` reference forms
+### Requirement: The edit-flow skill SHALL teach all three `model:` reference forms
 
-The `flow-authoring` skill (`skills/flow-authoring/SKILL.md`) SHALL document the three accepted `model:` field forms with examples, so the main session can author agent definitions using any form (not only `@role`). The skill SHALL state which form is preferred (`@role`) and when the others are appropriate. (Previously this requirement targeted the deleted `agents/flow-architect.md` prompt; the teaching responsibility moves to the shipped skill.)
+The `edit-flow` skill (`skills/edit-flow/SKILL.md`) SHALL document the three accepted `model:` field forms with examples, so the main session can author agent definitions using any form (not only `@role`). The skill SHALL state which form is preferred (`@role`) and when the others are appropriate. (Previously this requirement targeted the deleted `agents/flow-architect.md` prompt; the teaching responsibility moves to the shipped skill.)
 
 #### Scenario: All three forms are documented in the skill
 
-- **WHEN** a developer reads `skills/flow-authoring/SKILL.md`
+- **WHEN** a developer reads `skills/edit-flow/SKILL.md`
 - **THEN** the content SHALL include a section listing the three forms: `@role`, `provider/model[:thinking]`, and bare `model-id`
 - **AND** the section SHALL include one example of each form
 - **AND** the section SHALL state that `@role` is the preferred default

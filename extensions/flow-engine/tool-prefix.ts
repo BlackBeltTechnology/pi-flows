@@ -5,7 +5,7 @@
 //
 // Anthropic's OAuth endpoint only accepts tool names that match their Claude
 // Code allowlist, are mcp__-prefixed, or are Anthropic-native typed tools.
-// Custom pi-flows tools (finish, agent_write, etc.) must be registered with
+// Custom pi-flows tools (finish, flow_write, etc.) must be registered with
 // an mcp__ prefix so the SDK's inbound dispatch chain can match them.
 //
 // Detection uses messaging PROTOCOL (model.api) + TOKEN FORMAT, not provider

@@ -84,7 +84,7 @@ inputs:                            # Named inputs from upstream steps
 card:                              # Dashboard card configuration
   metric: developer                # Metric type
   label: "My Agent"                # Display label
-architect:                         # Metadata for flow-architect
+architect:                         # Agent-discovery metadata (surfaced by flow_agents op list)
   domain: backend                  # Domain category
   use_when: "When to auto-select"  # Selection criteria
 access:                            # Filesystem sandbox

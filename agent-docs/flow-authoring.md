@@ -4,6 +4,31 @@ Complete format reference for agent `.md` files and flow `.yaml` files. Covers e
 
 ---
 
+## Flow and Agent Authoring Workflow
+
+Set `flows.editFlow: true` in `.pi/settings.json` (e.g. `{ "flows": { "editFlow": true } }`). Session start reads setting, activates `flow_agents` and `flow_write` tools. Change takes effect next session start. Once active, author with `flow_agents`/`flow_write`. Load `/skill:edit-flow` for reference skill (available regardless of setting).
+
+Tools validate and write to discoverable locations (no raw `path`):
+
+**`flow_agents`** — agent catalog.
+- `op: list` → discover all agents, show metadata from frontmatter.
+- `op: write` → validate agent `.md` frontmatter and body, write to `.pi/flows/agents/<name>.md` (name from frontmatter).
+
+**`flow_write`** — flow file creation and editing.
+- Parameters: `namespace` (default: `custom`), `name`, `content`.
+- Validates flow YAML. Writes `.pi/flows/flows/<namespace>/<name>.yaml`.
+- Registers as `/<namespace>:<name>` slash-command.
+- Edit = read existing file, call `flow_write` with same namespace + name.
+
+**Model field** accepts three forms:
+1. Role alias (preferred): `@coding`, `@planning`, `@fast`, `@architect`. Resolved via `/roles`.
+2. Model ID + thinking: `claude-sonnet-4-20250514:high`. `:high` overrides `thinking:` field.
+3. Bare model ID: `claude-haiku-3-5-20241022`. Thinking from `thinking:` field or none.
+
+`edit-flow` skill documents forms interactively.
+
+---
+
 ## Agent Files (`.md`)
 
 Agent files: Markdown documents with YAML frontmatter. Frontmatter configures agent. Markdown body: system prompt.
@@ -65,7 +90,7 @@ Target file: ${{input.target_file}}
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `string` | Unique agent identifier. Referenced in flow steps (`agent: my-agent`) and in `agent_catalog`. Must be unique across all registered agents. |
+| `name` | `string` | Unique agent identifier. Referenced in flow steps (`agent: my-agent`) and in the `flow_agents` catalog (op `list`). Must be unique across all registered agents. |
 | `description` | `string` | Human-readable description. Shown in listings and used by the Architect to understand the agent's purpose. |
 | `model` | `string` | Model reference. See **Model references** below. |
 | `tools` | `string` | Comma-separated list of tools the agent may use. The guard blocks any tool not in this list. |
@@ -243,7 +268,7 @@ architect:
 | `architect.depends_on` | What must run before this agent. Guides dependency ordering. |
 | `architect.domain` | Logical domain grouping: `"research"`, `"implementation"`, `"review"`, `"orchestration"`, etc. |
 
-Architect agent (`flow-architect`) reads these fields from `agent_catalog` when designing flows.
+`architect:` metadata guides agent discovery via `flow_agents` list. Helps compose flows from available agents.
 
 ---
 
