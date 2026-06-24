@@ -19,6 +19,7 @@ export interface FlowManagerConfig {
   getPkgRoot: () => string;
   getAuthStorage: () => any;
   getModelRegistry: () => any;
+  getSessionManager: () => any;
   getExtraAgentExtensions: () => any[];
   getExtensionTools: () => any[];
   getSkillContent: (name: string) => string | undefined;
@@ -96,6 +97,7 @@ export class FlowManager {
       cwd: config.getProjectRoot(),
       authStorage: config.getAuthStorage(),
       modelRegistry: config.getModelRegistry(),
+      mainSessionManager: config.getSessionManager(),
       extraAgentExtensions: config.getExtraAgentExtensions(),
       extraCustomTools: config.getExtensionTools(),
       signal: abortController.signal,

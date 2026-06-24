@@ -179,6 +179,7 @@ export function activate(pi: ExtensionAPI) {
       getPkgRoot: () => pkgRoot,
       getAuthStorage: () => sessionAuthStorage,
       getModelRegistry: () => sessionModelRegistry,
+      getSessionManager: () => sessionManager,
       getExtraAgentExtensions: () => [...extraAgentExtensions],
       getExtensionTools: () => [...registeredExtensionTools],
       getSkillContent: (skillName) => {
