@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { readFileSync } from "node:fs";
-import type { AgentConfig, AccessRules, CardConfig, ArchitectMeta } from "./types.js";
+import type { AgentConfig, AccessRules, CardConfig, ArchitectMeta, AgentOutput } from "./types.js";
 
 // ---- Public API -----------------------------------------------------------
 
@@ -37,9 +37,14 @@ export function parseAgentString(content: string, source: string): AgentConfig {
     ? fields.get("interactive") === "true"
     : undefined;
 
+  const forkSession = fields.has("fork_session")
+    ? fields.get("fork_session") === "true"
+    : undefined;
+
   const tools = splitCsv(fields.get("tools") ?? "");
   const skills = splitCsv(fields.get("skills") ?? "") || undefined;
   const inputs = parseYamlArray(fields.get("inputs:array") ?? "") || undefined;
+  const contextFiles = parseYamlArray(fields.get("context_files:array") ?? "") || undefined;
   const outputs = parseOutputsArray(fields, frontmatter) || undefined;
 
   const access = parseAccessBlock(fields, source);
@@ -82,6 +87,8 @@ export function parseAgentString(content: string, source: string): AgentConfig {
     systemPrompt: body.trim(),
     ...(output !== undefined && { output }),
     ...(interactive !== undefined && { interactive }),
+    ...(forkSession !== undefined && { fork_session: forkSession }),
+    ...(contextFiles !== undefined && contextFiles.length > 0 && { context_files: contextFiles }),
     source,
     ...(access !== undefined && { access }),
     ...(card !== undefined && { card }),
@@ -281,7 +288,7 @@ function splitCsv(value: string): string[] {
 function parseOutputsArray(
   fields: Map<string, string>,
   frontmatter: string,
-): Array<{name: string, description?: string}> | null {
+): AgentOutput[] | null {
   // First try simple array format (like inputs)
   const simpleArray = parseYamlArray(fields.get("outputs:array") ?? "");
   if (simpleArray.length > 0) {
@@ -295,11 +302,22 @@ function parseOutputsArray(
   }
 
   // Try expanded format: parse from raw frontmatter
-  // Look for outputs: block and parse name/description pairs
-  const outputEntries: Array<{name: string, description?: string}> = [];
+  // Look for outputs: block and parse name/description/type/pattern entries
+  const outputEntries: AgentOutput[] = [];
   const lines = frontmatter.split("\n");
   let inOutputs = false;
-  let currentEntry: {name?: string, description?: string} | null = null;
+  let currentEntry: Partial<AgentOutput> | null = null;
+
+  const flush = () => {
+    if (currentEntry?.name) {
+      outputEntries.push({
+        name: currentEntry.name,
+        ...(currentEntry.description && { description: currentEntry.description }),
+        ...(currentEntry.type && { type: currentEntry.type }),
+        ...(currentEntry.pattern && { pattern: currentEntry.pattern }),
+      });
+    }
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -320,10 +338,7 @@ function parseOutputsArray(
 
     // New array item
     if (/^- /.test(trimmed)) {
-      // Save previous entry
-      if (currentEntry?.name) {
-        outputEntries.push({ name: currentEntry.name, ...(currentEntry.description && { description: currentEntry.description }) });
-      }
+      flush();
 
       const afterDash = trimmed.slice(2).trim();
       // Check if it's `- name: value` on same line
@@ -345,14 +360,17 @@ function parseOutputsArray(
         currentEntry.name = trimmed.slice(5).trim().replace(/^["']|["']$/g, "");
       } else if (trimmed.startsWith("description:")) {
         currentEntry.description = trimmed.slice(12).trim().replace(/^["']|["']$/g, "");
+      } else if (trimmed.startsWith("type:")) {
+        const t = trimmed.slice(5).trim().replace(/^["']|["']$/g, "");
+        if (t === "string" || t === "number" || t === "boolean") currentEntry.type = t;
+      } else if (trimmed.startsWith("pattern:")) {
+        currentEntry.pattern = trimmed.slice(8).trim().replace(/^["']|["']$/g, "");
       }
     }
   }
 
   // Don't forget the last entry
-  if (currentEntry?.name) {
-    outputEntries.push({ name: currentEntry.name, ...(currentEntry.description && { description: currentEntry.description }) });
-  }
+  flush();
 
   return outputEntries.length > 0 ? outputEntries : null;
 }

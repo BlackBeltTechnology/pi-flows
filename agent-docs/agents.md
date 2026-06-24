@@ -47,8 +47,10 @@ Supports ${{task}} and ${{input.<name>}} interpolation.
 | `thinking` | | string | Thinking depth override (e.g., `high`) |
 | `tools` | ✓ | string/list | Comma-separated tool allowlist |
 | `skills` | | string/list | Skill bundle names loaded via `skill_read` |
-| `inputs` | | list | Named inputs populated from upstream step results |
-| `outputs` | | list | Named output values extracted from `finish` params (typed outputs) |
+| `inputs` | | list | Named inputs from upstream step results. Bare names. No typing. No validation. |
+| `outputs` | | list | Named output values extracted from `finish` params. Typed outputs. Required by default. |
+| `fork_session` | | boolean | `true` forks operator main session conversation data into spawned agent. Default `false`. |
+| `context_files` | | list | Paths read at spawn time. Injected into system prompt as `## Context: <path>` preamble sections. |
 | `card` | | object | Dashboard card configuration |
 | `card.metric` | | string | Metric renderer name (maps to registered card renderers) |
 | `card.label` | | string | Display label in the dashboard |
@@ -105,6 +107,30 @@ Simple array form (no descriptions):
 ```yaml
 outputs: [findings, verdict]
 ```
+
+### Output content constraints (`type` / `pattern`)
+
+Expanded output accepts two optional fields:
+
+- `type: string | number | boolean` — constrains string content. `type: number` requires numeric string. `type: boolean` requires `true` or `false`.
+- `pattern: <regex>` — requires string to match regex.
+
+Output values stay string-valued. Downstream reads `${{result.STEP.name}}` as string. `type` and `pattern` constrain string content. No type conversion. Explicit `pattern` overrides `type`. Invalid regex degrades to unconstrained required string.
+
+```yaml
+outputs:
+  - name: file_path
+    description: Absolute path to the generated file
+    pattern: "^/.+"
+  - name: count
+    type: number
+```
+
+### Outputs required by default
+
+Declared outputs are required. `finish` without declared output, or with value violating `type`/`pattern`, rejects the call. Agent re-prompts via finish retry loop. Step fails after retries exhausted (`MAX_FINISH_RETRIES`). Enforced at finish-tool schema level. Existing agents declaring outputs but omitting them now retry and may fail.
+
+Inputs unchanged. Still bare names. No typing. No validation. Validated output name carries contract. Inputs need no symmetric typing.
 
 Agent calls `finish` with matching param names:
 

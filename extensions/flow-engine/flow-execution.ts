@@ -1,7 +1,7 @@
 import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult, CodeStep } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { expandTemplateVariables, spawnAgent } from "./execution.js";
+import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
 import { resolveRouteOutcome } from "./failure.js";
 import type { FailureInfo } from "./types.js";
 import { resolveModel } from "./model-roles.js";
@@ -61,6 +61,8 @@ export interface FlowRunOptions {
   cwd: string;
   authStorage?: any;
   modelRegistry?: any;
+  /** Operator's live SessionManager — forked into agents declaring `fork_session`. */
+  mainSessionManager?: any;
   extraAgentExtensions?: any[];
   /** Extension-registered custom tool definitions passed to spawned agent sessions. */
   extraCustomTools?: any[];
@@ -681,6 +683,16 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
 
   // Autowire fork context if this step was branched-to from a fork
   const preambleSections: string[] = [];
+
+  // Inject declared context files (pre-read into the system prompt). Missing or
+  // unreadable files are skipped with a diagnostic, not fatal.
+  if (agentConfig.context_files) {
+    const { sections, missing, unreadable } = loadContextFiles(options.cwd, agentConfig.context_files);
+    preambleSections.push(...sections);
+    for (const f of missing) options.onNotify?.(`Context file not found for "${step.agent}": ${f}`);
+    for (const f of unreadable) options.onNotify?.(`Context file unreadable for "${step.agent}": ${f}`);
+  }
+
   const forkCtx = ctx.pendingForkContext?.get(step.id);
   if (forkCtx) {
     const header = forkCtx.decidedBy ? "Auto Decision" : "User Decision";
@@ -703,6 +715,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
+    mainSessionManager: options.mainSessionManager,
     extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
     onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),

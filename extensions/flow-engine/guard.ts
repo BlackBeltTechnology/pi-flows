@@ -10,7 +10,7 @@
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import type { AccessRules } from "./types.js";
+import type { AccessRules, AgentOutput } from "./types.js";
 import { prefixToolName } from "./tool-prefix.js";
 
 export interface GuardOptions {
@@ -18,7 +18,7 @@ export interface GuardOptions {
   requireFinish?: boolean;
   accessRules?: AccessRules;
   decisionBranches?: string[];
-  agentOutputs?: Array<{name: string, description?: string}>;
+  agentOutputs?: AgentOutput[];
   allowAskUser?: boolean;
   /** When set, non-core tool names are prefixed (e.g., "mcp__flows__") for Anthropic OAuth. */
   toolPrefix?: string;
@@ -104,12 +104,34 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         );
       }
 
-      // Add typed output parameters from agent's declared outputs
+      // Add declared output parameters. Outputs are string-valued but REQUIRED
+      // by default, and `type`/`pattern` are encoded as string constraints so
+      // the SDK rejects a non-conforming finish call (→ followUp retry).
+      const NUMERIC_PATTERN = "^-?\\d+(\\.\\d+)?$";
+      const BOOLEAN_PATTERN = "^(true|false)$";
       const agentOutputs = options.agentOutputs ?? [];
       for (const output of agentOutputs) {
-        baseParams[output.name] = Type.Optional(
-          Type.String({ description: output.description ?? `Output: ${output.name}` })
-        );
+        const schemaOpts: Record<string, any> = {
+          description: output.description ?? `Output: ${output.name}`,
+        };
+        // Explicit pattern wins over the type-derived pattern.
+        const pattern = output.pattern
+          ?? (output.type === "number" ? NUMERIC_PATTERN
+            : output.type === "boolean" ? BOOLEAN_PATTERN
+            : undefined);
+        if (pattern !== undefined) {
+          try {
+            new RegExp(pattern); // validate — invalid regex degrades to plain string
+            schemaOpts.pattern = pattern;
+          } catch {
+            console.warn(
+              `[pi-flows] Output "${output.name}" has an invalid pattern; ` +
+              `falling back to an unconstrained required string.`,
+            );
+          }
+        }
+        // Required: no Type.Optional wrapper.
+        baseParams[output.name] = Type.String(schemaOpts);
       }
 
       pi.registerTool({

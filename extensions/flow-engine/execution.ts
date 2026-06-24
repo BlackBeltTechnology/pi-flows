@@ -21,8 +21,54 @@ import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
 import { createGuardExtension } from "./guard.js";
 import { prefixToolName } from "./tool-prefix.js";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve as pathResolve } from "node:path";
 
 export { prefixToolName } from "./tool-prefix.js";
+
+/**
+ * Decide how a spawned agent's session should be created.
+ * Pure — no SDK calls — so the fork/in-memory decision is unit-testable.
+ *
+ * - fork_session off            → in-memory (default behavior)
+ * - fork_session on + main file → fork the operator's persisted session
+ * - fork_session on + no file   → in-memory fallback (main session not persisted)
+ */
+export function planAgentSession(
+  forkSession: boolean | undefined,
+  mainSessionFile: string | undefined,
+): { mode: "fork"; file: string } | { mode: "in-memory"; reason?: string } {
+  if (!forkSession) return { mode: "in-memory" };
+  if (mainSessionFile) return { mode: "fork", file: mainSessionFile };
+  return { mode: "in-memory", reason: "main session not persisted to disk" };
+}
+
+/**
+ * Read declared context files relative to `cwd`, returning preamble sections
+ * for found files and the paths that were missing or unreadable. Pure I/O —
+ * no prompt assembly — so injection is unit-testable.
+ */
+export function loadContextFiles(
+  cwd: string,
+  files: string[] | undefined,
+): { sections: string[]; missing: string[]; unreadable: string[] } {
+  const sections: string[] = [];
+  const missing: string[] = [];
+  const unreadable: string[] = [];
+  for (const file of files ?? []) {
+    const absPath = pathResolve(cwd, file);
+    if (!existsSync(absPath)) {
+      missing.push(file);
+      continue;
+    }
+    try {
+      sections.push(`## Context: ${file}\n\n${readFileSync(absPath, "utf-8")}`);
+    } catch {
+      unreadable.push(file);
+    }
+  }
+  return { sections, missing, unreadable };
+}
 
 /**
  * Replace sentinel placeholders with actual file content.
@@ -79,6 +125,9 @@ export interface SpawnOptions {
   cwd: string;
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
+  /** Operator's live SessionManager. When the agent declares `fork_session`,
+   *  its persisted file is forked via SessionManager.forkFrom for context inheritance. */
+  mainSessionManager?: SessionManager;
   extraAgentExtensions?: ExtensionFactory[];
   extraCustomTools?: any[];  // ToolDefinition[] — extension tools to include in the session
   onToolCall?: (toolName: string, input: any) => void;
@@ -360,6 +409,35 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // tool_call events for unauthorized names) — not by the SDK's name allowlist.
   // We then call setActiveToolsByName below to tell the agent which tools to
   // expose in its system prompt and on the wire.
+  // Session manager: fork the operator's persisted session when the agent
+  // opts in via `fork_session`, otherwise a fresh in-memory session. A fork
+  // requires the main session to be persisted to disk (getSessionFile()); if
+  // it isn't, fall back to in-memory (current behavior).
+  const sessionPlan = planAgentSession(
+    agent.fork_session,
+    options.mainSessionManager?.getSessionFile?.(),
+  );
+  let agentSessionManager: SessionManager;
+  if (sessionPlan.mode === "fork") {
+    try {
+      agentSessionManager = SessionManager.forkFrom(sessionPlan.file, cwd);
+    } catch (err: any) {
+      console.warn(
+        `[pi-flows] fork_session: forkFrom failed for "${agent.name}" (${err?.message}); ` +
+        "falling back to in-memory session.",
+      );
+      agentSessionManager = SessionManager.inMemory();
+    }
+  } else {
+    if (agent.fork_session) {
+      console.warn(
+        `[pi-flows] fork_session set on "${agent.name}" but ${sessionPlan.reason}; ` +
+        "falling back to in-memory session.",
+      );
+    }
+    agentSessionManager = SessionManager.inMemory();
+  }
+
   let session: any;
   try {
     const { session: sess } = await createAgentSession({
@@ -368,7 +446,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       tools: undefined,                  // see comment above
       customTools: customTools,
       resourceLoader,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: agentSessionManager,
       authStorage,
       modelRegistry: options.modelRegistry,
       cwd,

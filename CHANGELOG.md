@@ -15,10 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unified node failure model** (`node-failure-model` capability) — every node now resolves to exactly one outcome: `success`, `soft`, or `hard`. `success` routes `on_complete`; a `soft` failure routes `on_error`; a `hard` failure aborts in-flight parallel steps, skips pending steps, and ends the flow with status `error` and the failure message surfaced in the flow result. Agent failures are classified **structurally** (no error-message parsing): `finish(complete)` → success, `finish(error|blocked)` → soft, no-finish **with** a terminal API error → hard, no-finish **without** an API error → soft. The no-finish nag is capped at 2 reminders, then a clean soft failure (no more `status:"unknown"`).
 - **`FlowHardError`** — exported from the package entrypoint. Code/extension nodes signal an unconditional hard stop with `throw new FlowHardError(msg)`; a plain `throw` is soft. Also exports the `FailureOutcome` / `FailureInfo` types and the `classifyAgentOutcome` / `classifyThrownError` / `resolveRouteOutcome` helpers.
 - pi-flows relies on pi-coding-agent's built-in transient-error retry and adds **no** redundant retry layer; an agent error reaching the engine is terminal.
+- **Agent node contract enhancements** (`enhance-agent-node-contract`) — three additive agent frontmatter fields plus enforced outputs:
+  - **`fork_session: true|false`** (default `false`) — opt-in to inherit the operator's main-session conversation data. When set, the spawned agent's session is forked from the operator's persisted session file via the SDK `SessionManager.forkFrom`; falls back to a fresh in-memory session when the main session is not persisted. Agent writes land in the fork, not the operator's live session.
+  - **`context_files: [paths]`** — each path is read at spawn and injected into the agent's system prompt as a `## Context: <path>` preamble section. Missing/unreadable files are skipped (non-fatal). `AGENTS.md` is just one possible path.
+  - **Output `type` / `pattern` constraints** — declared `outputs` entries accept optional `type: string|number|boolean` and `pattern: <regex>`. Values stay string-valued downstream; the constraints validate the string content (`number` → numeric string, `boolean` → `true`/`false`, `pattern` → regex match). Explicit `pattern` wins over `type`; an invalid regex degrades to an unconstrained required string.
+  - First test coverage for agent parsing, finish-tool schema construction, output validation, context-file loading, and the fork/in-memory session decision.
 
 ### Changed
 
 - **BREAKING (behavioral):** a soft-eligible failure on a node with **no `on_error`** now **hard-fails the flow** (fail-fast) instead of silently continuing. Flows that relied on silent continuation must add an `on_error` target to the node to keep going.
+- **Declared agent outputs are now REQUIRED by default** (behavior change). The finish-tool schema makes each declared output a required, optionally pattern-/type-constrained string, so a non-conforming `finish` call is rejected by the SDK and re-prompted via the existing finish retry loop; the step fails after `MAX_FINISH_RETRIES`. Existing agents that declared outputs but sometimes omitted them will now be retried/failed (mitigated by the retry loop).
 
 ## [v0.2.4] - 2026-06-23
 

@@ -28,6 +28,10 @@ outputs:
     description: "pass" or "fail"
 interactive: false
 output: results.md
+fork_session: false
+context_files:
+  - AGENTS.md
+  - docs/conventions.md
 access:
   read:
     - "src/**"
@@ -77,9 +81,11 @@ Target file: ${{input.target_file}}
 | `thinking` | `string` | — | Extended thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Overrides any thinking suffix in `model`. |
 | `skills` | `string` | — | Comma-separated skill names. Each skill's `SKILL.md` is injected into the system prompt. Topic files are accessed via `skill_read`. |
 | `inputs` | `string[]` | — | Declared input names. These become available as `${{input.NAME}}` in the system prompt. The flow step must wire them via `inputs:`. |
-| `outputs` | `string[]` or object array | — | Declared output names. These are added as parameters on the `finish` tool and accessible as `${{result.STEP.outputName}}` in downstream steps. |
+| `outputs` | `string[]` or object array | — | Declared output names. Become parameters on `finish` tool. Access as `${{result.STEP.outputName}}` downstream. Required by default — see **Outputs**. Expanded entries accept optional `type`, `pattern`. |
 | `interactive` | `boolean` | `false` | If `true`, the agent session allows interactive UI prompts mid-task. |
 | `output` | `string` | — | Default output file path (hint for display; not enforced). |
+| `fork_session` | `boolean` | `false` | `true` forks operator main-session via SDK `SessionManager.forkFrom`. Inherits operator persisted session file. Falls back to fresh in-memory session when main session not persisted. Agent writes land in fork, not operator live session. |
+| `context_files` | `string[]` | — | File paths, each resolved relative to project cwd. Read at spawn. Injected into system prompt as `## Context: <path>` preamble section. Missing/unreadable files skipped, non-fatal. `AGENTS.md` one possible path. |
 | `access` | block | — | Access control rules. See **Access control** below. |
 | `card` | block | — | Dashboard card configuration. See **Card configuration** below. |
 | `architect` | block | — | Metadata used by the Architect when deciding which agents to use. See **Architect metadata** below. |
@@ -161,6 +167,23 @@ outputs:
     description: "pass" or "fail"
 ---
 ```
+
+Expanded entries accept optional `type`, `pattern` for validation:
+```markdown
+---
+outputs:
+  - name: file_path
+    description: Absolute path to generated file
+    pattern: "^/.+"
+  - name: count
+    type: number
+---
+```
+
+- `type` — `string`, `number`, or `boolean`. Outputs stay string-valued downstream. `type` constrains string content. `number` → numeric string. `boolean` → `true`|`false`.
+- `pattern` — regex string must match. Explicit `pattern` wins over `type`. Invalid regex degrades to unconstrained required string.
+
+**Required by default:** declared outputs required. Missing or `type`/`pattern`-violating outputs reject `finish` call. Agent re-prompted via existing finish retry loop. Step fails after `MAX_FINISH_RETRIES`. Enforced at finish-tool schema level.
 
 Declared outputs become parameters on `finish` tool. Agent sets them when calling `finish`:
 ```

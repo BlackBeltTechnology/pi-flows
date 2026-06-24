@@ -64,6 +64,17 @@ export interface ArchitectMeta {
   domain?: string;
 }
 
+// ---- Agent output declaration (from frontmatter outputs: block) -----------
+
+export interface AgentOutput {
+  name: string;
+  description?: string;
+  /** Content constraint on the (always string-valued) output. */
+  type?: "string" | "number" | "boolean";
+  /** Regex the string value MUST match. Explicit pattern wins over type. */
+  pattern?: string;
+}
+
 // ---- Agent configuration (parsed from .md frontmatter) --------------------
 
 export interface AgentConfig {
@@ -74,10 +85,12 @@ export interface AgentConfig {
   tools: string[]; // e.g., ["read", "write", "edit", "grep", "bash"]
   skills?: string[]; // e.g., ["judo-backend-docs"]
   inputs?: string[]; // Declared input names (contract for flow wiring)
-  outputs?: Array<{name: string, description?: string}>; // Declared output names (contract for result wiring)
+  outputs?: AgentOutput[]; // Declared output names + optional type/pattern (contract for result wiring)
   systemPrompt: string; // The body of the .md file (prompt template with {task}, {input.*}, etc.)
   output?: string; // Default output filename
   interactive?: boolean;
+  fork_session?: boolean; // Inherit operator session data via SessionManager.forkFrom (default off)
+  context_files?: string[]; // Paths pre-read at spawn and injected into the system prompt
   source: string; // File path where this agent was discovered
   access?: AccessRules; // Inline access control from frontmatter
   card?: CardConfig; // Card display configuration from frontmatter
