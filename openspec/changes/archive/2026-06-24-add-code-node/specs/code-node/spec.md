@@ -93,7 +93,7 @@ A code node MAY declare a `timeout`. When set, the system SHALL enforce it as a 
 - **THEN** the handler runs to completion with no engine-imposed deadline
 
 ### Requirement: Result mapping and summary
-On success the system SHALL set `status: "complete"`, populate `typedOutputs` from the coerced return, set `fullOutput` to `JSON.stringify` of the coerced outputs, set `files` and `artifacts` to `""`, and set `summary` to the value passed to `ctx.setSummary` or, if none was set, an auto-generated non-empty summary derived from the node id and output keys.
+On success the system SHALL set `status: "complete"`, populate `typedOutputs` from the coerced return, set `fullOutput` to `JSON.stringify` of the coerced outputs, set `files` to `[]` and `artifacts` to `""`, and set `summary` to the value passed to `ctx.setSummary` or, if none was set, an auto-generated non-empty summary derived from the node id and output keys.
 
 #### Scenario: Handler sets an explicit summary
 - **WHEN** a handler calls `ctx.setSummary("validated against NAV")` and succeeds

@@ -136,7 +136,6 @@ export interface AgentStep {
   agent: string; // Agent name to dispatch
   task?: string; // Optional task override (template string)
   output?: string; // Output file
-  reads?: string[]; // PARSED BUT NOT WIRED — parsed in flow-parser-yaml but never consumed in execution
   inputs?: Record<string, string>; // Named inputs wired from template expressions
   blockedBy?: string[]; // Step IDs that must complete before this step runs
   on_complete?: string; // Route to step ID on success

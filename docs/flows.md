@@ -455,7 +455,52 @@ Template variables are placeholders in `task`, `inputs`, and `question` fields. 
 
 > **Resolution order:** Variables are expanded at dispatch time. `${{result.X}}` is only valid if step `X` has already completed (guaranteed when `X` is in `blockedBy`).
 
-> **Missing values resolve to empty string.** Referencing an unrun step, undeclared input, or non-existent field becomes `""`.
+> **Missing values resolve to empty string at runtime.** A reference that survives validation but has no value at dispatch (e.g. an undeclared input) expands to `""`. Reference _correctness_, however, is checked ahead of time — see below.
+
+---
+
+## Reference Validation
+
+`validateFlowContent` checks every `${{result.X}}` and `${{result.X.field}}` reference at flow-load time. Invalid references are **hard validation errors** — the flow will not run until they are fixed. This catches typos and broken wiring before any agent is dispatched, rather than silently expanding to `""`.
+
+Three rules are enforced:
+
+**1. The referenced step must exist.** `${{result.foo}}` where no step has `id: foo` is an error.
+
+**2. The `.field` must be resolvable.** For agent and code steps, a `.field` must be either a declared output (the agent's `outputs:` or the code step's `outputs:`) **or** one of the standard fields that always resolve:
+
+| Standard field | Always resolves |
+|----------------|-----------------|
+| `summary` | ✓ |
+| `status` | ✓ |
+| `artifacts` | ✓ |
+| `files` | ✓ |
+| `fullOutput` | ✓ |
+
+A `.field` that is neither a declared output nor a standard field is an error.
+
+**3. The referenced step must be ordered before the referencing step.** `${{result.X}}` is only valid if `X` is **guaranteed to complete first**. That guarantee holds when `X` is a transitive `blockedBy` ancestor of the referencing step, **or** when `X` routes into the referencing step through an `on_complete` / `on_error` / branch / loop edge chain. If neither path exists, it is an error.
+
+> **The engine does not auto-add the dependency.** When ordering fails, you must add `blockedBy: [X]` (or a routing edge) yourself. pi-flows reports the missing ordering as an error; it never silently wires it for you.
+
+```mermaid
+flowchart TD
+  R["${{result.X.field}}" reference] --> E1{X exists?}
+  E1 -->|no| ERR[Hard validation error]
+  E1 -->|yes| E2{".field" declared output<br/>or standard field?}
+  E2 -->|no| ERR
+  E2 -->|yes| E3{X ordered before<br/>referencing step?}
+  E3 -->|no| ERR
+  E3 -->|yes| OK[Reference valid]
+```
+
+### `flow-ref` exception
+
+Sub-flow step ids are not statically known to the parent. When a `flow-ref` step is ordered before the referencing step, references to ids produced by that sub-flow are **not** flagged as unknown — the `flow-ref` is treated as the ordering guarantee, and field/existence checks are skipped for those ids.
+
+### Loop iteration is 1-based
+
+`${{loop.STEP.iteration}}` is **1-based** and consistent across the loop. The first body pass observes `iteration == 1` (not `0`), and the loop-decision step sees the same value on that pass: when the body runs pass _N_, both the body and the decision step observe `${{loop.STEP.iteration}} == N`.
 
 ---
 

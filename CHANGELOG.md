@@ -20,10 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`context_files: [paths]`** — each path is read at spawn and injected into the agent's system prompt as a `## Context: <path>` preamble section. Missing/unreadable files are skipped (non-fatal). `AGENTS.md` is just one possible path.
   - **Output `type` / `pattern` constraints** — declared `outputs` entries accept optional `type: string|number|boolean` and `pattern: <regex>`. Values stay string-valued downstream; the constraints validate the string content (`number` → numeric string, `boolean` → `true`/`false`, `pattern` → regex match). Explicit `pattern` wins over `type`; an invalid regex degrades to an unconstrained required string.
   - First test coverage for agent parsing, finish-tool schema construction, output validation, context-file loading, and the fork/in-memory session decision.
+- **Flow-wiring hardening** (`harden-flow-wiring`) — end-to-end test coverage for the template-expansion engine (all 10 variable forms, typed-output resolution for agent & code nodes, input wiring, flow-ref propagation, edge cases) plus a finish-output retry contract test.
 
 ### Changed
 
 - **BREAKING (behavioral):** a soft-eligible failure on a node with **no `on_error`** now **hard-fails the flow** (fail-fast) instead of silently continuing. Flows that relied on silent continuation must add an `on_error` target to the node to keep going.
+- **BREAKING (validation):** template references are now validated **fail-loud at flow-load**. `${{result.X}}` / `${{result.X.field}}` is a hard error when `X` is an unknown step, when `.field` is neither a declared output (agent/code node) nor a standard field (`summary`/`status`/`artifacts`/`files`/`fullOutput`), or when `X` is not ordered before the referencing step (via transitive `blockedBy` or `on_complete`/`on_error`/branch/loop routing). The engine does not auto-add the edge; a `flow-ref` ordered before the step relaxes unknown-step checks for sub-flow results. Existing flows with typos or undeclared dependencies will now fail validation instead of silently expanding to empty strings.
+- **Loop iteration counter is 1-based and consistent** — the loop body executing pass N and the loop-decision step now both observe `${{loop.STEP.iteration}} == N` (the first body pass sees `1`, not `0`).
+- **Removed the dead `reads` step field** — it was parsed but never consumed. File-content injection is provided by the agent `context_files` frontmatter field.
+- Corrected the `code-node` spec wording: a successful code node sets `files` to `[]` (a `ResultFile[]`), not `""`.
 - **Declared agent outputs are now REQUIRED by default** (behavior change). The finish-tool schema makes each declared output a required, optionally pattern-/type-constrained string, so a non-conforming `finish` call is rejected by the SDK and re-prompted via the existing finish retry loop; the step fails after `MAX_FINISH_RETRIES`. Existing agents that declared outputs but sometimes omitted them will now be retried/failed (mitigated by the retry loop).
 
 ## [v0.2.4] - 2026-06-23
