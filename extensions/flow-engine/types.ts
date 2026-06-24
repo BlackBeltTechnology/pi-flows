@@ -4,6 +4,49 @@
 // Generic flow orchestration types. No framework-specific dependencies.
 // ---------------------------------------------------------------------------
 
+// ---- Node failure model ----------------------------------------------------
+
+/**
+ * The outcome of a single node execution.
+ *
+ * - `success` — node completed; routes to its `on_complete`.
+ * - `soft`    — recoverable failure; routes to its `on_error`, or hard-fails
+ *               the flow when no `on_error` is declared.
+ * - `hard`    — unrecoverable failure; aborts in-flight parallel steps, skips
+ *               pending steps, and ends the flow with status `error`.
+ */
+export type FailureOutcome = "success" | "soft" | "hard";
+
+/** Structured detail for a non-success node outcome. */
+export interface FailureInfo {
+  /** `soft` or `hard` — never `success`. */
+  outcome: "soft" | "hard";
+  /** Human-readable failure message surfaced to the flow result / dashboard. */
+  message: string;
+  /**
+   * Where the classification came from, for diagnostics. Examples:
+   * `agent_finish_error`, `agent_no_finish`, `api_error`, `thrown_error`,
+   * `flow_hard_error`, `agent_not_found`.
+   */
+  source: string;
+}
+
+/**
+ * Marker error for code/extension nodes to request an unconditional HARD
+ * failure. A plain `throw` (any non-`FlowHardError` error) is classified SOFT;
+ * `throw new FlowHardError(msg)` is HARD and halts the flow regardless of
+ * `on_error`. Exported from the package entrypoint as public API.
+ */
+export class FlowHardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FlowHardError";
+    // Restore the prototype chain so `instanceof FlowHardError` survives
+    // transpilation to ES5-style constructors.
+    Object.setPrototypeOf(this, FlowHardError.prototype);
+  }
+}
+
 // ---- Card display configuration (from agent frontmatter card: block) ------
 
 export interface CardConfig {
@@ -150,6 +193,13 @@ export interface AgentResult {
    * mid-batch via AbortSignal. See change: fix-pi-flows-end-to-end (Group 3).
    */
   cancelled?: boolean;
+  /**
+   * Structural outcome classification (success | soft | hard). Set by
+   * `classifyAgentOutcome`. The DAG scheduler routes on this, not on `success`.
+   */
+  outcome?: FailureOutcome;
+  /** Failure detail when `outcome` is `soft` or `hard`. */
+  failureInfo?: FailureInfo;
 }
 
 export interface ToolCallRecord {

@@ -24,7 +24,8 @@ import {
   parseResult, hasArtifactElement,
   parseAgentFile, parseAgentString,
   parseFlowYamlFile, parseFlowYamlString,
-  FlowManager,
+  FlowManager, FlowHardError,
+  classifyAgentOutcome, classifyThrownError, resolveRouteOutcome,
 } from "pi-flows/extensions/flow-engine/index.js";
 
 // Dashboard types
@@ -191,6 +192,8 @@ interface AgentResult {
   tokens:        { input: number; output: number };
   finishParams?: Record<string, any>; // raw finish tool call parameters
   typedOutputs?: Record<string, string>; // extracted typed outputs
+  outcome?:      FailureOutcome;       // structural failure classification
+  failureInfo?:  FailureInfo;          // present on soft/hard failures
 }
 
 interface ParsedResult {
@@ -216,6 +219,36 @@ interface ToolCallRecord {
 
 ---
 
+### `FailureOutcome`
+
+The three terminal outcomes a node can resolve to.
+
+```typescript
+type FailureOutcome = "success" | "soft" | "hard";
+```
+
+- `success` — routes to the node's `on_complete`.
+- `soft` — recoverable; routes to `on_error`, or hard-fails the flow if no `on_error` is declared.
+- `hard` — unrecoverable; aborts in-flight steps, skips pending steps, and ends the flow with status `error`.
+
+See [flows.md → Failure Modes](./flows.md#failure-modes) for the full routing model.
+
+---
+
+### `FailureInfo`
+
+Detail attached to a non-success outcome.
+
+```typescript
+interface FailureInfo {
+  outcome: "soft" | "hard";
+  message: string;   // surfaced in the flow result on a hard fail
+  source:  string;   // step ID / origin of the failure
+}
+```
+
+---
+
 ### `FlowResult`
 
 Result of running a complete flow.
@@ -230,6 +263,11 @@ interface FlowResult {
   totalDuration: number;    // wall-clock milliseconds
   status?:       "success" | "error" | "aborted";
 }
+```
+
+On a **hard** failure, `status` is `"error"` and the reason is carried in `lastResult` (its `failureInfo.message`).
+
+```typescript
 
 interface StepResultEntry {
   fullOutput:  string;
@@ -567,6 +605,44 @@ function hasArtifactElement(output: string): boolean
 ```
 
 These are used internally by the engine. You typically don't need them directly — `AgentResult.result` is already parsed.
+
+---
+
+### `FlowHardError`
+
+A marker error class. Throw it from a code/extension node to force an **unconditional hard failure** that halts the flow regardless of any `on_error` target. A plain `throw` (any other `Error`) is treated as a recoverable **soft** failure.
+
+```typescript
+class FlowHardError extends Error {
+  constructor(message: string);
+}
+```
+
+```typescript
+import { FlowHardError } from "pi-flows/extensions/flow-engine/index.js";
+
+// Soft failure — routes to on_error (or hard-fails if none declared):
+throw new Error("validation failed");
+
+// Hard failure — stops the whole flow immediately:
+if (!apiKey) {
+  throw new FlowHardError("Missing API key; provider unusable for the rest of the flow");
+}
+```
+
+See [flows.md → Failure Modes](./flows.md#failure-modes) for the full routing model.
+
+---
+
+### Outcome classification helpers
+
+The engine uses these to resolve a node's `FailureOutcome`. They are exported for tooling and tests.
+
+| Function | Description |
+|----------|-------------|
+| `classifyAgentOutcome(finishParams, lastApiError)` | Classifies an agent end state into `success` / `soft` / `hard` from its `finish` params and any terminal API error. |
+| `classifyThrownError(err)` | Classifies a thrown error: `FlowHardError` → `hard`, any other `Error` → `soft`. |
+| `resolveRouteOutcome(result, onError)` | Resolves the effective route for a result: a `soft` failure with no `onError` target escalates to `hard`. |
 
 ---
 

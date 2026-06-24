@@ -1,6 +1,8 @@
 import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult } from "./types.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent } from "./execution.js";
+import { resolveRouteOutcome } from "./failure.js";
+import type { FailureInfo } from "./types.js";
 import { resolveModel } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
@@ -39,6 +41,17 @@ export interface FlowContext {
   steps: FlowStep[];
   /** Fork context to autowire into the next branch step */
   pendingForkContext?: Map<string, ForkContext>;  // step ID -> fork context
+  /**
+   * Internal (set by runFlow). Holds the first HARD-fail detail once a node
+   * hard-fails; presence signals the scheduler to halt and end with status
+   * `error`. Distinct from user abort.
+   */
+  hardFail?: FailureInfo | null;
+  /**
+   * Internal (set by runFlow). Trips the run's halt signal so in-flight
+   * parallel steps abort cooperatively (reuses the user-abort path).
+   */
+  requestHalt?: () => void;
 }
 
 export interface FlowRunOptions {
@@ -98,7 +111,22 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     loopMaxIterations,
     steps: flow.steps,
     pendingForkContext: new Map(),
+    hardFail: null,
   };
+
+  // Hard-fail halt reuses the user-abort path (abort-utils) with a DISTINCT
+  // terminal status (`error` vs user abort's `aborted`). A node hard-fail
+  // trips `haltController`, unwinding in-flight parallel steps the same way a
+  // user abort does. The user's own signal is forwarded into the controller so
+  // both paths share one signal downstream. See node-failure-model D6.
+  const userSignal = options.signal;
+  const haltController = new AbortController();
+  if (userSignal) {
+    if (userSignal.aborted) haltController.abort();
+    else userSignal.addEventListener("abort", () => haltController.abort(), { once: true });
+  }
+  ctx.requestHalt = () => { if (!haltController.signal.aborted) haltController.abort(); };
+  const effectiveOptions: FlowRunOptions = { ...options, signal: haltController.signal };
 
   const segments = splitIntoSegments(flow.steps);
   const maxConcurrent = flow.max_concurrent ?? 4;
@@ -115,8 +143,11 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
 
       if (segment.type === "dag") {
 
-        const dagResult = await runDagSegment(segment.steps, maxConcurrent, ctx, options, segment.activeSteps);
+        const dagResult = await runDagSegment(segment.steps, maxConcurrent, ctx, effectiveOptions, segment.activeSteps);
         if (dagResult.lastResult) lastResult = dagResult.lastResult;
+
+        // A node hard-failed (or soft-failed with no on_error): halt the flow.
+        if (ctx.hardFail) break;
 
         // Handle routing from on_complete / on_error within the DAG
         if (dagResult.routeToStepId) {
@@ -134,12 +165,19 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
       } else {
         // Separator step (fork, conditional, agent-decision, flow-ref)
 
-        const stepResult = await executeStep(segment.step, ctx, options);
+        const stepResult = await executeStep(segment.step, ctx, effectiveOptions);
 
         if (stepResult.agentResult) {
           lastResult = stepResult.agentResult;
           storeResult(ctx, segment.step.id, stepResult.agentResult);
+          // A separator node that hard-fails (e.g. a decision agent hits a
+          // terminal API error, or a flow-ref sub-flow hard-failed) halts.
+          if (stepResult.agentResult.outcome === "hard" && !ctx.hardFail) {
+            ctx.hardFail = stepResult.agentResult.failureInfo
+              ?? { outcome: "hard", message: stepResult.agentResult.output || "Hard failure", source: "separator_hard_fail" };
+          }
         }
+        if (ctx.hardFail) break;
 
         // Handle routing: jump to target step's segment
         if (stepResult.nextStepId) {
@@ -164,6 +202,34 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     } else {
       throw err; // Re-throw unexpected errors
     }
+  }
+
+  // A HARD failure halts the flow with status `error` and surfaces the reason.
+  // Checked before the cancellation path because a hard-fail trips the same
+  // abort race (so `cancelled` may also be set) but is NOT a user cancellation.
+  if (ctx.hardFail) {
+    const hf = ctx.hardFail;
+    const hardResult: AgentResult = {
+      success: false,
+      output: hf.message,
+      stderr: "",
+      exitCode: null,
+      result: { status: "error" as const, summary: hf.message, files: [], artifacts: "" },
+      toolCalls: [],
+      duration: Date.now() - startTime,
+      tokens: { input: 0, output: 0 },
+      outcome: "hard",
+      failureInfo: hf,
+    };
+    return {
+      lastResult: hardResult,
+      results: { ...ctx.results },
+      forks: { ...ctx.forks },
+      flowName: flow.name,
+      stepCount: Object.keys(ctx.results).length,
+      totalDuration: Date.now() - startTime,
+      status: "error",
+    };
   }
 
   // If cancelled, produce a clean cancellation result
@@ -343,10 +409,29 @@ async function runDagSegment(
     // per-agent state.
     //
     // See change: fix-pi-flows-end-to-end (Group 3, tasks 3.1 + 3.3).
+    //
+    // Early HARD-fail detection: as soon as any step in the wave resolves with
+    // a `hard` outcome (terminal API error, FlowHardError, or a soft failure
+    // with no on_error escalated to hard), we record the reason and trip
+    // `ctx.requestHalt()`, which aborts the run signal and unwinds the
+    // in-flight siblings via the same race below. Correctness does NOT depend
+    // on the race winning: the hard-failing step's result is stored here, and
+    // runFlow re-checks `ctx.hardFail` after the segment regardless of timing.
     let results: (AgentResult | null)[];
     try {
       results = await raceWithAbort(
-        Promise.all(batch.map(step => executeAgentStep(step, ctx, options))),
+        Promise.all(batch.map(async (step) => {
+          const r = await executeAgentStep(step, ctx, options);
+          if (r && !ctx.hardFail && resolveRouteOutcome(r, step.on_error) === "hard") {
+            completed.add(step.id);
+            lastResult = r;
+            storeResult(ctx, step.id, r);
+            ctx.hardFail = r.failureInfo
+              ?? { outcome: "hard", message: r.output || "Hard failure", source: "node_hard_fail" };
+            ctx.requestHalt?.();
+          }
+          return r;
+        })),
         options.signal,
       );
     } catch (err) {
@@ -377,6 +462,10 @@ async function runDagSegment(
       throw err;
     }
 
+    // A hard-fail was detected during the wave (or the race tripped): stop
+    // scheduling. runFlow inspects ctx.hardFail and ends the flow `error`.
+    if (ctx.hardFail) return { lastResult };
+
     // Store results and check for routing
     for (let i = 0; i < batch.length; i++) {
       const step = batch[i];
@@ -386,8 +475,16 @@ async function runDagSegment(
         lastResult = result;
         storeResult(ctx, step.id, result);
 
-        // Check on_complete / on_error routing
-        const routeTarget = result.success ? step.on_complete : step.on_error;
+        // Outcome-aware routing (node-failure-model): success -> on_complete,
+        // soft -> on_error, hard / soft-without-on_error -> halt the flow.
+        const outcome = resolveRouteOutcome(result, step.on_error);
+        if (outcome === "hard") {
+          ctx.hardFail = result.failureInfo
+            ?? { outcome: "hard", message: result.output || "Hard failure", source: "node_hard_fail" };
+          ctx.requestHalt?.();
+          return { lastResult };
+        }
+        const routeTarget = outcome === "success" ? step.on_complete : step.on_error;
         if (routeTarget) {
           const targetInSegment = steps.some(s => s.id === routeTarget);
           if (targetInSegment) {
@@ -439,7 +536,11 @@ async function executeAgentStepWithRouting(step: AgentStep, ctx: FlowContext, op
   const result = await executeAgentStep(step, ctx, options);
   if (!result) return {};
 
-  const nextStepId = result.success ? step.on_complete : step.on_error;
+  // Outcome-aware routing: success -> on_complete, soft -> on_error.
+  // hard (or soft-without-on_error) leaves nextStepId undefined; the main loop
+  // detects result.outcome === "hard" and halts the flow.
+  const outcome = resolveRouteOutcome(result, step.on_error);
+  const nextStepId = outcome === "success" ? step.on_complete : outcome === "soft" ? step.on_error : undefined;
   return { agentResult: result, nextStepId };
 }
 
@@ -963,7 +1064,8 @@ async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: 
     } catch { /* skip invalid flows */ }
   }
 
-  const nextStepId = lastAgentResult?.success ? step.on_complete : step.on_error;
+  const outcome = lastAgentResult ? resolveRouteOutcome(lastAgentResult, step.on_error) : "soft";
+  const nextStepId = outcome === "success" ? step.on_complete : outcome === "soft" ? step.on_error : undefined;
   return { agentResult: lastAgentResult ?? undefined, nextStepId };
 }
 
