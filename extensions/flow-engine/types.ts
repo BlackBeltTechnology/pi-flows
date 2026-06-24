@@ -4,6 +4,49 @@
 // Generic flow orchestration types. No framework-specific dependencies.
 // ---------------------------------------------------------------------------
 
+// ---- Node failure model ----------------------------------------------------
+
+/**
+ * The outcome of a single node execution.
+ *
+ * - `success` — node completed; routes to its `on_complete`.
+ * - `soft`    — recoverable failure; routes to its `on_error`, or hard-fails
+ *               the flow when no `on_error` is declared.
+ * - `hard`    — unrecoverable failure; aborts in-flight parallel steps, skips
+ *               pending steps, and ends the flow with status `error`.
+ */
+export type FailureOutcome = "success" | "soft" | "hard";
+
+/** Structured detail for a non-success node outcome. */
+export interface FailureInfo {
+  /** `soft` or `hard` — never `success`. */
+  outcome: "soft" | "hard";
+  /** Human-readable failure message surfaced to the flow result / dashboard. */
+  message: string;
+  /**
+   * Where the classification came from, for diagnostics. Examples:
+   * `agent_finish_error`, `agent_no_finish`, `api_error`, `thrown_error`,
+   * `flow_hard_error`, `agent_not_found`.
+   */
+  source: string;
+}
+
+/**
+ * Marker error for code/extension nodes to request an unconditional HARD
+ * failure. A plain `throw` (any non-`FlowHardError` error) is classified SOFT;
+ * `throw new FlowHardError(msg)` is HARD and halts the flow regardless of
+ * `on_error`. Exported from the package entrypoint as public API.
+ */
+export class FlowHardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FlowHardError";
+    // Restore the prototype chain so `instanceof FlowHardError` survives
+    // transpilation to ES5-style constructors.
+    Object.setPrototypeOf(this, FlowHardError.prototype);
+  }
+}
+
 // ---- Card display configuration (from agent frontmatter card: block) ------
 
 export interface CardConfig {
@@ -67,6 +110,7 @@ export interface FlowConfig {
 
 export type FlowStep =
   | AgentStep
+  | CodeStep
   | ForkStep
   | ConditionalStep
   | AgentDecisionStep
@@ -132,6 +176,18 @@ export interface FlowRefStep {
   on_error?: string;
 }
 
+export interface CodeStep {
+  stepType: "code";
+  id: string; // Step identifier (becomes default handler filename)
+  target?: string; // Optional override handler path (default: .pi/flows/handlers/<flow>/<id>.ts)
+  inputs?: Record<string, string>; // Named inputs wired from template expressions
+  outputs?: Array<{ name: string }>; // Declared output names (strings only)
+  blockedBy?: string[]; // Step IDs that must complete before this step runs
+  on_complete?: string; // Route to step ID on success
+  on_error?: string; // Route to step ID on error
+  timeout?: number; // Optional soft timeout in milliseconds
+}
+
 // ---- Agent execution results ----------------------------------------------
 
 export interface AgentResult {
@@ -150,6 +206,13 @@ export interface AgentResult {
    * mid-batch via AbortSignal. See change: fix-pi-flows-end-to-end (Group 3).
    */
   cancelled?: boolean;
+  /**
+   * Structural outcome classification (success | soft | hard). Set by
+   * `classifyAgentOutcome`. The DAG scheduler routes on this, not on `success`.
+   */
+  outcome?: FailureOutcome;
+  /** Failure detail when `outcome` is `soft` or `hard`. */
+  failureInfo?: FailureInfo;
 }
 
 export interface ToolCallRecord {
@@ -224,6 +287,28 @@ export interface FlowEventRecord {
   // session; also the supersede key for any future terminal-collapse entry).
   flowRunId: string;
 }
+
+// ---- Code node context & handler type ---------------------------------
+
+export interface CodeNodeContext {
+  signal: AbortSignal; // Flow abort signal; handler should respect it
+  cwd: string; // Project root
+  logger: (msg: string) => void; // Logs to step card
+  setSummary: (text: string) => void; // Sets step summary
+  flowName: string; // Name of the containing flow
+  stepId: string; // ID of this step
+  task: string; // Overall flow task text
+}
+
+/**
+ * Generic handler type for code nodes.
+ * Handler is the default export of a .ts module.
+ * Input keys are always strings (template-expanded); output must match declared outputs.
+ */
+export type CodeNodeHandler<I = Record<string, string>, O = Record<string, string>> = (
+  input: I,
+  ctx: CodeNodeContext,
+) => Promise<O>;
 
 // ---- Validation diagnostic ------------------------------------------------
 

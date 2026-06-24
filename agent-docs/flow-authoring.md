@@ -304,6 +304,7 @@ Every step requires unique `id` field. `type` field optional — engine infers t
 | `check` | `conditional` |
 | `path` (no `agent`) | `flow-ref` |
 | `branches` (no `question`) | `agent-decision` |
+| `type: code` (explicit) | `code` |
 | `agent` or none | `agent` |
 
 Use explicit `type:` when inference ambiguous.
@@ -529,6 +530,151 @@ Delegate execution to another flow file, optionally using glob pattern.
 | `on_error` | No | Step ID to route to on error. |
 
 Sub-flow results merge into parent context under sub-flow's agent step IDs.
+
+---
+
+#### 7. Code step
+
+Execute TypeScript handler function in-process. No agent or LLM dispatch. `type: code` must be explicit.
+
+```yaml
+- id: validate-schema
+  type: code
+  inputs:
+    data: ${{result.fetcher.artifacts}}
+    threshold: "100"
+  outputs:
+    - name: is_valid
+    - name: error_message
+  blockedBy: [fetcher]
+  on_complete: next-step
+  on_error: error-handler
+  timeout: 30000
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | Yes | Unique step identifier. Filesystem-safe. Becomes handler filename. |
+| `type` | Yes | Must be `code`. Not inferred — always explicit. |
+| `inputs` | No | Map of name → template expression. Expanded to string at runtime. Unresolved → `""`. Never `undefined`. Input names must be valid JS identifiers. |
+| `outputs` | No | List of `{ name }` objects. Names unique, valid JS identifiers. Omit for side-effect-only steps. |
+| `target` | No | Override handler file path. Steps with `target` get no generated scaffold. |
+| `blockedBy` | No | Array of step IDs that must complete before this step runs. |
+| `on_complete` | No | Step ID to route to on success. |
+| `on_error` | No | Step ID to route to on error. |
+| `timeout` | No | Milliseconds. Soft deadline — aborts `ctx.signal` on expiry, yields soft failure. |
+
+---
+
+##### Handler contract
+
+Handler = module default export. Signature: `async (input, ctx) => Output`.
+
+```typescript
+import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
+
+interface Input {
+  data: string;        // one property per declared input — always string
+  threshold: string;
+}
+
+interface Output {
+  is_valid: string;    // one property per declared output
+  error_message: string;
+}
+
+export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
+  ctx.logger("Validating data...");
+  const valid = input.data.length <= Number(input.threshold);
+  ctx.setSummary(valid ? "Validation passed" : "Validation failed");
+  return {
+    is_valid:      String(valid),
+    error_message: valid ? "" : `Exceeds threshold of ${input.threshold}`,
+  };
+}
+```
+
+**`CodeNodeContext` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `signal` | `AbortSignal` | Aborted when `timeout` expires. Check cooperatively in long loops. |
+| `cwd` | `string` | Project root directory. |
+| `logger(msg)` | `(msg: string) => void` | Stream text to step card in real time. |
+| `setSummary(text)` | `(text: string) => void` | Set step summary shown after completion. |
+| `flowName` | `string` | Name of the running flow. |
+| `stepId` | `string` | This step's `id`. |
+| `task` | `string` | The flow task string. |
+
+**Return rules:**
+
+- Return exactly declared outputs. All declared keys required. No extra keys.
+- No `outputs:` declared → return `{}`.
+- `string`: passthrough verbatim.
+- `number` / `boolean` / `bigint`: coerced via `String()`.
+- `object` / `array` / `null`: contract violation → soft failure naming the offending key.
+
+**Failure modes:**
+
+| Cause | Outcome |
+|-------|---------|
+| Plain `throw` (any `Error`) | `soft` — routes `on_error`, else hard-fails flow |
+| Contract violation (wrong/missing output keys) | `soft` |
+| Coercion failure (`object`/`array`/`null` value) | `soft` |
+| Missing handler file | `soft` |
+| Timeout expired | `soft` |
+| `throw new FlowHardError(msg)` | `hard` — stops flow regardless of `on_error` |
+
+No retry layer. Execution: in-process via jiti dynamic import. No subprocess.
+
+---
+
+##### Handler file locations
+
+| File | Purpose |
+|------|---------|
+| `.pi/flows/handlers/<flow>/<id>.ts` | Real handler — implement here |
+| `.pi/flows/handlers/<flow>/<id>.ts.default` | Generated scaffold — `.default` suffix makes it un-importable (inert) |
+
+- `target:` field overrides real handler path. Steps with `target` get no generated scaffold.
+- Copy `.ts.default` → remove `.default` suffix → implement.
+
+---
+
+##### Handler generation
+
+Generation triggers: flow saved successfully (persisted YAML) **or** `/flows:generate <name>` command.
+
+- Scaffold (`.ts.default`) always regenerated on trigger. Contains: `CodeNodeContext` import, `interface Input` from declared inputs, `interface Output` from declared outputs, default-export stub returning empty values, `// TODO` comment.
+- Real `.ts` never touched by generation.
+- `target` steps: no scaffold generated.
+- Drift: if real handler's `Input`/`Output` interfaces mismatch YAML → non-fatal WARNING logged. Never blocks execution.
+- Missing blockedBy step IDs: skip silently.
+
+**Generated scaffold example:**
+
+```typescript
+// .pi/flows/handlers/my-flow/validate-schema.ts.default
+import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
+
+interface Input {
+  data: string;
+  threshold: string;
+}
+
+interface Output {
+  is_valid: string;
+  error_message: string;
+}
+
+export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
+  // TODO: implement
+  return {
+    is_valid: "",
+    error_message: "",
+  };
+}
+```
 
 ---
 

@@ -16,6 +16,7 @@ import type {
   FlowConfig,
   FlowStep,
   AgentStep,
+  CodeStep,
   ForkStep,
   ConditionalStep,
   AgentDecisionStep,
@@ -313,7 +314,96 @@ export function validateFlowContent(
     }
   }
 
-  // 4b. blockedBy reference validation
+  // 4b. Code node validation: id, inputs, outputs, references
+  for (const step of flow.steps) {
+    if (step.stepType !== "code") continue;
+    const s = step as CodeStep;
+
+    // Filesystem-safe id: no /, \, .., :
+    if (!/^[a-zA-Z0-9_.-]+$/.test(s.id)) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "id") || stepLine(idx, s.id),
+        severity: "error",
+        message: `Code node id "${s.id}" must be filesystem-safe (alphanumeric, dash, underscore, dot only)`,
+        suggestion: "Use only letters, numbers, dash, underscore, and dot in the id",
+      });
+    }
+
+    // Input names must be valid JS identifiers
+    if (s.inputs) {
+      for (const key of Object.keys(s.inputs)) {
+        if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, `input.${key}`) || stepPropLine(idx, s.id, "inputs"),
+            severity: "error",
+            message: `input name "${key}" is not a valid JavaScript identifier`,
+            suggestion: "Input names must start with a letter, underscore, or dollar sign, followed by alphanumeric characters, underscores, or dollar signs",
+          });
+        }
+      }
+    }
+
+    // Output names must be unique and valid JS identifiers
+    const outputNames = new Set<string>();
+    if (s.outputs) {
+      for (const output of s.outputs) {
+        const name = output.name;
+        if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(name)) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, `output.${name}`) || stepPropLine(idx, s.id, "outputs"),
+            severity: "error",
+            message: `output name "${name}" is not a valid JavaScript identifier`,
+            suggestion: "Output names must start with a letter, underscore, or dollar sign, followed by alphanumeric characters, underscores, or dollar signs",
+          });
+        }
+        if (outputNames.has(name)) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, `output.${name}`) || stepPropLine(idx, s.id, "outputs"),
+            severity: "error",
+            message: `output name "${name}" is duplicate (declared multiple times)`,
+            suggestion: "Each output name must be unique",
+          });
+        }
+        outputNames.add(name);
+      }
+    }
+
+    // blockedBy references
+    if (s.blockedBy) {
+      for (const ref of s.blockedBy) {
+        if (!stepIds.has(ref)) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, "blockedBy"),
+            severity: "error",
+            message: `blockedBy references unknown step ID "${ref}"`,
+            suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+          });
+        }
+      }
+    }
+
+    // on_complete reference
+    if (s.on_complete && !stepIds.has(s.on_complete)) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "on_complete"),
+        severity: "error",
+        message: `on_complete references unknown step ID "${s.on_complete}"`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    }
+
+    // on_error reference
+    if (s.on_error && !stepIds.has(s.on_error)) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "on_error"),
+        severity: "error",
+        message: `on_error references unknown step ID "${s.on_error}"`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    }
+  }
+
+  // 4c. Agent blockedBy reference validation
   for (const step of flow.steps) {
     if (step.stepType !== "agent") continue;
     const s = step as AgentStep;
@@ -330,7 +420,7 @@ export function validateFlowContent(
     }
   }
 
-  // 4c. DAG cycle detection
+  // 4d. DAG cycle detection
   const adjacency = new Map<string, string[]>();
   for (const step of flow.steps) {
     if (step.stepType === "agent") {
@@ -374,7 +464,7 @@ export function validateFlowContent(
     }
   }
 
-  // 4d2. Output wiring validation — warn on ${{result.STEP.FIELD}} when FIELD is not a declared output
+  // 4e. Output wiring validation — warn on ${{result.STEP.FIELD}} when FIELD is not a declared output
   const STANDARD_RESULT_FIELDS = new Set(["summary", "artifacts", "files", "status", "fullOutput"]);
   for (const step of flow.steps) {
     if (step.stepType !== "agent") continue;
@@ -422,7 +512,7 @@ export function validateFlowContent(
     }
   }
 
-  // 4e. Branch target validation (fork + agent-decision)
+  // 4f. Branch target validation (fork + agent-decision)
   for (const step of flow.steps) {
     if (step.stepType === "fork") {
       const s = step as ForkStep;
@@ -454,7 +544,7 @@ export function validateFlowContent(
     }
   }
 
-  // 4f. Agent-loop-decision target validation
+  // 4g. Agent-loop-decision target validation
   for (const step of flow.steps) {
     if (step.stepType !== "agent-loop-decision") continue;
     const s = step as AgentLoopDecisionStep;
@@ -492,7 +582,7 @@ export function validateFlowContent(
     }
   }
 
-  // 4g. Agent input coverage validation
+  // 4h. Agent input coverage validation
   if (getDiscoveredAgents) {
     const knownAgents = getDiscoveredAgents();
     for (const step of flow.steps) {

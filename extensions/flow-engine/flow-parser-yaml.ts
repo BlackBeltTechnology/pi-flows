@@ -9,6 +9,7 @@ import type {
   FlowConfig,
   FlowStep,
   AgentStep,
+  CodeStep,
   ForkStep,
   ConditionalStep,
   AgentDecisionStep,
@@ -80,6 +81,7 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
 
   switch (stepType) {
     case "agent": return parseAgentStep(raw, source);
+    case "code": return parseCodeStep(raw, source);
     case "fork": return parseForkStep(raw, source);
     case "conditional": return parseConditionalStep(raw, source);
     case "agent-decision": return parseAgentDecisionStep(raw, source);
@@ -207,6 +209,39 @@ function parseFlowRefStep(raw: any, source: string): FlowRefStep {
 
   if (raw.on_complete) step.on_complete = String(raw.on_complete);
   if (raw.on_error) step.on_error = String(raw.on_error);
+
+  return step;
+}
+
+function parseCodeStep(raw: any, source: string): CodeStep {
+  const step: CodeStep = {
+    stepType: "code",
+    id: raw.id,
+  };
+
+  if (raw.target) step.target = String(raw.target);
+  if (raw.on_complete) step.on_complete = String(raw.on_complete);
+  if (raw.on_error) step.on_error = String(raw.on_error);
+  if (raw.timeout !== undefined) step.timeout = toInt(raw.timeout, source);
+
+  if (raw.blockedBy) {
+    step.blockedBy = Array.isArray(raw.blockedBy)
+      ? raw.blockedBy.map(String)
+      : [String(raw.blockedBy)];
+  }
+
+  if (raw.inputs && typeof raw.inputs === "object") {
+    step.inputs = {};
+    for (const [k, v] of Object.entries(raw.inputs)) {
+      step.inputs[k] = String(v);
+    }
+  }
+
+  if (raw.outputs && Array.isArray(raw.outputs)) {
+    step.outputs = raw.outputs.map((output: any) => ({
+      name: typeof output === "string" ? output : String(output.name ?? output),
+    }));
+  }
 
   return step;
 }

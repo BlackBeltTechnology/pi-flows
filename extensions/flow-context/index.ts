@@ -448,6 +448,46 @@ export function activate(pi: ExtensionAPI) {
     },
   });
 
+  // -- /flows:generate <name> — regenerate code-node handler templates ------
+
+  pi.registerCommand("flows:generate", {
+    description: "Regenerate a flow's code-node handler templates (.ts.default)",
+    getArgumentCompletions: (prefix: string) => {
+      const flowFiles = getFlowFiles(projectRoot);
+      const filtered = prefix
+        ? flowFiles.filter(f => f.name.startsWith(prefix) || f.name.includes(prefix))
+        : flowFiles;
+      if (filtered.length === 0) return null;
+      return filtered.map(f => ({ value: f.name, label: f.name, description: "Flow" }));
+    },
+    handler: async (args, ctx) => {
+      const name = args?.trim();
+      if (!name) {
+        ctx.ui.notify("Usage: /flows:generate <name>", "warning");
+        return;
+      }
+      const matchingFlow = getFlowFiles(projectRoot).find(f => f.name === name);
+      if (!matchingFlow) {
+        ctx.ui.notify(`Flow "${name}" not found.`, "error");
+        return;
+      }
+      try {
+        const { parseFlowYamlFile } = await import("../flow-engine/flow-parser-yaml.js");
+        const { generateCodeHandlers } = await import("../flow-engine/flow-generate.js");
+        const flow = parseFlowYamlFile(matchingFlow.path);
+        const gen = generateCodeHandlers(flow, matchingFlow.path);
+        if (gen.generated.length === 0) {
+          ctx.ui.notify(`No code-node templates to generate for "${name}".`, "info");
+        } else {
+          ctx.ui.notify(`Generated ${gen.generated.length} handler template(s) for "${name}".`, "info");
+        }
+        for (const d of gen.diagnostics) ctx.ui.notify(d.message, "warning");
+      } catch (err: any) {
+        ctx.ui.notify(`Failed to generate: ${err.message}`, "error");
+      }
+    },
+  });
+
   // -- /flows:edit <name> — delegate to flow-engine --------------------
 
   pi.registerCommand("flows:edit", {

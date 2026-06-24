@@ -5,6 +5,21 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`code` step type** (`code-node` capability) — run deterministic TypeScript as a first-class DAG node, wired exactly like an agent. A code node's handler is the **default export** of a `.ts` module, invoked `(input, ctx)`: declared `inputs:` are template-expanded to strings; the returned object must contain exactly the declared `outputs:` (primitive values coerced via `String()`, objects/arrays/null rejected) and is merged into the result context as typed outputs. `ctx: CodeNodeContext` (exported from the package, alongside `CodeNodeHandler<I,O>`) carries `signal`, `cwd`, `logger`, `setSummary`, `flowName`, `stepId`, and `task`. Handlers run in-process (jiti dynamic import) with cooperative `AbortSignal`; an optional `timeout` is a soft deadline. Failure routing follows the node-failure-model: a plain `throw` (or a contract/coercion/missing-handler/timeout failure) is **soft**, `throw new FlowHardError(msg)` is **hard**.
+- **Code-node handler generation** — on every successful `flow_write` (and via the new `/flows:generate <name>` command), pi-flows writes an inert `<id>.ts.default` reference template at `.pi/flows/handlers/<flow>/<id>.ts.default` with `Input`/`Output` interfaces derived from the node's `inputs`/`outputs` and a default-export stub. Copy it, drop `.default`, and implement the body. Templates are always regenerated and never touch the real `.ts`; nodes with a custom `target:` get no template. When a real handler exists, a non-fatal **drift warning** flags a mismatch between its `interface Input`/`Output` blocks and the YAML.
+- **`conditional` typed-output resolution** — `check: <stepId>.<key>` now resolves any typed-output key from the merged result map (falling back to `fullOutput` only when the key is absent), so conditionals can branch on a code node's (or agent's) typed outputs. Standard fields `artifacts`/`summary`/`files`/`status` resolve as before.
+- **Unified node failure model** (`node-failure-model` capability) — every node now resolves to exactly one outcome: `success`, `soft`, or `hard`. `success` routes `on_complete`; a `soft` failure routes `on_error`; a `hard` failure aborts in-flight parallel steps, skips pending steps, and ends the flow with status `error` and the failure message surfaced in the flow result. Agent failures are classified **structurally** (no error-message parsing): `finish(complete)` → success, `finish(error|blocked)` → soft, no-finish **with** a terminal API error → hard, no-finish **without** an API error → soft. The no-finish nag is capped at 2 reminders, then a clean soft failure (no more `status:"unknown"`).
+- **`FlowHardError`** — exported from the package entrypoint. Code/extension nodes signal an unconditional hard stop with `throw new FlowHardError(msg)`; a plain `throw` is soft. Also exports the `FailureOutcome` / `FailureInfo` types and the `classifyAgentOutcome` / `classifyThrownError` / `resolveRouteOutcome` helpers.
+- pi-flows relies on pi-coding-agent's built-in transient-error retry and adds **no** redundant retry layer; an agent error reaching the engine is terminal.
+
+### Changed
+
+- **BREAKING (behavioral):** a soft-eligible failure on a node with **no `on_error`** now **hard-fails the flow** (fail-fast) instead of silently continuing. Flows that relied on silent continuation must add an `on_error` target to the node to keep going.
+
 ## [v0.2.4] - 2026-06-23
 
 ### Added

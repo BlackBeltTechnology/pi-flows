@@ -10,6 +10,8 @@ import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../types.js";
 import { validateFlowContent } from "./flow-validate.js";
+import { generateCodeHandlers } from "../flow-generate.js";
+import { parseFlowYamlString } from "../flow-parser-yaml.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -66,6 +68,17 @@ export function registerFlowWriteTool(
         };
       }
 
+      // Generate code-node handler templates against the just-persisted YAML.
+      // Best-effort: a generation failure must not fail the write itself.
+      let generationDiagnostics: typeof validation.diagnostics = [];
+      try {
+        const flow = parseFlowYamlString(params.content, params.path);
+        const gen = generateCodeHandlers(flow, params.path);
+        generationDiagnostics = gen.diagnostics;
+      } catch {
+        // Parsing/generation problems are non-fatal here — validation already passed.
+      }
+
       // Trigger re-discovery so the new flow is available immediately
       pi.events.emit("flow:rediscover", {});
 
@@ -76,7 +89,7 @@ export function registerFlowWriteTool(
             text: JSON.stringify({
               written: true,
               path: params.path,
-              diagnostics: validation.diagnostics,
+              diagnostics: [...validation.diagnostics, ...generationDiagnostics],
             }, null, 2),
           },
         ],

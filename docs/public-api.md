@@ -11,7 +11,8 @@ pi-flows exports its core types and functions from `pi-flows/extensions/flow-eng
 import type {
   AgentConfig, FlowConfig, FlowResult, AgentResult,
   FlowStep, AgentStep, ForkStep, ConditionalStep,
-  AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep,
+  AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, CodeStep,
+  CodeNodeContext, CodeNodeHandler,
   TemplateContext, SubagentEvent, ArchitectMeta, CardConfig,
   FlowRunOptions, FlowContext, FlowIOAdapter, FlowObserver,
 } from "pi-flows/extensions/flow-engine/index.js";
@@ -24,7 +25,8 @@ import {
   parseResult, hasArtifactElement,
   parseAgentFile, parseAgentString,
   parseFlowYamlFile, parseFlowYamlString,
-  FlowManager,
+  FlowManager, FlowHardError,
+  classifyAgentOutcome, classifyThrownError, resolveRouteOutcome,
 } from "pi-flows/extensions/flow-engine/index.js";
 
 // Dashboard types
@@ -111,7 +113,8 @@ type FlowStep =
   | ConditionalStep
   | AgentDecisionStep
   | AgentLoopDecisionStep
-  | FlowRefStep;
+  | FlowRefStep
+  | CodeStep;
 
 interface AgentStep {
   stepType:    "agent";
@@ -171,6 +174,18 @@ interface FlowRefStep {
   on_complete?: string;
   on_error?:   string;
 }
+
+interface CodeStep {
+  stepType:    "code";
+  id:          string;
+  inputs?:     Record<string, string>;    // key → template expression
+  outputs?:    Array<{ name: string }>;  // declared output names
+  target?:     string;                    // overrides handler file path
+  blockedBy?:  string[];
+  on_complete?: string;
+  on_error?:   string;
+  timeout?:    number;                    // soft deadline — milliseconds
+}
 ```
 
 ---
@@ -191,6 +206,8 @@ interface AgentResult {
   tokens:        { input: number; output: number };
   finishParams?: Record<string, any>; // raw finish tool call parameters
   typedOutputs?: Record<string, string>; // extracted typed outputs
+  outcome?:      FailureOutcome;       // structural failure classification
+  failureInfo?:  FailureInfo;          // present on soft/hard failures
 }
 
 interface ParsedResult {
@@ -216,6 +233,36 @@ interface ToolCallRecord {
 
 ---
 
+### `FailureOutcome`
+
+The three terminal outcomes a node can resolve to.
+
+```typescript
+type FailureOutcome = "success" | "soft" | "hard";
+```
+
+- `success` — routes to the node's `on_complete`.
+- `soft` — recoverable; routes to `on_error`, or hard-fails the flow if no `on_error` is declared.
+- `hard` — unrecoverable; aborts in-flight steps, skips pending steps, and ends the flow with status `error`.
+
+See [flows.md → Failure Modes](./flows.md#failure-modes) for the full routing model.
+
+---
+
+### `FailureInfo`
+
+Detail attached to a non-success outcome.
+
+```typescript
+interface FailureInfo {
+  outcome: "soft" | "hard";
+  message: string;   // surfaced in the flow result on a hard fail
+  source:  string;   // step ID / origin of the failure
+}
+```
+
+---
+
 ### `FlowResult`
 
 Result of running a complete flow.
@@ -230,6 +277,11 @@ interface FlowResult {
   totalDuration: number;    // wall-clock milliseconds
   status?:       "success" | "error" | "aborted";
 }
+```
+
+On a **hard** failure, `status` is `"error"` and the reason is carried in `lastResult` (its `failureInfo.message`).
+
+```typescript
 
 interface StepResultEntry {
   fullOutput:  string;
@@ -567,6 +619,106 @@ function hasArtifactElement(output: string): boolean
 ```
 
 These are used internally by the engine. You typically don't need them directly — `AgentResult.result` is already parsed.
+
+---
+
+### `CodeNodeContext`
+
+Context object passed as the second argument to every code-step handler. Exported from the package entrypoint.
+
+```typescript
+interface CodeNodeContext {
+  /** Cooperative cancellation signal. Aborted when the step’s `timeout` expires or the flow is cancelled. */
+  signal:      AbortSignal;
+  /** Absolute path to the project root (same as `cwd` in `FlowRunOptions`). */
+  cwd:         string;
+  /** Stream a message to the step’s card in real time. */
+  logger:      (msg: string) => void;
+  /** Set the step’s summary text (becomes `${{result.id.summary}}` downstream). */
+  setSummary:  (text: string) => void;
+  /** Name of the running flow. */
+  flowName:    string;
+  /** The step’s `id` field. */
+  stepId:      string;
+  /** The task string passed when the flow was invoked. */
+  task:        string;
+}
+```
+
+```typescript
+import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
+
+export default async function (input: { invoice: string }, ctx: CodeNodeContext) {
+  ctx.logger("validating...");
+  if (ctx.signal.aborted) throw new Error("cancelled");
+  ctx.setSummary("Validation complete");
+  return { valid: "true" };
+}
+```
+
+---
+
+### `CodeNodeHandler`
+
+Helper type for declaring a typed code-step handler. The generic parameters `I` (input shape) and `O` (output shape) match the step’s `inputs` and `outputs` declarations.
+
+```typescript
+type CodeNodeHandler<I = Record<string, string>, O = Record<string, string>> =
+  (input: I, ctx: CodeNodeContext) => Promise<O>;
+```
+
+```typescript
+import type { CodeNodeContext, CodeNodeHandler } from "@blackbelt-technology/pi-flows";
+
+interface Input  { invoice: string }
+interface Output { valid: string; nav_record: string }
+
+const handler: CodeNodeHandler<Input, Output> = async (input, ctx) => {
+  return { valid: "true", nav_record: "..." };
+};
+
+export default handler;
+```
+
+---
+
+### `FlowHardError`
+
+A marker error class. Throw it from a code step (or any extension node) to force an **unconditional hard failure** that halts the flow regardless of any `on_error` target. A plain `throw` (any other `Error`) is treated as a recoverable **soft** failure.
+
+```typescript
+class FlowHardError extends Error {
+  constructor(message: string);
+}
+```
+
+```typescript
+import { FlowHardError } from "@blackbelt-technology/pi-flows";
+// or from the internal path:
+import { FlowHardError } from "pi-flows/extensions/flow-engine/index.js";
+
+// Soft failure — routes to on_error (or hard-fails if none declared):
+throw new Error("validation failed");
+
+// Hard failure — stops the whole flow immediately:
+if (!apiKey) {
+  throw new FlowHardError("Missing API key; provider unusable for the rest of the flow");
+}
+```
+
+See [flows.md → Failure Modes](./flows.md#failure-modes) for the full routing model.
+
+---
+
+### Outcome classification helpers
+
+The engine uses these to resolve a node's `FailureOutcome`. They are exported for tooling and tests.
+
+| Function | Description |
+|----------|-------------|
+| `classifyAgentOutcome(finishParams, lastApiError)` | Classifies an agent end state into `success` / `soft` / `hard` from its `finish` params and any terminal API error. |
+| `classifyThrownError(err)` | Classifies a thrown error: `FlowHardError` → `hard`, any other `Error` → `soft`. |
+| `resolveRouteOutcome(result, onError)` | Resolves the effective route for a result: a `soft` failure with no `onError` target escalates to `hard`. |
 
 ---
 

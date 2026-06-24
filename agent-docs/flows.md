@@ -300,6 +300,163 @@ Delegate execution to another flow file. Sub-flow runs to completion before cont
 
 ---
 
+### Code Step
+
+Execute TypeScript handler function in-process. No agent or LLM dispatch.
+
+**Syntax:**
+
+```yaml
+  - id: validate
+    type: code
+    inputs:
+      data: "${{result.fetcher.artifacts}}"
+    outputs:
+      - name: is_valid
+      - name: error_message
+    on_complete: next-step
+    on_error: error-handler
+    timeout: 30000
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `id` | ✓ | Unique step identifier. Filesystem-safe. Becomes handler filename. |
+| `type` | ✓ | Must be `code`. |
+| `inputs` | | Map of name → `${{...}}` template expression. Each value expanded to string at runtime. Unresolved → `""`. Never `undefined`. |
+| `outputs` | | List of `{ name }` objects. Names unique, valid JS identifiers. Optional — omit for side-effect-only steps. |
+| `target` | | Override handler file path. Steps with `target` get no generated scaffold. |
+| `blockedBy` | | Array of step IDs that must complete before this step runs. |
+| `on_complete` | | Step ID to route to on success. |
+| `on_error` | | Step ID to route to on error. |
+| `timeout` | | Milliseconds. Soft deadline — aborts `ctx.signal` on expiry → soft failure. |
+
+**Handler locations:**
+
+| File | Purpose |
+|------|---------|
+| `.pi/flows/handlers/<flow>/<id>.ts` | Real handler (implement here) |
+| `.pi/flows/handlers/<flow>/<id>.ts.default` | Generated scaffold — `.default` suffix makes it un-importable (inert) |
+
+Copy `.ts.default` → remove `.default` suffix → implement. Scaffold always regenerated on flow save or `/flows:generate <name>`. Real `.ts` never touched by generation. `target:` steps get no scaffold.
+
+**Handler contract:**
+
+```typescript
+import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
+
+interface Input  { data: string }                                    // one key per declared input
+interface Output { is_valid: string; error_message: string }         // one key per declared output
+
+export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
+  ctx.logger("validating...");
+  ctx.setSummary("Validation complete");
+  return { is_valid: "true", error_message: "" };
+}
+```
+
+**`CodeNodeContext` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `signal` | `AbortSignal` | Aborted when `timeout` expires. Check cooperatively in loops. |
+| `cwd` | `string` | Project root directory. |
+| `logger(msg)` | `(msg: string) => void` | Stream text to step card. |
+| `setSummary(text)` | `(text: string) => void` | Set step summary shown after completion. |
+| `flowName` | `string` | Name of the running flow. |
+| `stepId` | `string` | This step's `id`. |
+| `task` | `string` | The flow task string. |
+
+**Return rules:**
+
+- Return exactly declared outputs. All keys present. No extras.
+- No `outputs:` declared → return `{}`.
+- `string` values: passthrough verbatim.
+- `number` / `boolean` / `bigint` → coerced via `String()`.
+- `object` / `array` / `null` → soft failure naming the offending key.
+
+**Failure modes:**
+
+| Cause | Outcome |
+|-------|---------|
+| Plain `throw` (any `Error`) | `soft` — routes `on_error`, else hard-fails flow |
+| Contract violation (wrong/missing output keys) | `soft` |
+| Coercion failure (`object`/`array`/`null` value) | `soft` |
+| Missing handler file | `soft` |
+| Timeout expired | `soft` |
+| `throw new FlowHardError(msg)` | `hard` — stops flow regardless of `on_error` |
+
+No retry layer. Execution in-process via jiti dynamic import. No subprocess.
+
+**Drift detection:**
+
+If real handler's `Input`/`Output` interfaces mismatch YAML `inputs`/`outputs` — non-fatal WARNING at generation time. Never blocks execution.
+
+**Conditional check with code step outputs:**
+
+`stepId.outputName` in `check:` resolves any declared typed output from merged result map. Falls back to `fullOutput` only when key absent. Standard fields (`summary`, `artifacts`, `files`, `status`) resolved as normal.
+
+---
+
+## Failure Modes
+
+Node resolves to one outcome: `success` | `soft` | `hard`. Outcome decides routing.
+
+| Outcome | Meaning | Routing |
+|---------|---------|---------|
+| `success` | Node completed work | Routes `on_complete` |
+| `soft` | Recoverable failure. Node ran, reported logical problem | Routes `on_error` |
+| `hard` | Unrecoverable failure | Aborts in-flight parallel steps, skips pending steps, ends flow status `error`, surfaces message |
+
+```mermaid
+flowchart TD
+  N[Node runs] --> O{Outcome?}
+  O -->|success| C[on_complete]
+  O -->|soft| E{on_error declared?}
+  E -->|yes| H[on_error]
+  E -->|no| HF[Hard-fail flow]
+  O -->|hard| HF
+  HF --> A[Abort in-flight steps<br/>skip pending steps<br/>flow status = error]
+```
+
+### `on_error` = soft switch
+
+`soft` routes `on_error` when node declares one. `soft` + no `on_error` → hard-fails flow. Fail-fast by default. Unhandled recoverable failure stops flow.
+
+> **⚠️ BREAKING.** Previously: failure + no `on_error` → silent-continue. Now: hard-fails flow. Flows relying on silent-continue must add explicit `on_error`.
+
+### Agent failure classification
+
+Agent classified structurally. No error-message parsing. No deliberate fatal signal.
+
+| Agent end state | Outcome |
+|-----------------|---------|
+| `finish(status:"complete")` | `success` |
+| `finish(status:"error")` or `finish(status:"blocked")` | `soft` (ran, reported logical failure) |
+| No `finish` + terminal API error (pi-coding-agent auto-retries exhausted: rate limit, quota, auth) | `hard` (provider unusable rest of flow) |
+| No `finish` + no API error | `soft` |
+
+No-finish reminder capped at 2. Reminders include `finish` tool-call format. Still no finish → clean `soft` failure. Never `status:"unknown"`. Never infinite loop.
+
+### Transient retry delegated to pi
+
+pi-coding-agent auto-retries transient errors (rate limit, 5xx, overloaded, network, timeout) with exponential backoff. pi-flows adds no redundant retry layer. Error reaching flow engine is terminal.
+
+### Code / extension nodes
+
+Thrown error decides outcome.
+
+| Thrown | Outcome |
+|--------|---------|
+| Plain `throw` (any `Error`) | `soft` — routes `on_error` if declared, else hard-fails |
+| `throw new FlowHardError(msg)` | Unconditional `hard` — stops flow regardless of `on_error` |
+
+`FlowHardError` exported from package. See [public-api.md](./public-api.md) for shape and usage.
+
+---
+
 ## Template Variable Reference
 
 Template variables: placeholders in `task`, `inputs`, `question` fields. Expanded just before agent dispatched.
