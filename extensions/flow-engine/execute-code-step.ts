@@ -11,8 +11,8 @@
  * - Routes FlowHardError as hard failure; everything else as soft failure
  */
 
-import type { CodeStep, AgentResult, CodeNodeContext } from "./types.js";
-import { FlowHardError } from "./types.js";
+import type { CodeStep, AgentResult, CodeNodeContext, FailureInfo } from "./types.js";
+import { classifyThrownError } from "./failure.js";
 import { expandTemplateVariables } from "./execution.js";
 import { existsSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -141,12 +141,16 @@ export async function executeCodeStep(
   try {
     rawReturn = await executeWithTimeout(handler, input, codeCtx, step, nodeController);
   } catch (err: any) {
-    if (err instanceof FlowHardError || err?.name === "FlowHardError") throw err;
-    const throwResult = makeSoftFailure(
-      err?.isTimeout
-        ? `Code node "${step.id}": timeout after ${step.timeout}ms`
-        : `Code node "${step.id}": handler threw: ${err?.message ?? String(err)}`,
-    );
+    // Timeout is a SOFT deadline; a thrown FlowHardError classifies HARD,
+    // any other throw classifies SOFT (per node-failure-model).
+    let info: FailureInfo;
+    if (err?.isTimeout) {
+      info = { outcome: "soft", message: `Code node "${step.id}": timeout after ${step.timeout}ms`, source: "code_timeout" };
+    } else {
+      const base = classifyThrownError(err);
+      info = { ...base, message: `Code node "${step.id}": handler threw: ${base.message}` };
+    }
+    const throwResult = makeFailure(info);
     options.onAgentComplete?.(step.id, step.id, throwResult, { kind: "code" });
     return throwResult;
   }
@@ -212,6 +216,7 @@ export async function executeCodeStep(
     duration: 0,
     tokens: { input: 0, output: 0 },
     typedOutputs,
+    outcome: "success",
   };
   options.onAgentComplete?.(step.id, step.id, successResult, { kind: "code" });
   return successResult;
@@ -245,20 +250,30 @@ async function executeWithTimeout(
   });
 }
 
-function makeSoftFailure(message: string): AgentResult {
+function makeSoftFailure(message: string, source = "code_node"): AgentResult {
+  return makeFailure({ outcome: "soft", message, source });
+}
+
+/**
+ * Build a failed AgentResult carrying the node-failure-model outcome
+ * (`soft` or `hard`) so the DAG scheduler routes/halts via resolveRouteOutcome.
+ */
+function makeFailure(info: FailureInfo): AgentResult {
   return {
     success: false,
-    output: message,
+    output: info.message,
     stderr: "",
     exitCode: 1,
     result: {
       status: "error",
       files: [],
       artifacts: "",
-      summary: message,
+      summary: info.message,
     },
     toolCalls: [],
     duration: 0,
     tokens: { input: 0, output: 0 },
+    outcome: info.outcome,
+    failureInfo: info,
   };
 }

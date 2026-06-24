@@ -22,7 +22,7 @@
 - [x] 3.7 Implement the soft-timeout race; on expiry abort signal and produce a soft failure
 - [x] 3.8 Write tests: missing handler file → soft failure with copy-the-template message
 - [x] 3.9 Implement missing-handler detection with the guidance message
-- [ ] 3.10 Wire failure routing per node-failure-model: plain throw / contract / coercion / missing / timeout → SOFT; `FlowHardError` → HARD (consume the model's outcome type)
+- [x] 3.10 Wire failure routing per node-failure-model: plain throw / contract / coercion / missing / timeout → SOFT; `FlowHardError` → HARD (consume the model's outcome type)
 
 ## 4. Dispatch & conditional fix (flow-execution.ts)
 

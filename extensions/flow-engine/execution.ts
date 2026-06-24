@@ -1,4 +1,5 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
+import { classifyAgentOutcome } from "./failure.js";
 import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -416,6 +417,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   const finishToolName = prefixToolName("finish", toolPrefix);
   let finishParams: any = undefined;
   let finishToolCallId: string | undefined;
+  // Shared cap (≤2) for both the finish-schema-validation retry (below) and
+  // the no-finish reminder loop. Exhaustion of the reminder loop ends in a
+  // clean SOFT failure via classifyAgentOutcome. See node-failure-model D4.
+  const MAX_FINISH_RETRIES = 2;
   let finishValidationRetries = 0;
   let lastAssistantText = "";
   let lastApiError: string | undefined;
@@ -517,16 +522,18 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     userMessage = replaceSentinels(userMessage, options.fileInputs);
   }
 
-  // Execute prompt with finish-retry loop.
+  // Execute prompt with a CAPPED no-finish reminder (not an unbounded nag).
   // The guard's agent_end → followUp retry doesn't work in-process because
-  // Agent.emit() doesn't await async listeners. So we retry here explicitly.
-  const MAX_FINISH_RETRIES = 2;
+  // Agent.emit() doesn't await async listeners, so we remind here explicitly.
+  // After at most MAX_FINISH_RETRIES the run falls through to
+  // classifyAgentOutcome, which resolves a clean SOFT failure (no
+  // status:"unknown", no loop). See node-failure-model D4.
   let finishRetries = 0;
 
   try {
     await session.prompt(userMessage, { expandPromptTemplates: false });
 
-    // Retry if agent didn't call finish
+    // Remind (≤2) if the agent didn't call finish; then stop and classify.
     while (!finishParams && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
       finishRetries++;
       await session.prompt(
@@ -563,6 +570,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       toolCalls,
       duration,
       tokens: { ...accumulatedTokens },
+      // User abort is a soft, non-fatal stop (distinct from a hard API failure).
+      outcome: "soft",
+      failureInfo: { outcome: "soft", message: "Aborted by user", source: "user_abort" },
     };
   }
 
@@ -586,6 +596,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       toolCalls: [],
       duration,
       tokens: { ...accumulatedTokens },
+      // Terminal API error after pi exhausted its retries: provider is
+      // unusable for the rest of the flow -> HARD.
+      outcome: "hard",
+      failureInfo: { outcome: "hard", message: errorMsg, source: "api_error" },
     };
   }
 
@@ -611,6 +625,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     }
   }
 
+  // Structural outcome classification (success | soft | hard). The DAG
+  // scheduler routes on `outcome`, not on `parsed.status === "complete"`.
+  const { outcome, failureInfo } = classifyAgentOutcome(finishParams ?? undefined, lastApiError);
+
   return {
     success: parsed.status === "complete",
     output: lastAssistantText,
@@ -622,6 +640,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     tokens: { ...accumulatedTokens },
     finishParams: finishParams ?? undefined,
     typedOutputs: Object.keys(typedOutputs).length > 0 ? typedOutputs : undefined,
+    outcome,
+    failureInfo,
   };
 }
 

@@ -300,6 +300,63 @@ Delegate execution to another flow file. The sub-flow runs to completion before 
 
 ---
 
+## Failure Modes
+
+Every node in a flow resolves to exactly **one** of three outcomes. The outcome decides where the flow goes next.
+
+| Outcome | Meaning | Routing |
+|---------|---------|---------|
+| `success` | The node completed its work | Routes to the node's `on_complete` |
+| `soft` | A recoverable failure — the node ran but reported a logical problem | Routes to the node's `on_error` |
+| `hard` | An unrecoverable failure | Aborts in-flight parallel steps, skips all pending steps, and ends the flow with status `error`, surfacing the failure message |
+
+```mermaid
+flowchart TD
+  N[Node runs] --> O{Outcome?}
+  O -->|success| C[on_complete]
+  O -->|soft| E{on_error declared?}
+  E -->|yes| H[on_error]
+  E -->|no| HF[Hard-fail the flow]
+  O -->|hard| HF
+  HF --> A[Abort in-flight steps<br/>skip pending steps<br/>flow status = error]
+```
+
+### `on_error` is the soft switch
+
+A soft-eligible failure routes to `on_error` **when the node declares one**. A soft-eligible failure on a node with **no `on_error` hard-fails the flow**. This is fail-fast by default: if you do not handle a recoverable failure, the flow stops rather than silently continuing.
+
+> **⚠️ Breaking behavioral change.** Previously, a failure on a node with no `on_error` silently continued. It now **hard-fails the flow**. Flows that relied on silent continuation must add an explicit `on_error` target to the affected node.
+
+### How agent failures are classified
+
+Agent outcomes are determined **structurally** — there is no error-message parsing and no deliberate "fatal" signal from the agent.
+
+| Agent end state | Outcome |
+|-----------------|---------|
+| `finish(status:"complete")` | `success` |
+| `finish(status:"error")` or `finish(status:"blocked")` | `soft` (the agent ran and reported a logical failure) |
+| Terminated with a terminal API error and no `finish` (pi-coding-agent's auto-retries exhausted: rate limit, quota, auth) | `hard` (the provider is unusable for the rest of the flow) |
+| Terminated without finishing and without an API error | `soft` |
+
+**Capped no-finish reminder.** If an agent stops without calling `finish` (and there is no API error), it receives at most **2** reminders that include the `finish` tool-call format. If it still does not finish, the node resolves as a clean `soft` failure — never `status:"unknown"`, and never an infinite loop.
+
+### Transient retries are delegated to pi
+
+pi-coding-agent already auto-retries transient errors (rate limit, 5xx, overloaded, network, timeout) with exponential backoff. pi-flows adds **no** redundant retry layer. By the time an error reaches the flow engine, it is terminal.
+
+### Code and extension nodes
+
+For nodes implemented in code (extensions), the thrown error decides the outcome:
+
+| Thrown | Outcome |
+|--------|---------|
+| A plain `throw` (any `Error`) | `soft` failure — routes to `on_error` if declared, otherwise hard-fails |
+| `throw new FlowHardError(msg)` | **Unconditional** `hard` failure — stops the flow regardless of `on_error` |
+
+`FlowHardError` is exported from the package. See [public-api.md](./public-api.md) for its shape and usage.
+
+---
+
 ## Template Variable Reference
 
 Template variables are placeholders in `task`, `inputs`, and `question` fields. They are expanded just before an agent is dispatched.

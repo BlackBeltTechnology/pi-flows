@@ -42,8 +42,11 @@ export type {
   CardConfig,
   CodeNodeContext,
   CodeNodeHandler,
+  FailureOutcome,
+  FailureInfo,
 } from "./types.js";
 export { FlowHardError } from "./types.js";
+export { classifyThrownError, classifyAgentOutcome, resolveRouteOutcome } from "./failure.js";
 export { spawnAgent, expandTemplateVariables } from "./execution.js";
 export { runFlow, FlowCancelledError } from "./flow-execution.js";
 export type { FlowRunOptions, FlowContext } from "./flow-execution.js";

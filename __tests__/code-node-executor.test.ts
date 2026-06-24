@@ -11,7 +11,6 @@ import { describe, it, expect, afterEach } from "vitest";
 
 import { executeCodeStep } from "../extensions/flow-engine/execute-code-step.js";
 import type { CodeStep } from "../extensions/flow-engine/types.js";
-import { FlowHardError } from "../extensions/flow-engine/types.js";
 
 // ---- Helpers ----------------------------------------------------------------
 
@@ -433,16 +432,12 @@ export default async function handler(input, ctx) {
     expect(result.output).toContain("something broke");
   });
 
-  it("re-throws FlowHardError as a hard failure", async () => {
-    const handlerPath = tempHandler(`
-import { FlowHardError } from "@blackbelt-technology/pi-flows";
-export default async function handler(input, ctx) {
-  throw new FlowHardError("unrecoverable");
-}
-`);
-    // Note: in test context, FlowHardError is imported from types.ts directly
-    // We simulate by creating a FlowHardError-like object from the executor's perspective
-    // The executor re-throws anything that is instanceof FlowHardError
+  it("returns a hard failure (does not throw) when the handler throws FlowHardError", async () => {
+    // Code-node handlers are loaded via dynamic import, so a handler's
+    // FlowHardError is a distinct class identity from the engine's. The
+    // classifier detects it by name; the executor returns an `outcome: "hard"`
+    // result so the scheduler halts the flow cleanly (it must NOT throw, which
+    // would surface as an unhandled rejection).
     const hardErrHandlerPath = tempHandler(`
 class FlowHardError extends Error {
   constructor(msg) { super(msg); this.name = "FlowHardError"; }
@@ -451,13 +446,11 @@ export default async function handler(input, ctx) {
   throw new FlowHardError("unrecoverable");
 }
 `);
-    // The executor should detect FlowHardError by name convention since cross-module instanceof won't work
-    // Let's test with our actual FlowHardError from types.ts by creating a handler that signals hard failure
-    // Actually the executor receives the thrown error - it checks instanceof FlowHardError
-    // Since we can't easily share the same FlowHardError class across dynamic import boundary,
-    // we test the name-based detection
     const step = makeStep({ target: hardErrHandlerPath, outputs: [] });
-    await expect(executeCodeStep(step, makeCtx(), makeOptions(), "test-flow"))
-      .rejects.toThrow();
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBe("hard");
+    expect(result.failureInfo?.source).toBe("flow_hard_error");
+    expect(result.output).toContain("unrecoverable");
   });
 });
