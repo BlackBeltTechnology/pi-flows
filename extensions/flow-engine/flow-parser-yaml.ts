@@ -120,12 +120,6 @@ function parseAgentStep(raw: any, source: string): AgentStep {
       : [String(raw.blockedBy)];
   }
 
-  if (raw.reads) {
-    step.reads = Array.isArray(raw.reads)
-      ? raw.reads.map(String)
-      : [String(raw.reads)];
-  }
-
   if (raw.inputs && typeof raw.inputs === "object") {
     step.inputs = {};
     for (const [k, v] of Object.entries(raw.inputs)) {

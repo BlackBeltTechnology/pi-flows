@@ -96,7 +96,9 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     // Catch-all for typed outputs: ${{result.STEP.anyField}}
     .replace(/\$\{\{result\.([\w-]+)\.([\w]+)\}\}/g, (_, id, field) => ctx.results[id]?.[field] ?? "")
     .replace(/\$\{\{result\.([\w-]+)\}\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
-    .replace(/\$\{\{loop\.([\w-]+)\.iteration\}\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 0))
+    // 1-based: an uninitialized counter (e.g. the first loop-body pass, before
+    // the decision step has run) resolves to 1 so body and decision agree.
+    .replace(/\$\{\{loop\.([\w-]+)\.iteration\}\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 1))
     .replace(/\$\{\{loop\.([\w-]+)\.max\}\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0));
 }
 

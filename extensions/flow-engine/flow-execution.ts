@@ -997,8 +997,11 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
 }
 
 async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
-  // Increment iteration counter
-  const iteration = (ctx.loopCounters[step.id] ?? 0) + 1;
+  // 1-based iteration that stays aligned between the loop body and this
+  // decision step. The counter is initialized lazily to 1 (the first body pass
+  // already observed 1 via expandTemplateVariables' `?? 1` default) and is
+  // incremented on loop-back below, so body pass N and decision pass N agree.
+  const iteration = ctx.loopCounters[step.id] ?? 1;
   ctx.loopCounters[step.id] = iteration;
 
   // Emit loop iteration event — resolve loop_target step ID to agent name
@@ -1061,6 +1064,8 @@ async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: Fl
 
   const branch = result.finishParams?.branch;
   if (branch === "loop") {
+    // Advance the counter so the NEXT body pass (and the next decision) see N+1.
+    ctx.loopCounters[step.id] = iteration + 1;
     return { nextStepId: step.loop_target, agentResult: result };
   }
   return { nextStepId: step.exit_target, agentResult: result };

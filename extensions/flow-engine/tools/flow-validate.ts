@@ -441,72 +441,91 @@ export function validateFlowContent(
     });
   }
 
-  // 4d. Input wiring — result.X reference validation
+  // 4d. Template reference validation (harden-flow-wiring): fail-loud on
+  // references to unknown steps, unknown output fields, or steps that are not
+  // ordered-before the referencing step. Replaces the prior input-only
+  // unknown-step check and the warning-level output-field check.
+  const STANDARD_RESULT_FIELDS = new Set(["summary", "artifacts", "files", "status", "fullOutput"]);
+  const orderedBefore = computeOrderedBefore(flow);
+  const flowRefIds = new Set(flow.steps.filter(st => st.stepType === "flow-ref").map(st => st.id));
+
+  /** Declared output names for a referenced step, or null when not statically knowable. */
+  const declaredOutputsOf = (refStepId: string): Set<string> | null => {
+    const refStep = flow.steps.find(st => st.id === refStepId);
+    if (!refStep) return null;
+    if (refStep.stepType === "code") {
+      return new Set(((refStep as CodeStep).outputs ?? []).map(o => o.name));
+    }
+    if (refStep.stepType === "agent") {
+      const refAgent = getDiscoveredAgents?.()?.get((refStep as AgentStep).agent);
+      if (!refAgent) return null; // can't disprove without the catalog
+      return new Set((refAgent.outputs ?? []).map(o => o.name));
+    }
+    return null; // decision/fork/flow-ref: outputs not statically declared
+  };
+
   for (const step of flow.steps) {
-    if (step.stepType !== "agent") continue;
-    const s = step as AgentStep;
-    if (!s.inputs) continue;
-    for (const [key, val] of Object.entries(s.inputs)) {
-      // Skip file:// inputs — they are file paths, not step references
-      if (val.startsWith("file://")) continue;
-      // Extract result.X references from the value
-      const refs = val.matchAll(/(?:\$\{\{|\{)result\.(\w[\w-]*)(?:\}\}|\})/g);
-      for (const m of refs) {
-        if (!stepIds.has(m[1])) {
-          diagnostics.push({
-            line: stepPropLine(idx, s.id, `input.${key}`) || stepPropLine(idx, s.id, "inputs"),
-            severity: "error",
-            message: `Input reference {result.${m[1]}} points to unknown step ID "${m[1]}"`,
-            suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
-          });
+    // Collect template strings carrying result references (task + inputs).
+    const templateStrings: Array<{ tpl: string; prop: string }> = [];
+    const stepTask = (step as { task?: string }).task;
+    if (stepTask) templateStrings.push({ tpl: stepTask, prop: "task" });
+    const stepInputs = (step as { inputs?: Record<string, string> }).inputs;
+    if (stepInputs) {
+      for (const [key, val] of Object.entries(stepInputs)) {
+        if (typeof val === "string" && !val.startsWith("file://")) {
+          templateStrings.push({ tpl: val, prop: `input.${key}` });
         }
       }
     }
-  }
+    if (templateStrings.length === 0) continue;
 
-  // 4e. Output wiring validation — warn on ${{result.STEP.FIELD}} when FIELD is not a declared output
-  const STANDARD_RESULT_FIELDS = new Set(["summary", "artifacts", "files", "status", "fullOutput"]);
-  for (const step of flow.steps) {
-    if (step.stepType !== "agent") continue;
-    const s = step as AgentStep;
+    // A flow-ref ordered before this step can inject sub-flow step results
+    // whose IDs are not statically known — relax unknown-step errors then.
+    const before = orderedBefore.get(step.id) ?? new Set<string>();
+    const relaxUnknown = [...flowRefIds].some(id => before.has(id));
 
-    // Collect all template strings that may contain result references
-    const templateStrings: string[] = [];
-    if (s.task) templateStrings.push(s.task);
-    if (s.inputs) {
-      for (const val of Object.values(s.inputs)) {
-        // Skip file:// inputs — they are file paths, not template expressions
-        if (!val.startsWith("file://")) templateStrings.push(val);
-      }
-    }
-
-    for (const tpl of templateStrings) {
-      // Match ${{result.STEP.FIELD}} patterns
-      const refs = tpl.matchAll(/(?:\$\{\{|\{)result\.([\w-]+)\.([\w]+)(?:\}\}|\})/g);
+    for (const { tpl, prop } of templateStrings) {
+      const line = stepPropLine(idx, step.id, prop) || stepLine(idx, step.id);
+      // Match both ${{result.X}} and ${{result.X.field}} (runtime resolver forms).
+      const refs = tpl.matchAll(/\$\{\{result\.([\w-]+)(?:\.([\w]+))?\}\}/g);
       for (const m of refs) {
         const refStepId = m[1];
         const refField = m[2];
 
-        // Skip standard fields — always valid
-        if (STANDARD_RESULT_FIELDS.has(refField)) continue;
-
-        // Find the referenced step's agent and check its declared outputs
-        const refStep = flow.steps.find(st => st.id === refStepId);
-        if (!refStep || refStep.stepType !== "agent") continue;
-
-        const refAgent = getDiscoveredAgents?.()?.get((refStep as AgentStep).agent);
-        if (!refAgent) continue;
-
-        const declaredOutputNames = (refAgent.outputs ?? []).map(o => o.name);
-        if (!declaredOutputNames.includes(refField)) {
+        if (!stepIds.has(refStepId)) {
+          if (relaxUnknown) continue; // may be a sub-flow result from a flow-ref
           diagnostics.push({
-            line: stepPropLine(idx, s.id, "task") || stepPropLine(idx, s.id, "inputs"),
-            severity: "warning",
-            message: `result.${refStepId}.${refField} references field "${refField}" which is not a declared output of agent "${(refStep as AgentStep).agent}"`,
-            suggestion: declaredOutputNames.length > 0
-              ? `Declared outputs: ${declaredOutputNames.join(", ")}. Standard fields: summary, artifacts, files, status`
-              : `Agent "${(refStep as AgentStep).agent}" has no declared outputs. Use .summary, .artifacts, .files, or .status`,
+            line,
+            severity: "error",
+            message: `Reference result.${refStepId}${refField ? "." + refField : ""} points to unknown step ID "${refStepId}"`,
+            suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
           });
+          continue;
+        }
+
+        // Ordering: the referenced step must be guaranteed to complete first.
+        if (refStepId !== step.id && !before.has(refStepId)) {
+          diagnostics.push({
+            line,
+            severity: "error",
+            message: `Reference result.${refStepId} requires "${refStepId}" to be ordered before "${step.id}" (via blockedBy or routing), but it is not`,
+            suggestion: `Add blockedBy: [${refStepId}] to step "${step.id}", or route "${refStepId}" into it`,
+          });
+        }
+
+        // Field existence: unknown declared output is an error (standard fields always pass).
+        if (refField && !STANDARD_RESULT_FIELDS.has(refField)) {
+          const declared = declaredOutputsOf(refStepId);
+          if (declared && !declared.has(refField)) {
+            diagnostics.push({
+              line,
+              severity: "error",
+              message: `Reference result.${refStepId}.${refField} uses field "${refField}" which is not a declared output of "${refStepId}"`,
+              suggestion: declared.size > 0
+                ? `Declared outputs: ${[...declared].join(", ")}. Standard fields: summary, artifacts, files, status`
+                : `"${refStepId}" declares no outputs. Use .summary, .artifacts, .files, or .status`,
+            });
+          }
         }
       }
     }
@@ -731,6 +750,57 @@ export function validateFlowContent(
 }
 
 // ---- Cycle detection (Kahn's algorithm) -----------------------------------
+
+/**
+ * Compute, for each step, the set of step IDs guaranteed to complete before it
+ * ("happens-before"). Edges come from `blockedBy` (dep → step) AND routing
+ * (`on_complete`/`on_error`/fork+decision branches/loop targets: source → target).
+ * A reference `${{result.X}}` in step S is valid only when X is in orderedBefore[S].
+ */
+function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
+  // pred[Y] = set of X where X is an immediate happens-before predecessor of Y.
+  const pred = new Map<string, Set<string>>();
+  const addEdge = (from: string, to: string) => {
+    if (!from || !to) return;
+    if (!pred.has(to)) pred.set(to, new Set());
+    pred.get(to)!.add(from);
+  };
+
+  for (const step of flow.steps) {
+    const blockedBy = (step as { blockedBy?: string[] }).blockedBy;
+    if (blockedBy) for (const dep of blockedBy) addEdge(dep, step.id);
+
+    const onComplete = (step as { on_complete?: string }).on_complete;
+    if (onComplete) addEdge(step.id, onComplete);
+    const onError = (step as { on_error?: string }).on_error;
+    if (onError) addEdge(step.id, onError);
+
+    if (step.stepType === "fork" || step.stepType === "agent-decision") {
+      const branches = (step as ForkStep | AgentDecisionStep).branches;
+      if (branches) for (const target of Object.values(branches)) addEdge(step.id, target);
+    }
+    if (step.stepType === "agent-loop-decision") {
+      const s = step as AgentLoopDecisionStep;
+      addEdge(step.id, s.loop_target);
+      addEdge(step.id, s.exit_target);
+    }
+  }
+
+  // Transitive closure of predecessors for each step (BFS over pred edges).
+  const orderedBefore = new Map<string, Set<string>>();
+  for (const step of flow.steps) {
+    const ancestors = new Set<string>();
+    const queue = [...(pred.get(step.id) ?? [])];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      if (ancestors.has(cur)) continue;
+      ancestors.add(cur);
+      for (const p of pred.get(cur) ?? []) if (!ancestors.has(p)) queue.push(p);
+    }
+    orderedBefore.set(step.id, ancestors);
+  }
+  return orderedBefore;
+}
 
 function detectCycle(adjacency: Map<string, string[]>): string[] | null {
   const nodes = new Set<string>();

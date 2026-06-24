@@ -476,7 +476,42 @@ Template variables: placeholders in `task`, `inputs`, `question` fields. Expande
 
 > **Resolution order:** Variables expand at dispatch time. `${{result.X}}` only valid if step `X` already completed (guaranteed when `X` is in `blockedBy`).
 
-> **Missing values resolve to empty string.** Referencing unrun step, undeclared input, or non-existent field becomes `""`.
+> **Missing value at runtime resolves to empty string.** Reference surviving validation but no value at dispatch expands to `""`. Reference correctness checked ahead of time — see below.
+
+---
+
+## Reference Validation
+
+`validateFlowContent` checks every `${{result.X}}` and `${{result.X.field}}` at flow-load time. Invalid reference -> hard validation error. Blocks flow. No agent dispatched until fixed. Catches typos and broken wiring early. Does not silently expand to `""`.
+
+Three rules:
+
+**1. Step must exist.** Reference unknown step id -> hard validation error. Blocks flow.
+
+**2. `.field` must resolve.** Agent and code steps: `.field` must be declared output (agent `outputs:` or code-step `outputs:`) OR standard field. Standard fields always resolve: `summary`, `status`, `artifacts`, `files`, `fullOutput`. `.field` neither declared output nor standard -> hard validation error.
+
+**3. Referenced step must be ordered first.** `${{result.X}}` valid only if X guaranteed to complete before referencing step. Guarantee holds when X is transitive `blockedBy` ancestor OR X routes into referencing step via `on_complete` / `on_error` / branch / loop edge chain. Neither path -> hard validation error.
+
+> **Engine does not auto-add dependency.** Ordering fails -> author adds `blockedBy: [X]` or routing edge. pi-flows reports missing ordering as error. Never silently wires it.
+
+```mermaid
+flowchart TD
+  R["${{result.X.field}}" reference] --> E1{X exists?}
+  E1 -->|no| ERR[Hard validation error]
+  E1 -->|yes| E2{".field" declared output<br/>or standard field?}
+  E2 -->|no| ERR
+  E2 -->|yes| E3{X ordered before<br/>referencing step?}
+  E3 -->|no| ERR
+  E3 -->|yes| OK[Reference valid]
+```
+
+### `flow-ref` exception
+
+Sub-flow step ids not statically known to parent. `flow-ref` step ordered before referencing step -> references to sub-flow ids NOT flagged as unknown. `flow-ref` is ordering guarantee. Field/existence checks skipped for those ids.
+
+### Loop iteration 1-based
+
+`${{loop.STEP.iteration}}` 1-based. Consistent across loop. First body pass observes `iteration == 1` (not `0`). Body pass N and loop-decision step both observe `${{loop.STEP.iteration}} == N`.
 
 ---
 
