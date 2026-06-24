@@ -1,4 +1,5 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult } from "./types.js";
+import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult, CodeStep } from "./types.js";
+import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent } from "./execution.js";
 import { resolveModel } from "./model-roles.js";
@@ -56,8 +57,8 @@ export interface FlowRunOptions {
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
-  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string) => void;
-  onAgentComplete?: (agentName: string, stepId: string, result: AgentResult) => void;
+  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: { kind?: string }) => void;
+  onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { kind?: string }) => void;
   onToolCall?: (agentName: string, stepId: string, toolName: string, input: any) => void;
   onToolResult?: (agentName: string, stepId: string, toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (agentName: string, stepId: string, text: string) => void;
@@ -427,6 +428,7 @@ interface StepResult {
 async function executeStep(step: FlowStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   switch (step.stepType) {
     case "agent": return executeAgentStepWithRouting(step, ctx, options);
+    case "code": return executeCodeStepWithRouting(step, ctx, options);
     case "fork": return executeForkStep(step, ctx, options);
     case "conditional": return executeConditionalStep(step, ctx, options);
     case "agent-decision": return executeAgentDecisionStep(step, ctx, options);
@@ -439,6 +441,12 @@ async function executeAgentStepWithRouting(step: AgentStep, ctx: FlowContext, op
   const result = await executeAgentStep(step, ctx, options);
   if (!result) return {};
 
+  const nextStepId = result.success ? step.on_complete : step.on_error;
+  return { agentResult: result, nextStepId };
+}
+
+async function executeCodeStepWithRouting(step: CodeStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
+  const result = await executeCodeStep(step, ctx, options, options.flow.name);
   const nextStepId = result.success ? step.on_complete : step.on_error;
   return { agentResult: result, nextStepId };
 }
@@ -788,13 +796,15 @@ async function executeConditionalStep(step: ConditionalStep, ctx: FlowContext, _
     return { nextStepId: step.absent };
   }
 
-  // Check if the resolved field is non-empty
+  // Check if the resolved field is non-empty.
+  // Standard fields resolve directly; any other key resolves from typedOutputs
+  // (merged into result map via storeResult) before falling back to fullOutput.
   const target = field === "artifacts" ? result.artifacts
     : field === "summary" ? result.summary
     : field === "files" ? result.files
     : field === "status" ? result.status
-    : result.fullOutput;
-  const exists = target.trim().length > 0;
+    : (field in result ? (result as Record<string, string>)[field] : result.fullOutput);
+  const exists = (target ?? "").trim().length > 0;
   return { nextStepId: exists ? step.present : step.absent };
 }
 

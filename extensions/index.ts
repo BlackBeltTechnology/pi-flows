@@ -21,6 +21,9 @@ import { activate as activateFlowContext } from "./flow-context/index.js";
 import { activate as activateFlowWorkspace } from "./flow-workspace/index.js";
 import { activate as activateFlowFooter } from "./flow-footer.js";
 
+export type { CodeNodeContext, CodeNodeHandler } from "./flow-engine/types.js";
+export { FlowHardError } from "./flow-engine/types.js";
+
 export default function activate(pi: ExtensionAPI) {
   activateAutonomousMode(pi);
   activateFileTracker(pi);

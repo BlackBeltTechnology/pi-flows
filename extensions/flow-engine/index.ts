@@ -40,7 +40,10 @@ export type {
   TemplateContext,
   ArchitectMeta,
   CardConfig,
+  CodeNodeContext,
+  CodeNodeHandler,
 } from "./types.js";
+export { FlowHardError } from "./types.js";
 export { spawnAgent, expandTemplateVariables } from "./execution.js";
 export { runFlow, FlowCancelledError } from "./flow-execution.js";
 export type { FlowRunOptions, FlowContext } from "./flow-execution.js";

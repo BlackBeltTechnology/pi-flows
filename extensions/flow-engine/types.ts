@@ -67,6 +67,7 @@ export interface FlowConfig {
 
 export type FlowStep =
   | AgentStep
+  | CodeStep
   | ForkStep
   | ConditionalStep
   | AgentDecisionStep
@@ -130,6 +131,18 @@ export interface FlowRefStep {
   path: string; // Path or glob to flow file(s)
   on_complete?: string;
   on_error?: string;
+}
+
+export interface CodeStep {
+  stepType: "code";
+  id: string; // Step identifier (becomes default handler filename)
+  target?: string; // Optional override handler path (default: .pi/flows/handlers/<flow>/<id>.ts)
+  inputs?: Record<string, string>; // Named inputs wired from template expressions
+  outputs?: Array<{ name: string }>; // Declared output names (strings only)
+  blockedBy?: string[]; // Step IDs that must complete before this step runs
+  on_complete?: string; // Route to step ID on success
+  on_error?: string; // Route to step ID on error
+  timeout?: number; // Optional soft timeout in milliseconds
 }
 
 // ---- Agent execution results ----------------------------------------------
@@ -223,6 +236,39 @@ export interface FlowEventRecord {
   // Identifies the originating flow run (disambiguates multiple runs in one
   // session; also the supersede key for any future terminal-collapse entry).
   flowRunId: string;
+}
+
+// ---- Code node context & handler type ---------------------------------
+
+export interface CodeNodeContext {
+  signal: AbortSignal; // Flow abort signal; handler should respect it
+  cwd: string; // Project root
+  logger: (msg: string) => void; // Logs to step card
+  setSummary: (text: string) => void; // Sets step summary
+  flowName: string; // Name of the containing flow
+  stepId: string; // ID of this step
+  task: string; // Overall flow task text
+}
+
+/**
+ * Generic handler type for code nodes.
+ * Handler is the default export of a .ts module.
+ * Input keys are always strings (template-expanded); output must match declared outputs.
+ */
+export type CodeNodeHandler<I = Record<string, string>, O = Record<string, string>> = (
+  input: I,
+  ctx: CodeNodeContext,
+) => Promise<O>;
+
+/**
+ * Error class for hard failures in code nodes.
+ * Thrown from a code handler to unconditionally hard-fail the flow regardless of on_error.
+ */
+export class FlowHardError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FlowHardError";
+  }
 }
 
 // ---- Validation diagnostic ------------------------------------------------
