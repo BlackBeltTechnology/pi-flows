@@ -4,7 +4,7 @@
 // Validates agent .md content and returns LSP-style diagnostics:
 // { line, severity, message, suggestion? }
 //
-// Used internally by agent-write.ts. Not registered as a standalone tool.
+// Used internally by flow-agents.ts. Not registered as a standalone tool.
 // ---------------------------------------------------------------------------
 
 import type { Diagnostic } from "../types.js";
@@ -18,7 +18,7 @@ export type { Diagnostic };
 // `finish` is auto-injected by the guard and must NOT be declared.
 // `ask_user` and `subagent` are main-session-only or guard-blocked —
 // they must NOT be declared in agent frontmatter.
-// Extension tools (agent_catalog, agent_write, flow_write)
+// Extension tools (flow_agents, flow_write, flow_results)
 // are available to any agent that declares them in its tools: field.
 const BASE_TOOLS = new Set([
   "read",

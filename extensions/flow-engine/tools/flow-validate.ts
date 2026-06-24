@@ -262,7 +262,7 @@ export function validateFlowContent(
               line: stepPropLine(idx, s.id, "agent"),
               severity: "error",
               message: `Agent "${s.agent}" is not in the discovered agent catalog`,
-              suggestion: "Create the agent definition with agent_write or check the name spelling",
+              suggestion: "Create the agent definition with flow_agents (op: write) or check the name spelling",
             });
           }
           break;

@@ -1,9 +1,11 @@
 // ---------------------------------------------------------------------------
 // Flow Write Tool
 //
-// Validates flow YAML content via flow-validate, then writes to disk if valid.
-// Emits "flow:rediscover" event after successful write to trigger re-discovery.
-// Returns validation errors if the content is invalid.
+// Validates flow YAML content via flow-validate, then writes it to the
+// discovery-derived location .pi/flows/flows/<namespace>/<name>.yaml, which
+// auto-registers as the /<namespace>:<name> command. Emits "flow:rediscover"
+// after a successful write. Overwriting an existing file edits it. No raw
+// `path` param — the engine derives the canonical discovered location.
 // ---------------------------------------------------------------------------
 
 import { Type } from "@sinclair/typebox";
@@ -13,57 +15,50 @@ import { validateFlowContent } from "./flow-validate.js";
 import { generateCodeHandlers } from "../flow-generate.js";
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
 import { writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { join } from "node:path";
 
 export function registerFlowWriteTool(
   pi: ExtensionAPI,
   getDiscoveredAgents: () => Map<string, AgentConfig>,
+  projectRoot: string,
 ): void {
   pi.registerTool({
     name: "flow_write",
     label: "flow_write",
     description:
-      "Validate and write a flow YAML file. Validates internally first. If validation passes, writes the file to the specified path. Returns errors if invalid.",
+      "Validate and write a flow YAML file. Validates internally first; on " +
+      "success writes to .pi/flows/flows/<namespace>/<name>.yaml, which " +
+      "auto-registers as the /<namespace>:<name> command. namespace defaults " +
+      "to \"custom\". Overwriting an existing <namespace>/<name>.yaml edits it. " +
+      "Returns validation diagnostics on failure.",
     parameters: Type.Object({
-      path: Type.String({ description: "Absolute or relative path to write the flow .yaml file" }),
+      namespace: Type.Optional(Type.String({ description: "Flow namespace / subfolder (default \"custom\"). Becomes the /<namespace>: command prefix." })),
+      name: Type.String({ description: "Flow file name without extension. Becomes the command name after the namespace prefix." }),
       content: Type.String({ description: "The flow YAML content to validate and write" }),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      // Run validation first
-      const validation = validateFlowContent(params.content, getDiscoveredAgents);
+      const { name, content } = params as { namespace?: string; name: string; content: string };
+      const namespace = (params as { namespace?: string }).namespace?.trim() || "custom";
 
+      // Run validation first
+      const validation = validateFlowContent(content, getDiscoveredAgents);
       if (!validation.valid) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                written: false,
-                path: params.path,
-                diagnostics: validation.diagnostics,
-              }, null, 2),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, diagnostics: validation.diagnostics }, null, 2) }],
           details: {},
         };
       }
 
-      // Ensure directory exists and write the file
+      const flowDir = join(projectRoot, ".pi", "flows", "flows", namespace);
+      const filePath = join(flowDir, `${name}.yaml`);
+      const command = `${namespace}:${name}`;
+
       try {
-        mkdirSync(dirname(params.path), { recursive: true });
-        writeFileSync(params.path, params.content, "utf-8");
+        mkdirSync(flowDir, { recursive: true });
+        writeFileSync(filePath, content, "utf-8");
       } catch (err) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify({
-                written: false,
-                path: params.path,
-                error: err instanceof Error ? err.message : String(err),
-              }, null, 2),
-            },
-          ],
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: err instanceof Error ? err.message : String(err) }, null, 2) }],
           details: {},
         };
       }
@@ -72,27 +67,18 @@ export function registerFlowWriteTool(
       // Best-effort: a generation failure must not fail the write itself.
       let generationDiagnostics: typeof validation.diagnostics = [];
       try {
-        const flow = parseFlowYamlString(params.content, params.path);
-        const gen = generateCodeHandlers(flow, params.path);
+        const flow = parseFlowYamlString(content, filePath);
+        const gen = generateCodeHandlers(flow, filePath);
         generationDiagnostics = gen.diagnostics;
       } catch {
         // Parsing/generation problems are non-fatal here — validation already passed.
       }
 
-      // Trigger re-discovery so the new flow is available immediately
+      // Trigger re-discovery so the new flow registers as a command immediately
       pi.events.emit("flow:rediscover", {});
 
       return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              written: true,
-              path: params.path,
-              diagnostics: [...validation.diagnostics, ...generationDiagnostics],
-            }, null, 2),
-          },
-        ],
+        content: [{ type: "text" as const, text: JSON.stringify({ written: true, name, namespace, command, path: filePath, diagnostics: [...validation.diagnostics, ...generationDiagnostics] }, null, 2) }],
         details: {},
       };
     },

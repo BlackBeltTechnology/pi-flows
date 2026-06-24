@@ -319,7 +319,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // definition objects (the previous behaviour) silently failed: the SDK's
   // `allowedToolNames` set was filled with `[object Object]` entries that
   // never match real tool names, so EVERY tool got filtered out and the
-  // outbound payload contained no `tools` array. The architect subagent then
+  // outbound payload contained no `tools` array. A spawned subagent then
   // saw "Available tools: (none)" and refused to call any tool.
   //
   // pi's SDK looks tools up by their canonical lowercase name ("read",
@@ -329,7 +329,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // the lowercase pi-internal names here.
   const builtinToolNames = agent.tools.filter(t => TOOL_FACTORIES[t]);
 
-  // Custom tools (agent_catalog, agent_write, flow_write, finish, ask_user, …)
+  // Custom tools (flow_agents, flow_write, finish, ask_user, …)
   // are passed as full ToolDefinition objects via `customTools`. The SDK adds
   // them to its tool registry. For anthropic-messages sessions they need the
   // mcp__flows__ prefix on their wire name so Claude's endpoint accepts them.
@@ -403,7 +403,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // IMPORTANT: we pass `tools: undefined` (NOT a filtered name list) so
   // pi-coding-agent's `allowedToolNames` is undefined and the SDK does NOT
   // filter out our `customTools` or extension-registered tools (the guard's
-  // `mcp__flows__finish`, the architect's `mcp__flows__agent_catalog`, etc.).
+  // `mcp__flows__finish`, `mcp__flows__flow_agents`, etc.).
   //
   // The agent's tool sandbox is enforced by the guard extension (which blocks
   // tool_call events for unauthorized names) — not by the SDK's name allowlist.
@@ -475,7 +475,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // setActiveToolsByName here:
   //   - Picks the prefixed built-in names (read/grep/find — or Read/Grep/Find
   //     once pi-ai canonicalizes them outbound).
-  //   - Adds prefixed customTools (mcp__flows__agent_catalog, mcp__flows__flow_write, …).
+  //   - Adds prefixed customTools (mcp__flows__flow_agents, mcp__flows__flow_write, …).
   //   - Adds the guard's prefixed finish tool (mcp__flows__finish).
   // The system prompt + outbound `tools` array are rebuilt accordingly.
   const activeToolNames = [

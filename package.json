@@ -26,6 +26,7 @@
   "files": [
     "extensions/",
     "agents/",
+    "skills/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

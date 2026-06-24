@@ -286,27 +286,19 @@ export function activate(pi: ExtensionAPI) {
         const flowFiles = getFlowFiles(projectRoot);
         const hasFlows = names.length > 0 || flowFiles.length > 0;
 
-        const options = ["New flow"];
-        if (hasFlows) options.push("List flows");
-        options.push("Cancel");
-
-        const topAction = await ctx.ui.select("Flows", options);
-        if (!topAction || topAction === "Cancel") return;
-
-        if (topAction === "New flow") {
-          const description = await ctx.ui.input("Describe what the flow should do:", "") || "";
-          if (!description) {
-            ctx.ui.notify("Cancelled.", "warning");
-            return;
-          }
-          pi.events.emit("flows:new-request", { description });
+        if (!hasFlows) {
+          ctx.ui.notify("No flows yet. Enable `flows.editFlow: true` in .pi/settings.json to create/edit flows in this session.", "info");
           return;
         }
+
+        const topAction = await ctx.ui.select("Flows", ["List flows", "Cancel"]);
+        if (!topAction || topAction === "Cancel") return;
 
         if (topAction === "List flows") {
           const allNames = [...new Set([...names, ...flowFiles.map(f => f.name)])];
           ctx.ui.notify(
-            `Available flows:\n${allNames.map(f => `  • ${f}`).join("\n")}\n\nUse /flows <name> for actions.`,
+            `Available flows:\n${allNames.map(f => `  • ${f}`).join("\n")}\n\n` +
+            `Run a flow with its /<name> command. Use /flows <name> for actions. Set \`flows.editFlow: true\` in .pi/settings.json to create/edit flows here.`,
             "info",
           );
           return;
@@ -327,7 +319,6 @@ export function activate(pi: ExtensionAPI) {
       // Build action menu with descriptions
       const actionItems: SelectItem[] = [];
       if (hasResult) actionItems.push({ value: "inject", label: "Inject context", description: "Add flow result to conversation" });
-      if (matchingFlow) actionItems.push({ value: "edit", label: "Edit", description: "Open in flow architect" });
       if (hasResult || matchingFlow) actionItems.push({ value: "delete", label: "Delete", description: "Remove flow and results" });
 
       const { selectOverlay } = await import("../shared/select-overlay.js");
@@ -336,9 +327,6 @@ export function activate(pi: ExtensionAPI) {
 
       if (action === "inject") {
         pi.sendUserMessage(`Read the flow results for "${name}"`);
-      } else if (action === "edit") {
-        // Delegate to flow-engine via event
-        pi.events.emit("flows:edit-request", { flowName: name, flowPath: matchingFlow!.path });
       } else if (action === "delete") {
         const confirmed = await ctx.ui.confirm(`Delete flow "${name}"?`, "");
         if (!confirmed) {
@@ -485,70 +473,6 @@ export function activate(pi: ExtensionAPI) {
       } catch (err: any) {
         ctx.ui.notify(`Failed to generate: ${err.message}`, "error");
       }
-    },
-  });
-
-  // -- /flows:edit <name> — delegate to flow-engine --------------------
-
-  pi.registerCommand("flows:edit", {
-    description: "Edit an existing flow via the flow architect",
-    getArgumentCompletions: (prefix: string) => {
-      const flowFiles = getFlowFiles(projectRoot);
-      const filtered = prefix
-        ? flowFiles.filter(f => f.name.startsWith(prefix) || f.name.includes(prefix))
-        : flowFiles;
-      if (filtered.length === 0) return null;
-      return filtered.map(f => ({
-        value: f.name,
-        label: f.name,
-        description: "Flow",
-      }));
-    },
-    handler: async (args, ctx) => {
-      let name = args?.trim();
-
-      if (!name) {
-        const flowFiles = getFlowFiles(projectRoot);
-        if (flowFiles.length === 0) {
-          ctx.ui.notify("No flows found to edit.", "info");
-          return;
-        }
-        name = await ctx.ui.select("Select flow to edit:", flowFiles.map(f => f.name)) || "";
-        if (!name) {
-          ctx.ui.notify("Cancelled.", "warning");
-          return;
-        }
-      }
-
-      const flowFiles = getFlowFiles(projectRoot);
-      const matchingFlow = flowFiles.find(f => f.name === name);
-
-      if (!matchingFlow) {
-        ctx.ui.notify(`No flow file found for "${name}".`, "warning");
-        return;
-      }
-
-      // Delegate to flow-engine which has the architect infrastructure
-      pi.events.emit("flows:edit-request", { flowName: name, flowPath: matchingFlow.path });
-    },
-  });
-
-  // -- /flows:new — design a new flow ----------------------------------------
-
-  pi.registerCommand("flows:new", {
-    description: "Design a new flow",
-    handler: async (args, ctx) => {
-      let description = args?.trim() || "";
-
-      if (!description) {
-        description = await ctx.ui.input("Describe what the flow should do:", "") || "";
-        if (!description) {
-          ctx.ui.notify("Cancelled.", "warning");
-          return;
-        }
-      }
-
-      pi.events.emit("flows:new-request", { description });
     },
   });
 }

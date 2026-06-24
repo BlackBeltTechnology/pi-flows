@@ -432,4 +432,4 @@ See [public-api.md](public-api.md) for full API documentation.
 | Tool not available to agents | Use `flow:register-tool`, not `pi.registerTool()`. The latter only registers in the main session. |
 | Guard blocks `finish` | The guard automatically whitelists `finish`. Never block it. |
 | Gate check is async | Gates must return synchronously. Cache the auth state; update it asynchronously in background. |
-| Re-discovery not triggered | Call `flow:rediscover` or write files via `agent_write`/`flow_write` (which auto-trigger re-discovery). |
+| Re-discovery not triggered | Call `flow:rediscover` or write files via `flow_agents` (op `write`) / `flow_write` (which auto-trigger re-discovery). |

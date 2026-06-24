@@ -1,6 +1,6 @@
 # Tools Reference
 
-pi-flows registers tools exposed to agents running inside flow sessions. Tools divided into three contexts: **main session** (available to user-facing LLM), **subagent sessions** (available only to agents spawned by flow), **architect-only** (used exclusively by flow-architect agent).
+pi-flows registers tools exposed to agents running inside flow sessions. Tools divided into two contexts: **main session** (available to user-facing LLM), **subagent sessions** (available only to agents spawned by flow).
 
 ---
 
@@ -12,11 +12,10 @@ pi-flows registers tools exposed to agents running inside flow sessions. Tools d
 | `skill_read` | Main session | `registerSkillReadTool` |
 | `subagent` | Main session | `registerSubagentTool` |
 | `finish` | Subagent sessions | Guard extension (per-session) |
-| `agent_catalog` | Architect only | `registerAgentCatalogTool` |
-| `agent_write` | Architect only | `registerAgentWriteTool` |
-| `flow_write` | Architect only | `registerFlowWriteTool` |
+| `flow_agents` | Main session (inactive by default) | `registerFlowAgentsTool` |
+| `flow_write` | Main session (inactive by default) | `registerFlowWriteTool` |
 
-> **"Architect only"** means tools available inside `flow-architect` agent's session and in any other agent session launched via architect subprocess. **Not** available to ordinary flow agents or main LLM session.
+> **Inactive by default:** `flow_agents` and `flow_write` registered in main session, inactive until `flows.editFlow` setting enabled in `.pi/settings.json`. Session start reads `flows.editFlow`, activates/deactivates both tools via `pi.setActiveTools()`. Project `.pi/settings.json` (only when project trusted) overrides global `~/.pi/agent/settings.json`. Top-level `flowsEditFlow` boolean = alias for `flows.editFlow`. Default unset = disabled. Setting change takes effect next session start (restart needed). Gating prevents unintended authoring outside dedicated contexts.
 
 External packages can add tools to subagent sessions via `flow:register-tool`. See [events-api.md](events-api.md#flowregister-tool).
 
@@ -109,6 +108,131 @@ Run named agent as subprocess. Internal tool powering agent steps in flows. Also
 
 ---
 
+## Main Session Authoring Tools (Inactive by Default)
+
+Tools registered in main session, inactive until `flows.editFlow: true` set in `.pi/settings.json` (e.g. `{ "flows": { "editFlow": true } }`). Gating prevents unintended authoring outside dedicated contexts.
+
+### `flow_agents`
+
+Discover agents in catalog or write new/updated agent file. Combines agent discovery and authoring in single interface.
+
+**Available in:** Main session (requires `flows.editFlow: true` in settings).
+
+**Parameters:**
+```typescript
+{
+  op: "list" | "write";
+}
+```
+
+**`op: "list"` (Agent Discovery)**
+
+Returns full agent catalog with metadata for each discovered agent.
+
+**Returns:** JSON array of agent catalog entries:
+```typescript
+Array<{
+  name:        string;
+  description: string;
+  tools:       string[];
+  inputs?:     string[];       // declared input names
+  outputs?:    Array<{ name: string; description?: string }>;
+  card?:       { type?: string; label?: string; metric?: string };
+  source_type: "local" | "package" | "built-in";
+  source_path?: string;        // only for "local" agents
+  architect: {
+    use_when?:   string;
+    produces?:   string;
+    depends_on?: string;
+    domain?:     string;
+  };
+}>
+```
+
+`source_type` classification:
+- `"local"` — project-specific agents in `.pi/flows/agents/` (can read and modify)
+- `"package"` — from registered dependent package
+- `"built-in"` — from pi-flows itself
+
+**`op: "write"` (Agent Authoring)**
+
+Validate and write agent `.md` file. On validation success: writes to `.pi/flows/agents/<name>.md` (filename from agent's frontmatter `name` field) and triggers `flow:rediscover` to update catalog.
+
+**Additional parameters (when `op: "write"`):**
+```typescript
+{
+  op:      "write";
+  content: string;  // Agent .md file content (frontmatter + body)
+}
+```
+
+**Returns:**
+```typescript
+{
+  written:     boolean;   // false if validation failed
+  diagnostics: Diagnostic[];  // validation errors/warnings
+}
+```
+
+`Diagnostic` shape:
+```typescript
+{
+  line:        number;
+  severity:    "error" | "warning";
+  message:     string;
+  suggestion?: string;
+}
+```
+
+On validation failure: no file written, `written` is `false`. On success: file written and catalog updated via `flow:rediscover`.
+
+### `flow_write`
+
+Validate and write flow `.yaml` file. On validation success: writes to `.pi/flows/flows/<namespace>/<name>.yaml` and triggers `flow:rediscover` to register flow as `/<namespace>:<name>` command. Overwriting existing file edits in-place (no separate edit tool).
+
+**Available in:** Main session (requires `flows.editFlow: true` in settings).
+
+**Parameters:**
+```typescript
+{
+  namespace?: string;  // Flow namespace (default: "custom"). Auto-registers as /<namespace>:<name> command
+  name:       string;  // Flow name. Determines filename in .pi/flows/flows/<namespace>/<name>.yaml
+  content:    string;  // Flow YAML content
+}
+```
+
+**Returns:**
+```typescript
+{
+  written:     boolean;   // false if validation failed
+  diagnostics: Diagnostic[];  // validation errors/warnings
+}
+```
+
+`Diagnostic` shape:
+```typescript
+{
+  line:        number;
+  severity:    "error" | "warning";
+  message:     string;
+  suggestion?: string;
+}
+```
+
+On validation failure: no file written, `written` is `false`. On success: file written to discovery path and registered as command.
+
+**Validation checks performed:**
+- Required fields present (`name`, `description`, `steps`)
+- All step IDs unique
+- All `agent:` references resolve to known agent names
+- All `blockedBy:` references point to earlier agent steps
+- All `branches:` target step IDs exist in flow
+- All `loop_target` / `exit_target` step IDs exist
+- Warning if declared agent `inputs:` not wired in flow step
+- Warning for steps referencing undefined step IDs in template variables
+
+---
+
 ## Subagent Session Tools
 
 ### `finish`
@@ -135,123 +259,17 @@ Submit agent's final structured result. **Every agent must call `finish` as last
 
 ---
 
-## Architect-Only Tools
-
-Tools available only to `flow-architect` (and agents it spawns), registered via `subagentOnlyPi` shim. **Do not appear** in main session's system prompt.
-
-### `agent_catalog`
-
-List all discovered agents with full metadata. Used by architect to understand what agents are available before designing flow.
-
-**Parameters:** `{}` (no parameters)
-
-**Returns:** JSON array of agent catalog entries:
-```typescript
-Array<{
-  name:        string;
-  description: string;
-  tools:       string[];
-  inputs?:     string[];       // declared input names
-  outputs?:    Array<{ name: string; description?: string }>;
-  card?:       { type?: string; label?: string; metric?: string };
-  source_type: "local" | "package" | "built-in";
-  source_path?: string;        // only for "local" agents
-  architect: {
-    use_when?:   string;
-    produces?:   string;
-    depends_on?: string;
-    domain?:     string;
-  };
-}>
-```
-
-`source_type` classification:
-- `"local"` — project-specific agents in `.pi/flows/agents/` (can be read and modified)
-- `"package"` — from registered dependent package
-- `"built-in"` — from pi-flows itself
-
----
-
-### `agent_write`
-
-Validate and write agent `.md` file. Validates content first; if validation passes, writes file and triggers re-discovery via `flow:rediscover`.
-
-**Parameters:**
-```typescript
-{
-  path:    string;  // Absolute or relative path for the .md file
-  content: string;  // Agent .md file content (frontmatter + body)
-}
-```
-
-**Returns:**
-```typescript
-{
-  written:     boolean;
-  path:        string;
-  diagnostics: Diagnostic[];  // validation errors/warnings
-  error?:      string;        // filesystem error if write failed
-}
-```
-
-`Diagnostic` shape:
-```typescript
-{
-  line:        number;
-  severity:    "error" | "warning";
-  message:     string;
-  suggestion?: string;
-}
-```
-
----
-
-### `flow_write`
-
-Validate and write flow `.yaml` file. Validates YAML structure, checks all referenced agent names exist in catalog. Triggers `flow:rediscover` on success.
-
-**Parameters:**
-```typescript
-{
-  path:    string;  // Absolute or relative path for the .yaml file
-  content: string;  // Flow YAML content
-}
-```
-
-**Returns:**
-```typescript
-{
-  written:     boolean;
-  path:        string;
-  diagnostics: Diagnostic[];
-  error?:      string;
-}
-```
-
-**Validation checks performed:**
-- Required fields present (`name`, `description`, `steps`)
-- All step IDs unique
-- All `agent:` references resolve to known agent names
-- All `blockedBy:` references point to earlier agent steps
-- All `branches:` target step IDs exist in flow
-- All `loop_target` / `exit_target` step IDs exist
-- Warning if declared agent `inputs:` not wired in flow step
-- Warning for steps referencing undefined step IDs in template variables
-
----
-
 ## Tool Availability Matrix
 
-| Tool | Main session LLM | Flow agent | Architect agent | External package agent |
-|------|:---:|:---:|:---:|:---:|
-| `ask_user` | ✓ | ✓ (blocked in autonomous) | ✓ | ✓ |
-| `skill_read` | ✓ | ✓ | ✓ | ✓ |
-| `subagent` | ✓ | — | — | — |
-| `finish` | — | ✓ | ✓ | ✓ |
-| `agent_catalog` | — | — | ✓ | — |
-| `agent_write` | — | — | ✓ | — |
-| `flow_write` | — | — | ✓ | — |
-| `read/write/edit/grep/…` | ✓ (always) | declared in frontmatter | declared in frontmatter | declared in frontmatter |
-| Custom (via `flow:register-tool`) | — | ✓ | ✓ | ✓ |
+| Tool | Main session LLM | Flow agent | External package agent |
+|------|:---:|:---:|:---:|
+| `ask_user` | ✓ | ✓ (blocked in autonomous) | ✓ |
+| `skill_read` | ✓ | ✓ | ✓ |
+| `subagent` | ✓ | — | — |
+| `flow_agents` | ✓ (inactive unless `flows.editFlow`) | — | — |
+| `flow_write` | ✓ (inactive unless `flows.editFlow`) | — | — |
+| `finish` | — | ✓ | ✓ |
+| `read/write/edit/grep/…` | ✓ (always) | declared in frontmatter | declared in frontmatter |
+| Custom (via `flow:register-tool`) | — | ✓ | ✓ |
 
 Standard filesystem tools (`read`, `write`, `edit`, `grep`, `find`, `ls`, `bash`) granted to agents based on `tools:` field in `.md` frontmatter. Guard extension enforces agents only call tools they declared.
