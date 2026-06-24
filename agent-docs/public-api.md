@@ -11,9 +11,10 @@ pi-flows exports core types and functions from `pi-flows/extensions/flow-engine/
 import type {
   AgentConfig, FlowConfig, FlowResult, AgentResult,
   FlowStep, AgentStep, ForkStep, ConditionalStep,
-  AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep,
+  AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, CodeStep,
   TemplateContext, SubagentEvent, ArchitectMeta, CardConfig,
   FlowRunOptions, FlowContext, FlowIOAdapter, FlowObserver,
+  CodeNodeContext, CodeNodeHandler,
 } from "pi-flows/extensions/flow-engine/index.js";
 
 import {
@@ -112,7 +113,8 @@ type FlowStep =
   | ConditionalStep
   | AgentDecisionStep
   | AgentLoopDecisionStep
-  | FlowRefStep;
+  | FlowRefStep
+  | CodeStep;
 
 interface AgentStep {
   stepType:    "agent";
@@ -171,6 +173,18 @@ interface FlowRefStep {
   path:        string;
   on_complete?: string;
   on_error?:   string;
+}
+
+interface CodeStep {
+  stepType:    "code";
+  id:          string;          // filesystem-safe; becomes handler filename
+  inputs?:     Record<string, string>;   // name → template expression
+  outputs?:    Array<{ name: string }>;  // declared output names
+  target?:     string;          // override handler path; no scaffold generated when set
+  blockedBy?:  string[];
+  on_complete?: string;
+  on_error?:   string;
+  timeout?:    number;          // ms; soft deadline — aborts ctx.signal on expiry
 }
 ```
 
@@ -347,6 +361,58 @@ interface SubagentEvent {
   timestamp:  number;
   data:       any;
 }
+```
+
+---
+
+### `CodeNodeContext`
+
+Context object passed as second argument to every code step handler.
+
+Also exported from the package root: `import type { CodeNodeContext } from "@blackbelt-technology/pi-flows"`.
+
+```typescript
+interface CodeNodeContext {
+  signal:     AbortSignal;                   // aborted when timeout expires; check cooperatively
+  cwd:        string;                        // project root directory
+  logger:     (msg: string) => void;         // stream text to step card in real time
+  setSummary: (text: string) => void;        // set step summary shown after completion
+  flowName:   string;                        // name of the running flow
+  stepId:     string;                        // this step's id field
+  task:       string;                        // the flow task string
+}
+```
+
+---
+
+### `CodeNodeHandler<I, O>`
+
+Type alias for code step handler default exports.
+
+Also exported from the package root: `import type { CodeNodeHandler } from "@blackbelt-technology/pi-flows"`.
+
+```typescript
+type CodeNodeHandler<I, O> = (input: I, ctx: CodeNodeContext) => Promise<O>;
+```
+
+- `I`: object type with one `string` property per declared input.
+- `O`: object type with one property per declared output. All keys required. No extras.
+- Plain `throw` (any `Error`) → `soft` failure.
+- `throw new FlowHardError(msg)` → `hard` failure — stops flow regardless of `on_error`.
+
+```typescript
+import type { CodeNodeContext, CodeNodeHandler } from "@blackbelt-technology/pi-flows";
+
+interface Input  { query: string }
+interface Output { result: string }
+
+const handler: CodeNodeHandler<Input, Output> = async (input, ctx) => {
+  ctx.logger(`Running query: ${input.query}`);
+  ctx.setSummary("Query complete");
+  return { result: "ok" };
+};
+
+export default handler;
 ```
 
 ---

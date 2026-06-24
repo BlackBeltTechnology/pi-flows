@@ -171,6 +171,7 @@ Branch based on whether a field from a previous step's result is non-empty.
 | `summary` | The `<summary>` from `finish` |
 | `files` | The files list from `finish` |
 | `status` | The status field (`"complete"`, `"error"`, etc.) |
+| _any typed output name_ | A typed output declared in an agent's `outputs:` or a code step's `outputs:` — checked against the merged result map |
 
 ---
 
@@ -297,6 +298,84 @@ Delegate execution to another flow file. The sub-flow runs to completion before 
 - Sub-flow agent results are flat-merged into the parent's result context
 - The flow-ref step ID stores the last agent's result
 - Downstream steps can reference sub-flow agents: `${{result.sub-agent-id.summary}}`
+
+---
+
+### Code Step
+
+Execute a TypeScript handler function in-process. Code steps run deterministic, tool-free logic — validation, transformation, computation — without spawning an agent.
+
+**Syntax:**
+
+```yaml
+  - id: validate-nav
+    type: code
+    inputs:
+      invoice: "${{result.extract.canonical}}"
+    outputs:
+      - name: valid
+      - name: nav_record
+    blockedBy: [extract]
+    on_complete: approve
+    on_error: park
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `id` | ✓ | Unique step identifier. Also determines the handler filename — must be filesystem-safe. |
+| `type` | ✓ | Must be `code`. Not inferred; always write it explicitly. |
+| `inputs` | | Map of input name → `${{...}}` template string. Each resolved value arrives in the handler as a string. Unresolved templates become `""`. |
+| `outputs` | | List of `{ name }` objects declaring which keys the handler must return. Names must be valid JS identifiers and unique within the step. |
+| `target` | | Override the handler file path. When set, the step imports that file directly and no `.ts.default` scaffold is generated. |
+| `blockedBy` | | Array of step IDs that must complete before this step runs. |
+| `on_complete` | | Step ID to route to on success. |
+| `on_error` | | Step ID to route to on recoverable failure. |
+| `timeout` | | Soft deadline in milliseconds. On expiry the engine aborts `ctx.signal` and the step soft-fails. |
+
+**Handler contract:**
+
+The handler is the module's **default export** — an `async` function `(input, ctx) => output`.
+
+```typescript
+import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
+
+interface Input  { invoice: string }
+interface Output { valid: string; nav_record: string }
+
+export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
+  ctx.logger("validating invoice...");
+  return { valid: "true", nav_record: "..." };
+}
+```
+
+- **`input`** — every declared input, template-expanded to a string, keyed by name.
+- **`ctx`** — a `CodeNodeContext` with `signal`, `cwd`, `logger`, `setSummary`, `flowName`, `stepId`, and `task`. See [public-api.md → CodeNodeContext](./public-api.md#codenodecontext).
+- **Return** — an object containing **exactly** the declared `outputs`. Every declared key must be present; no undeclared extras. A step with no `outputs` must return `{}`.
+
+**Value coercion:**
+
+| Return value type | Behaviour |
+|-------------------|-----------|
+| `string` | Passes through unchanged |
+| `number`, `boolean`, `bigint` | Converted via `String()` |
+| `object`, `array`, `null` | Soft failure naming the offending key — call `JSON.stringify()` intentionally if you need serialised data |
+
+**Handler location and generation:**
+
+By convention the real handler lives at `.pi/flows/handlers/<flow>/<id>.ts`. A scaffold template is written alongside it as `.pi/flows/handlers/<flow>/<id>.ts.default` on every successful flow save and via the `/flows:generate <name>` command. The `.default` suffix makes the file un-importable by the engine; copy it, drop `.default`, then implement the body. The template is always regenerated from the YAML; it never touches the real `.ts`.
+
+When a `target:` field is set the step imports that path directly and no template is generated.
+
+**Failure modes for code steps:**
+
+| Condition | Outcome |
+|-----------|---------|
+| Plain `throw` / contract violation / coercion error / missing handler / timeout | Soft failure — routes to `on_error`, or hard-fails the flow when `on_error` is absent |
+| `throw new FlowHardError(msg)` | Unconditional hard failure — stops the flow immediately regardless of `on_error` |
+
+See [Failure Modes](#failure-modes) and [public-api.md → FlowHardError](./public-api.md#flowharderror).
 
 ---
 

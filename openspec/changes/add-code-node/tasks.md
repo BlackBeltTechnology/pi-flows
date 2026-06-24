@@ -34,27 +34,27 @@
 
 ## 5. Handler generation (new flow-generate module)
 
-- [ ] 5.1 Write tests: `.ts.default` scaffold reflects declared Input/Output interfaces + default-export stub returning empty outputs
-- [ ] 5.2 Implement scaffold generation for convention nodes at `.pi/flows/handlers/<flow>/<id>.ts.default`; resolve convention path from flow + id
-- [ ] 5.3 Write tests: regeneration always rewrites `.ts.default`, never touches the real `.ts`; custom `target:` nodes get NO template
-- [ ] 5.4 Implement regeneration policy (always rewrite template; skip template for custom-target nodes)
-- [ ] 5.5 Write tests for drift detection: textual Input/Output interface-block compare vs YAML → non-fatal warning; silent skip when blocks absent
-- [ ] 5.6 Implement drift detection emitting a non-fatal warning diagnostic
+- [x] 5.1 Write tests: `.ts.default` scaffold reflects declared Input/Output interfaces + default-export stub returning empty outputs
+- [x] 5.2 Implement scaffold generation for convention nodes at `.pi/flows/handlers/<flow>/<id>.ts.default`; resolve convention path from flow + id
+- [x] 5.3 Write tests: regeneration always rewrites `.ts.default`, never touches the real `.ts`; custom `target:` nodes get NO template
+- [x] 5.4 Implement regeneration policy (always rewrite template; skip template for custom-target nodes)
+- [x] 5.5 Write tests for drift detection: textual Input/Output interface-block compare vs YAML → non-fatal warning; silent skip when blocks absent
+- [x] 5.6 Implement drift detection emitting a non-fatal warning diagnostic
 
 ## 6. Generation triggers
 
-- [ ] 6.1 Invoke generation from `flow-write.ts` on successful write (operating on the persisted YAML)
-- [ ] 6.2 Register a `/flows:generate <name>` slash command that regenerates a saved flow's code-node templates
-- [ ] 6.3 Write a test that flow_write success produces/refreshes the expected `.ts.default` files
+- [x] 6.1 Invoke generation from `flow-write.ts` on successful write (operating on the persisted YAML)
+- [x] 6.2 Register a `/flows:generate <name>` slash command that regenerates a saved flow's code-node templates
+- [x] 6.3 Write a test that flow_write success produces/refreshes the expected `.ts.default` files
 
 ## 7. Integration & verification
 
-- [ ] 7.1 End-to-end test: a flow with a code node wires `${{result.<id>.<output>}}` into a downstream agent step
-- [ ] 7.2 End-to-end test: missing handler routes on_error; implemented handler succeeds
-- [ ] 7.3 Run `npm run lint`, `npm run typecheck`, `npm test`; fix fallout
+- [x] 7.1 End-to-end test: a flow with a code node wires `${{result.<id>.<output>}}` into a downstream agent step
+- [x] 7.2 End-to-end test: missing handler routes on_error; implemented handler succeeds
+- [x] 7.3 Run `npm run lint`, `npm run typecheck`, `npm test`; fix fallout
 
 ## 8. Documentation
 
-- [ ] 8.1 Delegate docs updates to a subagent: `docs/flows.md` (code step type), `docs/flow-authoring.md` (handler contract + generation), `docs/public-api.md` (CodeNodeContext)
-- [ ] 8.2 Delegate the caveman mirror to a subagent: `agent-docs/flows.md`, `agent-docs/flow-authoring.md`, `agent-docs/public-api.md`
-- [ ] 8.3 Add a CHANGELOG.md entry for the `code` node + `/flows:generate`
+- [x] 8.1 Delegate docs updates to a subagent: `docs/flows.md` (code step type), `docs/flow-authoring.md` (handler contract + generation), `docs/public-api.md` (CodeNodeContext)
+- [x] 8.2 Delegate the caveman mirror to a subagent: `agent-docs/flows.md`, `agent-docs/flow-authoring.md`, `agent-docs/public-api.md`
+- [x] 8.3 Add a CHANGELOG.md entry for the `code` node + `/flows:generate`

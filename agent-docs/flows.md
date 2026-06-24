@@ -300,6 +300,106 @@ Delegate execution to another flow file. Sub-flow runs to completion before cont
 
 ---
 
+### Code Step
+
+Execute TypeScript handler function in-process. No agent or LLM dispatch.
+
+**Syntax:**
+
+```yaml
+  - id: validate
+    type: code
+    inputs:
+      data: "${{result.fetcher.artifacts}}"
+    outputs:
+      - name: is_valid
+      - name: error_message
+    on_complete: next-step
+    on_error: error-handler
+    timeout: 30000
+```
+
+**Field reference:**
+
+| Field | Required | Description |
+|-------|:--------:|-------------|
+| `id` | ✓ | Unique step identifier. Filesystem-safe. Becomes handler filename. |
+| `type` | ✓ | Must be `code`. |
+| `inputs` | | Map of name → `${{...}}` template expression. Each value expanded to string at runtime. Unresolved → `""`. Never `undefined`. |
+| `outputs` | | List of `{ name }` objects. Names unique, valid JS identifiers. Optional — omit for side-effect-only steps. |
+| `target` | | Override handler file path. Steps with `target` get no generated scaffold. |
+| `blockedBy` | | Array of step IDs that must complete before this step runs. |
+| `on_complete` | | Step ID to route to on success. |
+| `on_error` | | Step ID to route to on error. |
+| `timeout` | | Milliseconds. Soft deadline — aborts `ctx.signal` on expiry → soft failure. |
+
+**Handler locations:**
+
+| File | Purpose |
+|------|---------|
+| `.pi/flows/handlers/<flow>/<id>.ts` | Real handler (implement here) |
+| `.pi/flows/handlers/<flow>/<id>.ts.default` | Generated scaffold — `.default` suffix makes it un-importable (inert) |
+
+Copy `.ts.default` → remove `.default` suffix → implement. Scaffold always regenerated on flow save or `/flows:generate <name>`. Real `.ts` never touched by generation. `target:` steps get no scaffold.
+
+**Handler contract:**
+
+```typescript
+import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
+
+interface Input  { data: string }                                    // one key per declared input
+interface Output { is_valid: string; error_message: string }         // one key per declared output
+
+export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
+  ctx.logger("validating...");
+  ctx.setSummary("Validation complete");
+  return { is_valid: "true", error_message: "" };
+}
+```
+
+**`CodeNodeContext` fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `signal` | `AbortSignal` | Aborted when `timeout` expires. Check cooperatively in loops. |
+| `cwd` | `string` | Project root directory. |
+| `logger(msg)` | `(msg: string) => void` | Stream text to step card. |
+| `setSummary(text)` | `(text: string) => void` | Set step summary shown after completion. |
+| `flowName` | `string` | Name of the running flow. |
+| `stepId` | `string` | This step's `id`. |
+| `task` | `string` | The flow task string. |
+
+**Return rules:**
+
+- Return exactly declared outputs. All keys present. No extras.
+- No `outputs:` declared → return `{}`.
+- `string` values: passthrough verbatim.
+- `number` / `boolean` / `bigint` → coerced via `String()`.
+- `object` / `array` / `null` → soft failure naming the offending key.
+
+**Failure modes:**
+
+| Cause | Outcome |
+|-------|---------|
+| Plain `throw` (any `Error`) | `soft` — routes `on_error`, else hard-fails flow |
+| Contract violation (wrong/missing output keys) | `soft` |
+| Coercion failure (`object`/`array`/`null` value) | `soft` |
+| Missing handler file | `soft` |
+| Timeout expired | `soft` |
+| `throw new FlowHardError(msg)` | `hard` — stops flow regardless of `on_error` |
+
+No retry layer. Execution in-process via jiti dynamic import. No subprocess.
+
+**Drift detection:**
+
+If real handler's `Input`/`Output` interfaces mismatch YAML `inputs`/`outputs` — non-fatal WARNING at generation time. Never blocks execution.
+
+**Conditional check with code step outputs:**
+
+`stepId.outputName` in `check:` resolves any declared typed output from merged result map. Falls back to `fullOutput` only when key absent. Standard fields (`summary`, `artifacts`, `files`, `status`) resolved as normal.
+
+---
+
 ## Failure Modes
 
 Node resolves to one outcome: `success` | `soft` | `hard`. Outcome decides routing.
