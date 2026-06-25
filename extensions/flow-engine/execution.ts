@@ -15,7 +15,6 @@ import {
   createEventBus,
 } from "@earendil-works/pi-coding-agent";
 import type { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { getModel } from "@earendil-works/pi-ai";
 import { resolveModel } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
@@ -275,13 +274,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
         model = allModels.find((m: any) => m.id === modelId);
       }
     }
-    if (!model) {
-      // Fallback: try getModel from pi-ai for well-known providers
-      const parts = modelId.split("/");
-      if (parts.length >= 2) {
-        model = getModel(parts[0] as any, parts.slice(1).join("/") as any);
-      }
-    }
+    // Note: pi-ai's standalone `getModel` catalog helper was removed in 0.80;
+    // resolution relies solely on the injected modelRegistry (per the
+    // flow-model-resolution spec). No tertiary pi-ai catalog fallback.
   } catch {
     // Model resolution failed — will be caught below
   }

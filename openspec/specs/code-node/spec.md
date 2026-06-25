@@ -164,17 +164,6 @@ For code nodes using an explicit `target:` override, the system SHALL NOT genera
 - **WHEN** a code node declares a `target:` path
 - **THEN** no `.ts.default` file is generated for that node
 
-### Requirement: Conditional resolves typed outputs
-The system SHALL extend conditional checks so `check: <stepId>.<key>` resolves any typed-output key from the merged result map, falling back to `fullOutput` only when the key is genuinely absent. The standard fields `artifacts`, `summary`, `files`, and `status` continue to resolve as before.
-
-#### Scenario: Branch on a typed output
-- **WHEN** a conditional sets `check: validate-nav.valid` and the `validate-nav` result has a non-empty `valid` typed output
-- **THEN** the conditional routes to its `present` branch
-
-#### Scenario: Standard field still resolves
-- **WHEN** a conditional sets `check: step.status`
-- **THEN** it resolves the `status` field as before
-
 ### Requirement: Code node validation
 The system SHALL validate code nodes in `flow_write`: `outputs` is optional; output names MUST be unique and valid JavaScript identifiers; input names MUST be valid JavaScript identifiers; the node `id` MUST be filesystem-safe; and `blockedBy`/`on_complete`/`on_error` MUST reference existing step ids.
 
