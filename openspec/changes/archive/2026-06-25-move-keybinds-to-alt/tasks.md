@@ -27,8 +27,14 @@
 - [x] 5.1 Update `docs/` keybinding references to the `alt+` scheme (human prose). (Only `docs/flows.md` `Alt+A`→`alt+a` casing; no ctrl refs existed.)
 - [x] 5.2 Mirror into `agent-docs/` (caveman style) in the same task.
 
+## 7. Pi 0.80 baseline (fixes arrow/Esc/Backspace regression)
+
+- [x] 7.1 Bump pi-flows `peerDependencies` + `devDependencies` `^0.74.0` → `^0.80.0` for `@earendil-works/pi-coding-agent`, `pi-tui`, `pi-ai`; `npm install`. (All three resolve to 0.80.2.)
+- [x] 7.2 Absorb pi-ai 0.80 API break: remove the standalone `getModel` import + dead tertiary fallback in `extensions/flow-engine/execution.ts` (registry resolution per `flow-model-resolution` is the only path; no test depended on it). Verify: typecheck clean, 267 tests pass.
+- [ ] 7.3 **Runtime fix (pi-agent-dashboard repo):** bump `packages/server` `pi-coding-agent ^0.78.0→^0.80.0` and root `pi-ai ^0.75.5→^0.80.0`, reinstall so `pi-tui` unsticks 0.75.3→0.80.2; this restores arrow/Esc/Backspace at runtime. (Cross-repo — owner to apply.)
+
 ## 6. CHANGELOG + verification
 
 - [x] 6.1 Add a CHANGELOG entry noting the breaking key change (`Ctrl+*` → `alt+*`) and that keys are rebindable via `keybindings.json`.
-- [x] 6.2 `npm run lint && npm run typecheck && npm test` pass. (typecheck clean; lint 0 errors; 507/507 tests pass.)
+- [x] 6.2 `npm run lint && npm run typecheck && npm test` pass. (typecheck clean; lint 0 errors; 267/267 project tests pass under pi 0.80 — the prior "507" was node_modules test leakage from monorepo-symlinked 0.74 deps.)
 - [ ] 6.3 Manual: in a TUI session with a running flow, confirm `ctrl+o`/`ctrl+t`/`ctrl+x` no longer double-fire and `alt+o`/`alt+t`/`alt+x`/`alt+a` work. (Requires interactive TUI — owner to verify.)
