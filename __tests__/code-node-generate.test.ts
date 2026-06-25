@@ -21,14 +21,17 @@ function flowWith(steps: CodeStep[], name = "research"): FlowConfig {
   return { name, description: "", steps, source: "test" };
 }
 
-/** Create a temp project root and return the convention yaml path under it. */
+/**
+ * Create a temp project root with a BUNDLED flow directory and return its
+ * `flow.yaml` path. Handlers are co-located, so `handlersDir === dirname(yamlPath)`.
+ */
 function tempFlow(name = "research"): { root: string; yamlPath: string; handlersDir: string } {
   const root = mkdtempSync(join(tmpdir(), "pi-gen-"));
-  const flowsDir = join(root, ".pi", "flows", "flows");
-  mkdirSync(flowsDir, { recursive: true });
-  const yamlPath = join(flowsDir, `${name}.yaml`);
+  const flowDir = join(root, ".pi", "flows", "flows", name);
+  mkdirSync(flowDir, { recursive: true });
+  const yamlPath = join(flowDir, "flow.yaml");
   writeFileSync(yamlPath, "name: " + name + "\n", "utf8");
-  const handlersDir = join(root, ".pi", "flows", "handlers", name);
+  const handlersDir = flowDir; // co-located: dirname(yamlPath)
   return { root, yamlPath, handlersDir };
 }
 

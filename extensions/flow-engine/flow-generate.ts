@@ -28,14 +28,14 @@ export interface GenerateResult {
 }
 
 /**
- * Resolve the handlers directory for a flow from its persisted YAML path.
- * The yaml lives at `<root>/.pi/flows/flows/<name>.yaml`; handlers live at
- * `<root>/.pi/flows/handlers/<name>/`, which is `../handlers/<name>` relative
- * to the yaml's directory. This mirrors the executor's convention path
- * (`<cwd>/.pi/flows/handlers/<flow>/<id>.ts`).
+ * Resolve the handlers directory for a flow. Handlers are co-located with the
+ * flow definition: a flow lives at `<flowDir>/flow.yaml` and its handlers are
+ * `<flowDir>/<id>.ts`. This is `dirname(yamlPath)` and mirrors the executor's
+ * convention path (`dirname(flow.source)/<id>.ts`), keeping generator and
+ * runtime in lockstep.
  */
-function handlersDirFor(flowName: string, yamlPath: string): string {
-  return join(dirname(yamlPath), "..", "handlers", flowName);
+function handlersDirFor(yamlPath: string): string {
+  return dirname(yamlPath);
 }
 
 /** Render the `.ts.default` scaffold for a single code or code-decision node. */
@@ -82,7 +82,7 @@ export default async function (input: Input, ctx: CodeNodeContext): ${returnType
  * flow and return drift diagnostics for those whose real handler exists.
  */
 export function generateCodeHandlers(flow: FlowConfig, yamlPath: string): GenerateResult {
-  const dir = handlersDirFor(flow.name, yamlPath);
+  const dir = handlersDirFor(yamlPath);
   const generated: string[] = [];
   const diagnostics: Diagnostic[] = [];
 

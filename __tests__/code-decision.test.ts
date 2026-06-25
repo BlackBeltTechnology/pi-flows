@@ -46,7 +46,7 @@ export default async function (input, ctx) { return { branch: "needs_human" }; }
       target: handlerPath,
       branches: { needs_human: "human-approval", auto: "export" },
     };
-    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "f");
+    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "f", "");
     expect(result.success).toBe(true);
     expect(result.outcome).toBe("success");
     expect(result.finishParams?.branch).toBe("needs_human");
@@ -65,7 +65,7 @@ export default async function (input, ctx) { return { branch: "auto_approve", ap
       branches: { auto_approve: "export", needs_human: "review" },
       outputs: [{ name: "approvers" }],
     };
-    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "f");
+    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "f", "");
     expect(result.success).toBe(true);
     expect(result.finishParams?.branch).toBe("auto_approve");
     expect(result.typedOutputs?.approvers).toBe("alice,bob");
@@ -82,7 +82,7 @@ export default async function (input, ctx) { return { approvers: "alice" }; }
       branches: { a: "x", b: "y" },
       outputs: [{ name: "approvers" }],
     };
-    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "f");
+    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "f", "");
     expect(result.success).toBe(false);
     expect(result.output).toContain("branch");
   });
@@ -97,7 +97,7 @@ export default async function (input, ctx) { return { branch: "a" }; }
       cwd: tmpdir(),
       onAgentStarted: (_n, _s, _m, extra) => kinds.push(extra?.nodeKind ?? ""),
       onAgentComplete: (_n, _s, _r, extra) => kinds.push(extra?.nodeKind ?? ""),
-    }, "f");
+    }, "f", "");
     expect(kinds).toEqual(["code-decision", "code-decision"]);
   });
 });

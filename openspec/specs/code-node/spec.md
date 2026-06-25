@@ -114,11 +114,11 @@ When a flow reaches a code node whose real handler file does not exist, the syst
 - **THEN** the step fails with `status: "error"` and the copy-the-template message, as a soft failure
 
 ### Requirement: Handler location convention with target override
-By default the system SHALL locate a code node's handler from its `id`: real file `.pi/flows/handlers/<flow>/<id>.ts` and reference template `.pi/flows/handlers/<flow>/<id>.ts.default`. A node MAY set `target:` to override the real-file path for shared or custom-path handlers.
+By default the system SHALL locate a code node's handler relative to the flow's own directory (the directory containing its `flow.yaml`, i.e. `dirname(flow.source)`): real file `<flowDir>/<id>.ts` and reference template `<flowDir>/<id>.ts.default`. The system SHALL NOT reconstruct the handler path from `cwd` plus the flow name. A node MAY set `target:` to override the real-file path for shared or custom-path handlers (`target:` is resolved against `cwd`, unchanged).
 
 #### Scenario: Convention-based location
-- **WHEN** a flow `research` has a code node `validate-nav` with no `target:`
-- **THEN** the engine runs `.pi/flows/handlers/research/validate-nav.ts`
+- **WHEN** the flow at `.pi/flows/flows/research/main/flow.yaml` has a code node `validate-nav` with no `target:`
+- **THEN** the engine runs `.pi/flows/flows/research/main/validate-nav.ts`
 
 #### Scenario: Explicit target override
 - **WHEN** a code node sets `target: ./shared/nav.ts`

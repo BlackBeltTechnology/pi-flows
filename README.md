@@ -45,7 +45,7 @@ pi install /path/to/pi-flows
    Focus on: ${{input.target_path}}
    ```
 
-2. **Create a flow** (`.pi/flows/flows/review.yaml`):
+2. **Create a flow** (`.pi/flows/flows/review/flow.yaml`):
 
    ```yaml
    name: review
@@ -87,7 +87,7 @@ pi install /path/to/pi-flows
 
 Keybindings live in the `alt+<letter>` namespace to avoid colliding with pi's `ctrl+<letter>` defaults, and are rebindable via `~/.pi/agent/keybindings.json`.
 
-Flows also register as slash commands based on file path: `.pi/flows/flows/review.yaml` → `/review`.
+Flows also register as slash commands based on directory path: `.pi/flows/flows/review/flow.yaml` → `/review`. Each flow is a self-contained directory — its `flow.yaml` plus any co-located code-node handlers (`<id>.ts`).
 
 ## Core Concepts
 
@@ -176,7 +176,7 @@ Context: ${{input.research_context}}
 ```yaml
 - id: run-tests
   type: flow-ref
-  path: .pi/flows/flows/test-suite.yaml
+  path: .pi/flows/flows/test-suite/flow.yaml
 ```
 
 ## Input Wiring

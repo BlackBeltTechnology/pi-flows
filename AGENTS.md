@@ -10,16 +10,12 @@
 
 ## STOP — Docs-First Gate
 
-**Two doc trees:**
-- `docs/` — human-readable prose. Reference when answering the user or writing prose for humans.
-- `agent-docs/` — caveman-style mirror of `docs/`. **This is what agents read for grounded answers.** Same filenames, terser content.
-
-**Before any build / run / install / deploy / authoring / "how do I X" question: `grep -ni <keyword> README.md agent-docs/*.md` FIRST.** Fall back to `docs/*.md` only if the topic isn't mirrored yet. No source reads until both return nothing.
+`docs/` holds human-readable reference prose. **Before any build / run / install / deploy / authoring / "how do I X" question: `grep -ni <keyword> README.md docs/*.md` FIRST.** No source reads until that returns nothing.
 
 - ❌ User: "how do I write a flow?" → read `extensions/flow-engine/*.ts` → guess
-- ✅ User: "how do I write a flow?" → `grep -ni 'fork\|conditional' agent-docs/flows.md` → quote
+- ✅ User: "how do I write a flow?" → `grep -ni 'fork\|code-decision' docs/flows.md` → quote
 
-If grep finds nothing in either tree, then read source.
+If grep finds nothing, then read source.
 
 ## Running, Testing, Deploying
 
@@ -32,8 +28,8 @@ If grep finds nothing in either tree, then read source.
 | Run tests | `npm test` | Vitest, one-shot. Suites in `__tests__/`. |
 | Watch tests | `npm run test:watch` | |
 | CI | — | `.github/workflows/ci.yml` runs `lint + typecheck + test` on Node 20/22/24 for every push to `develop` and every PR. |
-| Publish | Trigger `Release` workflow in GitHub Actions UI with version input, OR push a `v*` tag | `.github/workflows/publish.yml`. Trusted Publishing via OIDC (`--provenance`), gated by `npm-publish` GH environment. Drafts GitHub Release from CHANGELOG section. See `docs/releasing.md` / `agent-docs/releasing.md`. |
-| Use flows in a session | `/flows`, `/flows:new`, `/flows:edit`, `/flows:delete`, `/roles`, `Ctrl+A`, `Ctrl+X` | Flow files at `.pi/flows/flows/<name>.yaml` auto-register as `/<name>`. |
+| Publish | Trigger `Release` workflow in GitHub Actions UI with version input, OR push a `v*` tag | `.github/workflows/publish.yml`. Trusted Publishing via OIDC (`--provenance`), gated by `npm-publish` GH environment. Drafts GitHub Release from CHANGELOG section. See `docs/releasing.md`. |
+| Use flows in a session | `/flows`, `/flows:delete`, `/skill:edit-flow`, `/roles`, `alt+a`, `alt+x`, `alt+o` | Each flow is a self-contained dir `.pi/flows/flows/<namespace>/<name>/` with `flow.yaml`; auto-registers as `/<namespace>:<name>`. Authoring via `flow_agents`/`flow_write` (gated by `flows.editFlow`). |
 
 There is **no compile / bundle / dist step**. TypeScript runs straight from `extensions/` via pi's loader. Treat `extensions/index.ts` as the entrypoint.
 
@@ -42,16 +38,15 @@ There is **no compile / bundle / dist step**. TypeScript runs straight from `ext
 | Path | Purpose |
 |---|---|
 | `extensions/` | TypeScript source. Entrypoint `index.ts`. Subdirs: `flow-engine/`, `flow-dashboard/`, `flow-context/`, `flow-summary/`, `flow-workspace/`, `shared/`. |
-| `agents/` | Built-in agents shipped with the package: `flow-architect.md`, `flow-decision.md`, `project-context-reader.md`. |
-| `docs/` | Human-readable reference docs. For users + prose answers. |
-| `agent-docs/` | Caveman-style mirror of `docs/` for agent consumption. Same filenames. Grep here first. |
+| `agents/` | Built-in agents shipped with the package: `flow-decision.md`, `project-context-reader.md`. |
+| `docs/` | Human-readable reference docs. For users + prose answers. Grep here first. |
 | `__tests__/` | Vitest suites. |
 | `openspec/` | Spec-change proposals (see OpenSpec conventions below). |
 | `research/` | Exploratory notes, not shipped. |
 
 ## Documentation Pointers
 
-Grep `agent-docs/<file>.md` first (caveman, for agents). Fall back to `docs/<file>.md` (human-readable) if not yet mirrored. Same filenames in both trees:
+Grep `docs/<file>.md` (and `README.md`) before reading source:
 
 - `README.md` — overview, install, quick start, command list.
 - `flows.md` — step types (agent, fork, conditional, agent-loop-decision, flow-ref) with syntax.
@@ -128,19 +123,8 @@ Rules:
 
 1. AGENTS.md rows stay ≤ 200 characters. No change-history. No "See change: …" parentheticals.
 2. Long-form rationale, protocol details → `docs/`. Reference from AGENTS.md with a one-line pointer.
-3. New topic → add `docs/<topic>.md` (human) AND `agent-docs/<topic>.md` (caveman). Add a one-line pointer under **Documentation Pointers** above.
-4. **Every write under `docs/` or `agent-docs/` MUST be delegated to a general-purpose subagent.** Main agent orchestrates, never edits these trees directly.
-   - `docs/` writes: normal prose, no caveman constraint.
-   - `agent-docs/` writes: pass the caveman-style rule below verbatim in the subagent's prompt.
-   - When a `docs/<topic>.md` change lands, mirror the substance into `agent-docs/<topic>.md` in the same task (separate subagent call is fine).
-
-   **Caveman style** (`agent-docs/` only):
-   - Short declarative fragments. Drop articles (a/an/the) and most copulas when meaning survives.
-   - Subject → verb → object, present tense. No hedging, no "we", no "you".
-   - One fact per line/row.
-   - Prefer concrete tokens (paths, function names, env vars, exit codes) over prose.
-   - Symbols/identifiers verbatim; only connective tissue compresses.
-   - Verbose: "This module is responsible for parsing input and dispatching to the correct handler." Caveman: "Parses input. Dispatches to handler by command prefix."
+3. New topic → add `docs/<topic>.md`. Add a one-line pointer under **Documentation Pointers** above.
+4. **Every write under `docs/` MUST be delegated to a general-purpose subagent.** Main agent orchestrates, never edits `docs/` directly. `docs/` writes are normal prose. README.md and CHANGELOG.md may be edited directly.
 
 ## OpenSpec Conventions
 

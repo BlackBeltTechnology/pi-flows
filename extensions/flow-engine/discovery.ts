@@ -9,7 +9,7 @@ import type { AgentConfig, FlowConfig } from "./types.js";
 import { parseAgentFile } from "./agent-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
 import { readdirSync, existsSync, statSync } from "node:fs";
-import { join, basename, dirname, relative } from "node:path";
+import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- Public types ---------------------------------------------------------
@@ -140,9 +140,11 @@ function discoverAgentsInDir(dir: string, warnings: string[]): AgentConfig[] {
 // ---- Flow discovery helpers -----------------------------------------------
 
 /**
- * Recursively scan a directory for `.yaml` flow files.
- * Subfolder structure determines the flow name prefix:
- *   `flows/judo/research.yaml` -> name = `judo:research`
+ * Recursively scan for bundled flow directories. Each flow is a directory
+ * containing a `flow.yaml`; its command id is the flow directory's path
+ * relative to `flowsRoot`, slashes joined by `:`:
+ *   `flows/judo/research/flow.yaml` -> name = `judo:research`
+ * Loose `<name>.yaml` files (the old flat layout) are NOT discovered.
  */
 function discoverFlowsInDir(flowsRoot: string, warnings: string[]): FlowConfig[] {
   if (!existsSync(flowsRoot)) return [];
@@ -178,42 +180,28 @@ function walkFlowFiles(
       continue;
     }
 
-    if (stat.isDirectory()) {
-      walkFlowFiles(fullPath, flowsRoot, results, warnings);
+    // Bundled layout: flows are directories containing `flow.yaml`. Loose files
+    // (the old flat `<name>.yaml`) are ignored — clean break, no fallback.
+    if (!stat.isDirectory()) continue;
+
+    const flowYamlPath = join(fullPath, "flow.yaml");
+    if (existsSync(flowYamlPath)) {
+      try {
+        const config = parseFlowYamlFile(flowYamlPath); // sets source = flowYamlPath
+        // Command id = flow directory's path relative to flowsRoot, slashes -> ":".
+        // E.g. <flowsRoot>/judo/research -> "judo:research".
+        config.name = relative(flowsRoot, fullPath).replace(/[\\/]/g, ":");
+        results.push(config);
+      } catch (err) {
+        warnings.push(
+          `[discovery] Skipping unparseable flow file: ${flowYamlPath} ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      // A flow directory's contents are handlers — do not recurse into it.
       continue;
     }
 
-    if (!entry.endsWith(".yaml")) continue;
-
-    try {
-      const config = parseFlowYamlFile(fullPath);
-
-      // Compute the flow name from the subfolder structure.
-      // E.g., flows/judo/research.yaml -> relative = "judo/research.yaml"
-      //   -> baseName = "research", prefix = "judo" -> name = "judo:research"
-      const relativePath = relative(flowsRoot, fullPath);
-      const relDir = dirname(relativePath);
-      const baseName = basename(entry, ".yaml");
-
-      // Enforce single-subfolder depth: skip files nested 2+ levels deep
-      if (relDir !== "." && relDir.includes("/")) {
-        warnings.push(
-          `[discovery] Skipping flow file with excessive nesting (max 1 subfolder): ${fullPath}`,
-        );
-        continue;
-      }
-
-      const flowName =
-        relDir === "." ? baseName : `${relDir.replace(/[\\/]/g, ":")}:${baseName}`;
-
-      // Override the parsed name with the filesystem-derived name
-      config.name = flowName;
-
-      results.push(config);
-    } catch (err) {
-      warnings.push(
-        `[discovery] Skipping unparseable flow file: ${fullPath} ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    // Namespace directory: recurse to find nested flow directories.
+    walkFlowFiles(fullPath, flowsRoot, results, warnings);
   }
 }

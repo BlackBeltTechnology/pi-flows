@@ -25,11 +25,12 @@ function flowWith(steps: FlowStep[], name = "research"): FlowConfig {
 }
 function tempFlow(name = "research"): { yamlPath: string; handlersDir: string } {
   const root = mkdtempSync(join(tmpdir(), "pi-tplgen-"));
-  const flowsDir = join(root, ".pi", "flows", "flows");
-  mkdirSync(flowsDir, { recursive: true });
-  const yamlPath = join(flowsDir, `${name}.yaml`);
+  // Bundled layout: flow is its own directory; handlers co-located (dirname(yaml)).
+  const flowDir = join(root, ".pi", "flows", "flows", name);
+  mkdirSync(flowDir, { recursive: true });
+  const yamlPath = join(flowDir, "flow.yaml");
   writeFileSync(yamlPath, "name: " + name + "\n", "utf8");
-  return { yamlPath, handlersDir: join(root, ".pi", "flows", "handlers", name) };
+  return { yamlPath, handlersDir: flowDir };
 }
 
 // ── renderScaffold: code-decision type ─────────────────────────────────────

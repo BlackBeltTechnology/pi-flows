@@ -51,7 +51,7 @@ export default async function handler(input, ctx) { return {}; }
       },
     };
 
-    await executeCodeStep(step, makeCtx(), opts, "test-flow");
+    await executeCodeStep(step, makeCtx(), opts, "test-flow", "");
     expect(started).toHaveLength(1);
     expect(started[0].name).toBe("my-code-node");
     expect(started[0].stepId).toBe("my-code-node");
@@ -72,7 +72,7 @@ export default async function handler(input, ctx) { return { x: "1" }; }
       },
     };
 
-    await executeCodeStep(step, makeCtx(), opts, "test-flow");
+    await executeCodeStep(step, makeCtx(), opts, "test-flow", "");
     expect(completed).toHaveLength(1);
     expect(completed[0].name).toBe("my-code-node");
     expect(completed[0].stepId).toBe("my-code-node");
@@ -96,7 +96,7 @@ export default async function handler(input, ctx) {
       onAssistantText: (_name: string, _stepId: string, text: string) => texts.push(text),
     };
 
-    await executeCodeStep(step, makeCtx(), opts, "test-flow");
+    await executeCodeStep(step, makeCtx(), opts, "test-flow", "");
     expect(texts).toEqual(["line 1", "line 2"]);
   });
 
@@ -116,7 +116,7 @@ export default async function handler(input, ctx) {
       },
     };
 
-    await executeCodeStep(step, makeCtx(), opts, "test-flow");
+    await executeCodeStep(step, makeCtx(), opts, "test-flow", "");
     expect(completed).toHaveLength(1);
     expect(completed[0].result.success).toBe(false);
     expect(completed[0].extra?.nodeKind).toBe("code");
@@ -141,7 +141,7 @@ export default async function handler(input, ctx) {
       outputs: [{ name: "valid" }, { name: "count" }],
     });
 
-    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.typedOutputs?.valid).toBe("true");
     expect(result.typedOutputs?.count).toBe("42");

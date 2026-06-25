@@ -30,7 +30,9 @@ export function registerFlowWriteTool(
       "success writes to .pi/flows/flows/<namespace>/<name>.yaml, which " +
       "auto-registers as the /<namespace>:<name> command. namespace defaults " +
       "to \"custom\". Overwriting an existing <namespace>/<name>.yaml edits it. " +
-      "Returns validation diagnostics on failure.",
+      "On success returns the written flow path plus generatedHandlers — the " +
+      "absolute paths of the <id>.ts.default scaffolds written for each code " +
+      "node. Returns validation diagnostics on failure.",
     parameters: Type.Object({
       namespace: Type.Optional(Type.String({ description: "Flow namespace / subfolder (default \"custom\"). Becomes the /<namespace>: command prefix." })),
       name: Type.String({ description: "Flow file name without extension. Becomes the command name after the namespace prefix." }),
@@ -49,8 +51,11 @@ export function registerFlowWriteTool(
         };
       }
 
-      const flowDir = join(projectRoot, ".pi", "flows", "flows", namespace);
-      const filePath = join(flowDir, `${name}.yaml`);
+      // Bundled layout: each flow is a self-contained directory
+      // `.pi/flows/flows/<namespace>/<name>/` holding `flow.yaml` and its
+      // co-located code handlers.
+      const flowDir = join(projectRoot, ".pi", "flows", "flows", namespace, name);
+      const filePath = join(flowDir, "flow.yaml");
       const command = `${namespace}:${name}`;
 
       try {
@@ -66,10 +71,12 @@ export function registerFlowWriteTool(
       // Generate code-node handler templates against the just-persisted YAML.
       // Best-effort: a generation failure must not fail the write itself.
       let generationDiagnostics: typeof validation.diagnostics = [];
+      let generatedHandlers: string[] = [];
       try {
         const flow = parseFlowYamlString(content, filePath);
         const gen = generateCodeHandlers(flow, filePath);
         generationDiagnostics = gen.diagnostics;
+        generatedHandlers = gen.generated;
       } catch {
         // Parsing/generation problems are non-fatal here — validation already passed.
       }
@@ -78,7 +85,7 @@ export function registerFlowWriteTool(
       pi.events.emit("flow:rediscover", {});
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify({ written: true, name, namespace, command, path: filePath, diagnostics: [...validation.diagnostics, ...generationDiagnostics] }, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ written: true, name, namespace, command, path: filePath, generatedHandlers, diagnostics: [...validation.diagnostics, ...generationDiagnostics] }, null, 2) }],
         details: {},
       };
     },

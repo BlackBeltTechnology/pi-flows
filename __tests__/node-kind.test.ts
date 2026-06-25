@@ -72,7 +72,7 @@ describe("Code executor emits nodeKind + target", () => {
       cwd: tmpdir(),
       onAgentStarted: (_n: string, _s: string, _m: string | undefined, extra?: any) => started.push(extra),
       onAgentComplete: (_n: string, _s: string, _r: any, extra?: any) => completed.push(extra),
-    } as any, "flow");
+    } as any, "flow", "");
 
     expect(started[0]?.nodeKind).toBe("code");
     expect(started[0]?.target).toBe(handlerPath);
@@ -89,7 +89,7 @@ describe("Code executor emits nodeKind + target", () => {
     await executeCodeStep(step, makeCtx(), {
       cwd: tmpdir(),
       onAgentStarted: (_n: string, _s: string, _m: string | undefined, extra?: any) => started.push(extra),
-    } as any, "flow");
+    } as any, "flow", "");
 
     expect(started[0]?.nodeKind).toBe("code-decision");
   });

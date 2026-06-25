@@ -37,10 +37,10 @@ pi-flows SHALL expose exactly two authoring tools on the main session: `flow_age
 
 - **WHEN** `flow_write` is called with `namespace`, `name`, and `content`
 - **THEN** it SHALL validate the content via `flow-validate.ts`
-- **AND** on success SHALL write to `.pi/flows/flows/<namespace>/<name>.yaml`
+- **AND** on success SHALL write to `.pi/flows/flows/<namespace>/<name>/flow.yaml` (creating the flow directory)
 - **AND** the written flow SHALL auto-register as the `/<namespace>:<name>` command
 - **AND** when `namespace` is omitted it SHALL default to `custom`
-- **AND** writing to an existing `<namespace>/<name>.yaml` SHALL overwrite it (edit), with no separate edit tool
+- **AND** writing to an existing `<namespace>/<name>/flow.yaml` SHALL overwrite it (edit), with no separate edit tool
 
 #### Scenario: Validation failure does not write
 

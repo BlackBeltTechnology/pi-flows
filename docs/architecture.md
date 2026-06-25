@@ -56,7 +56,7 @@ The pi-flows engine discovers packages through the npm dependency graph:
 2. Reads the `"pi"` manifest from each package's `package.json`
 3. Registers extensions, skills, prompts, and themes from declared paths
 4. Agents are loaded from `agents/` directories
-5. Flows are loaded from `flows/<namespace>/` directories
+5. Flows are loaded from `flows/<namespace>/<name>/flow.yaml` (see [On-Disk Flow Layout](#on-disk-flow-layout))
 
 ```json
 {
@@ -70,6 +70,27 @@ The pi-flows engine discovers packages through the npm dependency graph:
   }
 }
 ```
+
+## On-Disk Flow Layout
+
+Each flow is a **self-contained directory**. The definition file is always named `flow.yaml`, and that flow's code-node handlers (`<id>.ts` plus the generated `<id>.ts.default` scaffold) live in the **same directory**:
+
+```mermaid
+graph TD
+  R[".pi/flows/flows/"] --> NS["&lt;namespace&gt;/"]
+  NS --> F["&lt;name&gt;/"]
+  F --> Y["flow.yaml — the definition"]
+  F --> H["&lt;id&gt;.ts — code-node handler"]
+  F --> D["&lt;id&gt;.ts.default — generated scaffold"]
+```
+
+Discovery derives the command id `<namespace>:<name>` from the directory structure (`<namespace>/<name>/flow.yaml`), and `FlowConfig.source` is the path to that `flow.yaml`.
+
+**Handler resolution (single source of truth).** Code-node handlers resolve relative to the flow's own directory — `dirname(flow.source)/<id>.ts` — in **both** the executor and the scaffold generator. Because both compute the path the same way from the same `source`, generated and runtime paths are always identical; there is no separate reconstruction step. An explicit `target:` on a code node is the one exception: it still resolves against `cwd`.
+
+Deleting a flow removes the whole flow directory, so handlers travel with their definition and can never be orphaned.
+
+**Breaking change — clean break.** The previous flat layout (`.pi/flows/flows/<namespace>/<name>.yaml`) and the parallel `.pi/flows/handlers/<flow>/` handler tree are **no longer read**; there is no fallback. To migrate, move `<name>.yaml` → `<name>/flow.yaml`, move that flow's handlers into the same directory, and repoint any `flow-ref` paths or globs that referenced `<name>.yaml`.
 
 ## Agent Isolation Model
 

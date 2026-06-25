@@ -15,7 +15,7 @@ import type { CodeStep, CodeDecisionStep, AgentResult, CodeNodeContext, FailureI
 import { classifyThrownError } from "./failure.js";
 import { expandTemplateVariables } from "./execution.js";
 import { existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, dirname } from "node:path";
 
 // ---- Lean interfaces (avoids circular imports with flow-execution.ts) -------
 
@@ -50,6 +50,7 @@ export async function executeCodeStep(
   ctx: CodeNodeFlowCtx,
   options: CodeNodeExecOptions,
   flowName: string,
+  flowSource: string,
 ): Promise<AgentResult> {
   // A `code-decision` node runs identically to `code` but reserves a `branch`
   // output for routing. Tag lifecycle events with its kind and allow `branch`
@@ -57,11 +58,24 @@ export async function executeCodeStep(
   const isDecision = step.stepType === "code-decision";
   const nodeKind: NodeKind = isDecision ? "code-decision" : "code";
   // ── Resolve handler path ─────────────────────────────────────────────────
+  // Convention handlers are co-located with the flow: `<flowDir>/<id>.ts`,
+  // where `<flowDir> = dirname(flow.source)`. An explicit `target:` overrides
+  // (resolved against cwd). `flowName` is the command id, used only for ctx.
   let handlerPath: string;
   if (step.target) {
     handlerPath = resolve(options.cwd, step.target);
+  } else if (flowSource) {
+    handlerPath = join(dirname(flowSource), `${step.id}.ts`);
   } else {
-    handlerPath = join(options.cwd, ".pi", "flows", "handlers", flowName, `${step.id}.ts`);
+    // No target and no flow source: cannot locate a convention handler. Fail
+    // loudly rather than silently resolving to a wrong path.
+    const lifecycle = { nodeKind, target: undefined };
+    options.onAgentStarted?.(step.id, step.id, undefined, lifecycle);
+    const noSource = makeSoftFailure(
+      `Code node "${step.id}": cannot locate handler — the flow has no source path and the node has no \`target:\`. Set an explicit \`target:\`.`,
+    );
+    options.onAgentComplete?.(step.id, step.id, noSource, lifecycle);
+    return noSource;
   }
   // Lifecycle `extra`: the node's kind drives card rendering; `target` lets a
   // live/replayed code card show which handler ran. Reused across all
@@ -73,9 +87,7 @@ export async function executeCodeStep(
 
   // ── Missing handler check ────────────────────────────────────────────────
   if (!existsSync(handlerPath)) {
-    const templatePath = step.target
-      ? handlerPath + ".default"
-      : join(options.cwd, ".pi", "flows", "handlers", flowName, `${step.id}.ts.default`);
+    const templatePath = handlerPath + ".default";
     const missingResult = makeSoftFailure(
       `Code node "${step.id}": handler file not found at "${handlerPath}".\n` +
       `Copy the template and implement the default export:\n` +

@@ -12,7 +12,7 @@ import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import { Container, type SelectItem, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { readFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 
 function getFlowResultNames(resultsDir: string): string[] {
   if (!existsSync(resultsDir)) return [];
@@ -89,9 +89,11 @@ function deleteFlowFiles(
     }
   } catch { /* ignore */ }
 
-  // Delete the flow file
+  // Delete the flow directory (bundled layout): `<flowDir>/flow.yaml` plus its
+  // co-located handlers (`<id>.ts`, `<id>.ts.default`) are removed together so
+  // handlers can never be orphaned.
   try {
-    rmSync(flowPath);
+    rmSync(dirname(flowPath), { recursive: true, force: true });
   } catch (err: any) {
     return { success: false, error: `Failed to delete flow: ${err.message}` };
   }

@@ -73,7 +73,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ target: handlerPath, outputs: [] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
 
     expect(result.success).toBe(true);
   });
@@ -96,7 +96,7 @@ export default async function handler(input, ctx) {
       },
     });
 
-    const result = await executeCodeStep(step, ctx, makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, ctx, makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.typedOutputs?.["out"]).toBe("INV-001");
   });
@@ -114,7 +114,7 @@ export default async function handler(input, ctx) {
       outputs: [{ name: "echo" }],
     });
 
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.typedOutputs?.["echo"]).toBe("");
   });
@@ -129,7 +129,7 @@ export default async function handler(input, ctx) {
     const step = makeStep({ id: "my-step", target: handlerPath, outputs: [] });
     const cwd = "/tmp/test-cwd";
 
-    await executeCodeStep(step, makeCtx({ task: "the task" }), makeOptions({ cwd }), "my-flow");
+    await executeCodeStep(step, makeCtx({ task: "the task" }), makeOptions({ cwd }), "my-flow", "");
 
     const ctx = (global as any).__ctx_3_1d;
     expect(ctx.cwd).toBe(cwd);
@@ -154,7 +154,7 @@ export default async function handler(input, ctx) {
       onAssistantText: (name: string, stepId: string, text: string) => logged.push({ name, stepId, text }),
     });
 
-    await executeCodeStep(step, makeCtx(), opts, "test-flow");
+    await executeCodeStep(step, makeCtx(), opts, "test-flow", "");
     expect(logged).toHaveLength(1);
     expect(logged[0].text).toBe("hello from handler");
     expect(logged[0].stepId).toBe("log-step");
@@ -174,7 +174,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "valid" }, { name: "nav_record" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.typedOutputs?.valid).toBe("true");
     expect(result.typedOutputs?.nav_record).toBe("X");
@@ -190,7 +190,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "valid" }, { name: "nav_record" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.result.status).toBe("error");
     expect(result.output).toContain("nav_record");
@@ -206,7 +206,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "valid" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.result.status).toBe("error");
     expect(result.output).toContain("unexpected");
@@ -219,7 +219,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ target: handlerPath, outputs: [] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
   });
 
@@ -233,7 +233,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "count" }, { name: "flag" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.typedOutputs?.count).toBe("42");
     expect(result.typedOutputs?.flag).toBe("true");
@@ -249,7 +249,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "big" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.typedOutputs?.big).toBe("9007199254740993");
   });
@@ -264,7 +264,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "record" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.result.status).toBe("error");
     expect(result.output).toContain("record");
@@ -280,7 +280,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "field" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.output).toContain("field");
   });
@@ -295,7 +295,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "items" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.output).toContain("items");
   });
@@ -312,7 +312,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ target: handlerPath, outputs: [] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.result.summary).toBe("validated against NAV");
   });
@@ -324,7 +324,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ id: "my-code", target: handlerPath, outputs: [{ name: "out1" }] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.result.summary.length).toBeGreaterThan(0);
     expect(result.result.summary).toContain("my-code");
@@ -340,7 +340,7 @@ export default async function handler(input, ctx) {
       target: handlerPath,
       outputs: [{ name: "x" }, { name: "y" }],
     });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.output).toBe(JSON.stringify({ x: "1", y: "2" }));
     expect(result.result.files).toHaveLength(0);
@@ -362,7 +362,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ target: handlerPath, outputs: [], timeout: 50 });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
 
     expect(result.success).toBe(false);
     expect(result.result.status).toBe("error");
@@ -382,7 +382,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ target: handlerPath, outputs: [{ name: "done" }] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
     expect(result.typedOutputs?.done).toBe("yes");
   });
@@ -395,7 +395,8 @@ describe("Code node executor — missing handler (3.8/3.9)", () => {
     const cwd = mkdtempSync(join(tmpdir(), "pi-missing-handler-"));
     // Do NOT create the handler file
     const step = makeStep({ id: "my-node", outputs: [] }); // convention path, no target
-    const result = await executeCodeStep(step, makeCtx(), makeOptions({ cwd }), "my-flow");
+    // Bundled layout: convention handler resolves relative to dirname(flow.source).
+    const result = await executeCodeStep(step, makeCtx(), makeOptions({ cwd }), "my-flow", join(cwd, "flow.yaml"));
 
     expect(result.success).toBe(false);
     expect(result.result.status).toBe("error");
@@ -409,7 +410,7 @@ describe("Code node executor — missing handler (3.8/3.9)", () => {
 export function notDefault() { return {}; }
 `);
     const step = makeStep({ target: handlerPath, outputs: [] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.result.status).toBe("error");
     expect(result.output).toContain("default export");
@@ -426,7 +427,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ target: handlerPath, outputs: [] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.result.status).toBe("error");
     expect(result.output).toContain("something broke");
@@ -447,7 +448,7 @@ export default async function handler(input, ctx) {
 }
 `);
     const step = makeStep({ target: hardErrHandlerPath, outputs: [] });
-    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow");
+    const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(false);
     expect(result.outcome).toBe("hard");
     expect(result.failureInfo?.source).toBe("flow_hard_error");

@@ -48,9 +48,10 @@ function makeCtx(results: Record<string, any> = {}) {
 describe("flow_write generation path (6.3)", () => {
   it("a saved flow YAML with a code node produces a .ts.default template", () => {
     const root = mkdtempSync(join(tmpdir(), "pi-fw-"));
-    const flowsDir = join(root, ".pi", "flows", "flows");
-    mkdirSync(flowsDir, { recursive: true });
-    const yamlPath = join(flowsDir, "research.yaml");
+    // Bundled layout: the flow is its own directory holding flow.yaml + handlers.
+    const flowDir = join(root, ".pi", "flows", "flows", "research");
+    mkdirSync(flowDir, { recursive: true });
+    const yamlPath = join(flowDir, "flow.yaml");
     const yaml = [
       "name: research",
       "description: test flow",
@@ -66,7 +67,7 @@ describe("flow_write generation path (6.3)", () => {
     const flow = parseFlowYamlString(yaml, yamlPath);
     const gen = generateCodeHandlers(flow, yamlPath);
 
-    const tpl = join(root, ".pi", "flows", "handlers", "research", "validate-nav.ts.default");
+    const tpl = join(flowDir, "validate-nav.ts.default");
     expect(existsSync(tpl)).toBe(true);
     expect(gen.generated).toContain(tpl);
   });
@@ -84,7 +85,7 @@ export default async function handler(input, ctx) {
     const step: CodeStep = { stepType: "code", id: "extract", target: handlerPath, outputs: [{ name: "canonical" }] };
 
     const results: Record<string, any> = {};
-    const result = await executeCodeStep(step, makeCtx(results), { cwd: tmpdir() }, "research");
+    const result = await executeCodeStep(step, makeCtx(results), { cwd: tmpdir() }, "research", "");
     storeResult(results, "extract", result);
 
     const downstream = expandTemplateVariables("invoice=${{result.extract.canonical}}", makeCtx(results));
@@ -103,7 +104,7 @@ describe("missing handler routes on_error, implemented handler succeeds (7.2)", 
       outputs: [],
       on_error: "park",
     };
-    const result = await executeCodeStep(missingStep, makeCtx(), { cwd: tmpdir() }, "research");
+    const result = await executeCodeStep(missingStep, makeCtx(), { cwd: tmpdir() }, "research", "");
     expect(result.success).toBe(false);
     expect(result.outcome).toBe("soft");
     expect(result.output).toContain("not found");
@@ -116,7 +117,7 @@ describe("missing handler routes on_error, implemented handler succeeds (7.2)", 
 export default async function handler(input, ctx) { return { valid: "true" }; }
 `);
     const step: CodeStep = { stepType: "code", id: "validate", target: handlerPath, outputs: [{ name: "valid" }], on_error: "park", on_complete: "approve" };
-    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "research");
+    const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "research", "");
     expect(result.success).toBe(true);
     expect(result.outcome).toBe("success");
     expect(resolveRouteOutcome(result, step.on_error)).toBe("success");

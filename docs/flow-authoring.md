@@ -20,9 +20,11 @@ Both tools perform validation and write to discoverable locations (no raw `path`
 
 - **`flow_write`** — Flow file creation and editing.
   - Parameters: `namespace` (default: `custom`), `name`, `content`.
-  - Validates the flow YAML, writes to `.pi/flows/flows/<namespace>/<name>.yaml`.
+  - Validates the flow YAML, writes to `.pi/flows/flows/<namespace>/<name>/flow.yaml`.
   - Automatically registers as `/<namespace>:<name>` slash-command.
   - To edit an existing flow, read it, then call `flow_write` with the same `namespace` and `name` to overwrite.
+
+> **Bundled flow layout.** Each flow is a **self-contained directory** at `.pi/flows/flows/<namespace>/<name>/`. The definition file is always `flow.yaml` inside it, and that flow's code-node handlers (`<id>.ts` and the generated `<id>.ts.default`) are **co-located in the same directory**. Handlers resolve relative to the flow's own directory — `dirname(flow.source)/<id>.ts` — in both the executor and the generator, so generated and runtime paths are always identical. Deleting a flow removes the whole directory, so handlers can never be orphaned. **BREAKING:** the previous flat layout (`.pi/flows/flows/<namespace>/<name>.yaml`) and the parallel `.pi/flows/handlers/<flow>/` tree are no longer read — there is no fallback. To migrate, move `<name>.yaml` → `<name>/flow.yaml`, move that flow's handlers into the same directory, and repoint any `flow-ref` globs that pointed at `<name>.yaml`.
 
 ### Model field guidance
 
@@ -321,7 +323,7 @@ steps:
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `name` | Yes | — | Unique flow identifier. Becomes the slash-command. Subfolders add a `:` prefix: `flows/judo/build.yaml` → `judo:build`. |
+| `name` | Yes | — | Unique flow identifier. Becomes the slash-command. The command id is derived from the directory structure `<namespace>/<name>/flow.yaml`: `flows/judo/build/flow.yaml` → `judo:build`. |
 | `description` | Yes | — | Human-readable description. Shown in `/help` and flow listings. |
 | `steps` | Yes | — | Ordered list of flow steps. |
 | `max_concurrent` | No | `4` | Maximum number of agent steps running in parallel within a DAG segment. |
@@ -480,7 +482,7 @@ Run a TypeScript handler exactly like a [code step](#7-code-step), then route on
 | `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). See [Loops](#5-loops). |
 | `timeout` | No | Soft deadline in milliseconds. |
 
-**Handler contract.** Identical to a [code step](#7-code-step) — same handler path (`.pi/flows/handlers/<flow>/<id>.ts` or explicit `target:`), same `inputs`/`outputs`, same soft/hard failure model and value coercion. The handler ADDITIONALLY returns a reserved `branch: string` key:
+**Handler contract.** Identical to a [code step](#7-code-step) — same handler path (`<flow-dir>/<id>.ts` co-located beside `flow.yaml`, or explicit `target:`), same `inputs`/`outputs`, same soft/hard failure model and value coercion. The handler ADDITIONALLY returns a reserved `branch: string` key:
 
 ```typescript
 import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
@@ -698,7 +700,7 @@ export default async function (input: Input, ctx: CodeNodeContext): Promise<Outp
 
 **Handler location and generation**
 
-By convention the real handler is `.pi/flows/handlers/<flow>/<id>.ts`. Alongside it the engine writes a scaffold template `.pi/flows/handlers/<flow>/<id>.ts.default` on every successful `flow_write` and via `/flows:generate <name>`. The `.default` extension makes it un-importable; the template is always regenerated from the YAML — it never touches the real `.ts`.
+The real handler is co-located with the flow definition: `<flow-dir>/<id>.ts`, where `<flow-dir>` is `dirname(flow.source)` — the same directory that holds `flow.yaml`. Alongside it the engine writes a scaffold template `<flow-dir>/<id>.ts.default` on every successful `flow_write` and via `/flows:generate <name>`. The generator and the executor resolve this path identically (source-relative), so generated and runtime paths never diverge. The `.default` extension makes it un-importable; the template is always regenerated from the YAML — it never touches the real `.ts`.
 
 Template content:
 - `import type { CodeNodeContext }` from the package
@@ -841,9 +843,9 @@ Rules:
 | Built-in agents | `pi-flows/agents/` | `*.md` (non-recursive) |
 | Project-local agents | `.pi/flows/agents/` | `*.md` (non-recursive) |
 | Package agents | Registered via `flow:register-agents-dir` | `*.md` |
-| Built-in flows | `pi-flows/flows/` | `**/*.yaml` (1 subfolder deep) |
-| Project-local flows | `.pi/flows/flows/` | `**/*.yaml` (1 subfolder deep) |
-| Package flows | Registered via `flow:register-flows-dir` | `**/*.yaml` |
+| Built-in flows | `pi-flows/flows/` | `<namespace>/<name>/flow.yaml` |
+| Project-local flows | `.pi/flows/flows/` | `<namespace>/<name>/flow.yaml` |
+| Package flows | Registered via `flow:register-flows-dir` | `<namespace>/<name>/flow.yaml` |
 | Skills | Registered via `flow:register-skills-dir` | `<name>/SKILL.md` |
 
 **Override priority (highest to lowest):**

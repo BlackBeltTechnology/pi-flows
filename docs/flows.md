@@ -8,7 +8,7 @@ Complete reference for authoring flows in pi-flows. Covers all step types with s
 
 Flows are `.yaml` files with YAML frontmatter followed by step definitions. Each step has a unique `id` and is connected to other steps via `blockedBy` declarations to form a directed acyclic graph (DAG).
 
-**Location:** `.pi/flows/flows/<name>.yaml` or a package-registered flows directory.
+**Location:** each flow is a self-contained directory at `.pi/flows/flows/<namespace>/<name>/`, with the definition file always named `flow.yaml` inside it — `.pi/flows/flows/<namespace>/<name>/flow.yaml`. The command id `<namespace>:<name>` is derived from this directory structure. Package-registered flows directories follow the same `<namespace>/<name>/flow.yaml` layout. A flow's code-node handlers are co-located in the same directory (see below).
 
 ---
 
@@ -176,7 +176,7 @@ Run a TypeScript handler exactly like a [Code Step](#code-step), then route on a
 
 **Handler contract:**
 
-Identical to a [code step](#code-step) — same handler path (`.pi/flows/handlers/<flow>/<id>.ts` or explicit `target:`), same `inputs`/`outputs`, same soft/hard failure model, same value coercion. The handler ADDITIONALLY returns a reserved `branch: string` key:
+Identical to a [code step](#code-step) — same handler path (`<flow-dir>/<id>.ts`, co-located beside `flow.yaml`, or explicit `target:`), same `inputs`/`outputs`, same soft/hard failure model, same value coercion. The handler ADDITIONALLY returns a reserved `branch: string` key:
 
 ```typescript
 import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
@@ -390,7 +390,7 @@ export default async function (input: Input, ctx: CodeNodeContext): Promise<Outp
 
 **Handler location and generation:**
 
-By convention the real handler lives at `.pi/flows/handlers/<flow>/<id>.ts`. A scaffold template is written alongside it as `.pi/flows/handlers/<flow>/<id>.ts.default` on every successful flow save and via the `/flows:generate <name>` command. The `.default` suffix makes the file un-importable by the engine; copy it, drop `.default`, then implement the body. The template is always regenerated from the YAML; it never touches the real `.ts`.
+The real handler is co-located with the flow definition at `<flow-dir>/<id>.ts`, where `<flow-dir>` is `dirname(flow.source)` — the same directory that holds `flow.yaml`. A scaffold template is written alongside it as `<flow-dir>/<id>.ts.default` on every successful flow save and via the `/flows:generate <name>` command. The generator and the executor resolve this path identically (source-relative), so generated and runtime paths never diverge. The `.default` suffix makes the file un-importable by the engine; copy it, drop `.default`, then implement the body. The template is always regenerated from the YAML; it never touches the real `.ts`.
 
 When a `target:` field is set the step imports that path directly and no template is generated.
 

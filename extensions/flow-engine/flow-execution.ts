@@ -599,7 +599,7 @@ async function executeAgentStepWithRouting(step: AgentStep, ctx: FlowContext, op
 }
 
 async function executeCodeStepWithRouting(step: CodeStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
-  const result = await executeCodeStep(step, ctx, options, options.flow.name);
+  const result = await executeCodeStep(step, ctx, options, options.flow.name, options.flow.source);
   // Outcome-aware routing: success -> on_complete, soft -> on_error.
   // A `hard` outcome (FlowHardError) or a soft failure with no on_error escalates
   // to a flow halt. Code nodes run as separator steps, so the runFlow separator
@@ -971,7 +971,7 @@ function storeForkContext(
  * to a hard flow halt. An off-map `branch` is likewise a hard failure.
  */
 async function executeCodeDecisionStep(step: CodeDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
-  const result = await executeCodeStep(step, ctx, options, options.flow.name);
+  const result = await executeCodeStep(step, ctx, options, options.flow.name, options.flow.source);
 
   // Execution failure: code-decision has no on_error edge, so any soft/hard
   // failure halts the flow (mirrors a soft failure with no on_error).

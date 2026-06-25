@@ -162,7 +162,7 @@ describe("flow_write", () => {
     expect(out.written).toBe(true);
     expect(out.namespace).toBe("team");
     expect(out.command).toBe("team:review");
-    const expectedPath = join(tmp, ".pi", "flows", "flows", "team", "review.yaml");
+    const expectedPath = join(tmp, ".pi", "flows", "flows", "team", "review", "flow.yaml");
     expect(out.path).toBe(expectedPath);
     expect(existsSync(expectedPath)).toBe(true);
     expect(emitted.some((e) => e.channel === "flow:rediscover")).toBe(true);
@@ -175,13 +175,13 @@ describe("flow_write", () => {
 
     expect(out.namespace).toBe("custom");
     expect(out.command).toBe("custom:thing");
-    expect(existsSync(join(tmp, ".pi", "flows", "flows", "custom", "thing.yaml"))).toBe(true);
+    expect(existsSync(join(tmp, ".pi", "flows", "flows", "custom", "thing", "flow.yaml"))).toBe(true);
   });
 
   it("overwrites an existing flow (edit) on the same namespace/name", async () => {
     const { pi, tools } = mkPi();
     registerFlowWriteTool(pi, () => agentsWith("alpha"), tmp);
-    const path = join(tmp, ".pi", "flows", "flows", "custom", "thing.yaml");
+    const path = join(tmp, ".pi", "flows", "flows", "custom", "thing", "flow.yaml");
 
     await call(tools.get("flow_write")!, { name: "thing", content: flowYaml("alpha") });
     const second = flowYaml("alpha").replace("A test flow", "Edited flow");
@@ -198,8 +198,30 @@ describe("flow_write", () => {
 
     expect(out.written).toBe(false);
     expect(out.diagnostics.length).toBeGreaterThan(0);
-    expect(existsSync(join(tmp, ".pi", "flows", "flows", "custom", "bad.yaml"))).toBe(false);
+    expect(existsSync(join(tmp, ".pi", "flows", "flows", "custom", "bad", "flow.yaml"))).toBe(false);
     expect(emitted.some((e) => e.channel === "flow:rediscover")).toBe(false);
+  });
+
+  it("surfaces generatedHandlers (.ts.default paths) for code nodes", async () => {
+    const { pi, tools } = mkPi();
+    registerFlowWriteTool(pi, () => agentsWith("alpha"), tmp);
+    const content = `name: my-flow
+description: A test flow
+steps:
+  - id: step1
+    agent: alpha
+    task: do \${{task}}
+  - id: transform
+    type: code
+    outputs:
+      - name: result
+`;
+    const out = await call(tools.get("flow_write")!, { name: "thing", content });
+
+    expect(out.written).toBe(true);
+    const expected = join(tmp, ".pi", "flows", "flows", "custom", "thing", "transform.ts.default");
+    expect(out.generatedHandlers).toContain(expected);
+    expect(existsSync(expected)).toBe(true);
   });
 
   it("does not accept a raw path parameter", () => {

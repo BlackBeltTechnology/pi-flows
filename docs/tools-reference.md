@@ -190,7 +190,7 @@ On validation failure, no file is written and `written` is `false`. On success, 
 
 ### `flow_write`
 
-Validate and write a flow `.yaml` file. On validation success, writes to the discovery-derived location `.pi/flows/flows/<namespace>/<name>.yaml` and triggers `flow:rediscover` to register the flow as a `/<namespace>:<name>` command. Overwriting an existing file edits it in-place (no separate edit tool needed).
+Validate and write a flow definition. On validation success, writes to the discovery-derived location `.pi/flows/flows/<namespace>/<name>/flow.yaml` — each flow is a self-contained directory whose code-node handlers are co-located beside `flow.yaml` — and triggers `flow:rediscover` to register the flow as a `/<namespace>:<name>` command. Overwriting an existing file edits it in-place (no separate edit tool needed).
 
 **Available in:** Main session (requires `flows.editFlow: true` in settings).
 
@@ -198,7 +198,7 @@ Validate and write a flow `.yaml` file. On validation success, writes to the dis
 ```typescript
 {
   namespace?: string;  // Flow namespace (default: "custom"). Auto-registers as /<namespace>:<name> command
-  name:       string;  // Flow name. Determines filename in .pi/flows/flows/<namespace>/<name>.yaml
+  name:       string;  // Flow name. Determines directory in .pi/flows/flows/<namespace>/<name>/flow.yaml
   content:    string;  // Flow YAML content
 }
 ```
