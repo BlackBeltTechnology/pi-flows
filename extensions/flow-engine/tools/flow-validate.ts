@@ -17,11 +17,9 @@ import type {
   FlowStep,
   AgentStep,
   CodeStep,
+  CodeDecisionStep,
   ForkStep,
-  ConditionalStep,
   AgentDecisionStep,
-  AgentLoopDecisionStep,
-  FlowRefStep,
 } from "../types.js";
 export type { Diagnostic };
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
@@ -278,17 +276,6 @@ export function validateFlowContent(
           }
           break;
         }
-        case "agent-loop-decision": {
-          const s = step as AgentLoopDecisionStep;
-          if (!knownAgents.has(s.agent)) {
-            diagnostics.push({
-              line: stepPropLine(idx, s.id, "agent"),
-              severity: "warning",
-              message: `Agent "${s.agent}" referenced in agent-loop-decision is not in the catalog`,
-            });
-          }
-          break;
-        }
         case "fork": {
           const s = step as ForkStep;
           if (s.agent && !knownAgents.has(s.agent)) {
@@ -314,10 +301,23 @@ export function validateFlowContent(
     }
   }
 
-  // 4b. Code node validation: id, inputs, outputs, references
+  // 4b. Code node validation: id, inputs, outputs, references.
+  // Covers both `code` and `code-decision` (which shares the handler shape).
   for (const step of flow.steps) {
-    if (step.stepType !== "code") continue;
+    if (step.stepType !== "code" && step.stepType !== "code-decision") continue;
+    // Both share the handler shape (id/inputs/outputs/blockedBy). on_complete/
+    // on_error only exist on `code`; reading them on a code-decision is undefined.
     const s = step as CodeStep;
+
+    // code-decision: the reserved `branch` routing key must not be a data output.
+    if (step.stepType === "code-decision" && (s.outputs ?? []).some((o) => o.name === "branch")) {
+      diagnostics.push({
+        line: stepPropLine(idx, s.id, "output.branch") || stepPropLine(idx, s.id, "outputs"),
+        severity: "error",
+        message: `code-decision "${s.id}" declares an output named "branch", which is reserved for routing`,
+        suggestion: "Rename the data output, or remove it — `branch` is the reserved routing key.",
+      });
+    }
 
     // Filesystem-safe id: no /, \, .., :
     if (!/^[a-zA-Z0-9_.-]+$/.test(s.id)) {
@@ -531,7 +531,10 @@ export function validateFlowContent(
     }
   }
 
-  // 4f. Branch target validation (fork + agent-decision)
+  // 4f. Branch target validation.
+  // Fork: dangling-target only (human-driven, no loop/min-branch rules).
+  // *-decision (agent-decision + code-decision): dangling target, <2 branches,
+  // and backward (loop) edges must declare max_iterations.
   for (const step of flow.steps) {
     if (step.stepType === "fork") {
       const s = step as ForkStep;
@@ -547,56 +550,50 @@ export function validateFlowContent(
           }
         }
       }
+      continue;
     }
-    if (step.stepType === "agent-decision") {
-      const s = step as AgentDecisionStep;
-      for (const [branch, target] of Object.entries(s.branches)) {
-        if (!stepIds.has(target)) {
-          diagnostics.push({
-            line: stepPropLine(idx, s.id, `branch.${branch}`) || stepPropLine(idx, s.id, "branches"),
-            severity: "error",
-            message: `Agent-decision branch "${branch}" targets unknown step ID "${target}"`,
-            suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
-          });
-        }
-      }
-    }
-  }
 
-  // 4g. Agent-loop-decision target validation
-  for (const step of flow.steps) {
-    if (step.stepType !== "agent-loop-decision") continue;
-    const s = step as AgentLoopDecisionStep;
+    if (step.stepType !== "agent-decision" && step.stepType !== "code-decision") continue;
+    const s = step as AgentDecisionStep | CodeDecisionStep;
+    const label = step.stepType;
+    const branchEntries = Object.entries(s.branches ?? {});
+    const stepIdx = orderedStepIds.indexOf(s.id);
+    const hasMaxIterations = typeof s.max_iterations === "number";
 
-    // loop_target
-    if (!stepIds.has(s.loop_target)) {
+    // A *-decision must offer a real choice (>= 2 branches).
+    if (branchEntries.length < 2) {
       diagnostics.push({
-        line: stepPropLine(idx, s.id, "loop_target"),
+        line: stepPropLine(idx, s.id, "branches") || stepLine(idx, s.id),
         severity: "error",
-        message: `loop_target "${s.loop_target}" references unknown step ID`,
-        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+        message: `${label} "${s.id}" declares ${branchEntries.length} branch(es); a decision needs at least 2`,
+        suggestion: "Add more branches, or use a plain code/agent node with on_complete for a single forward edge",
       });
-    } else {
-      // Warn if loop_target points forward
-      const blockIdx = orderedStepIds.indexOf(s.id);
-      const targetIdx = orderedStepIds.indexOf(s.loop_target);
-      if (targetIdx >= 0 && blockIdx >= 0 && targetIdx > blockIdx) {
+    }
+
+    let hasBackwardEdge = false;
+    for (const [branch, target] of branchEntries) {
+      if (!stepIds.has(target)) {
         diagnostics.push({
-          line: stepPropLine(idx, s.id, "loop_target"),
-          severity: "warning",
-          message: `loop_target "${s.loop_target}" points forward — expected a backward jump for a loop`,
-          suggestion: "loop_target should reference a step defined before this loop decision step",
+          line: stepPropLine(idx, s.id, `branch.${branch}`) || stepPropLine(idx, s.id, "branches"),
+          severity: "error",
+          message: `${label} branch "${branch}" targets unknown step ID "${target}"`,
+          suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
         });
+        continue;
+      }
+      // Backward (loop) edge: target at or before this step in document order.
+      const targetIdx = orderedStepIds.indexOf(target);
+      if (targetIdx >= 0 && stepIdx >= 0 && targetIdx <= stepIdx) {
+        hasBackwardEdge = true;
       }
     }
 
-    // exit_target
-    if (!stepIds.has(s.exit_target)) {
+    if (hasBackwardEdge && !hasMaxIterations) {
       diagnostics.push({
-        line: stepPropLine(idx, s.id, "exit_target"),
+        line: stepPropLine(idx, s.id, "branches") || stepLine(idx, s.id),
         severity: "error",
-        message: `exit_target "${s.exit_target}" references unknown step ID`,
-        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+        message: `${label} "${s.id}" has a branch that loops back (backward edge) but declares no max_iterations`,
+        suggestion: "Add max_iterations: <n> to bound the loop",
       });
     }
   }
@@ -775,14 +772,9 @@ function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
     const onError = (step as { on_error?: string }).on_error;
     if (onError) addEdge(step.id, onError);
 
-    if (step.stepType === "fork" || step.stepType === "agent-decision") {
-      const branches = (step as ForkStep | AgentDecisionStep).branches;
+    if (step.stepType === "fork" || step.stepType === "agent-decision" || step.stepType === "code-decision") {
+      const branches = (step as ForkStep | AgentDecisionStep | CodeDecisionStep).branches;
       if (branches) for (const target of Object.values(branches)) addEdge(step.id, target);
-    }
-    if (step.stepType === "agent-loop-decision") {
-      const s = step as AgentLoopDecisionStep;
-      addEdge(step.id, s.loop_target);
-      addEdge(step.id, s.exit_target);
     }
   }
 

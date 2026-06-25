@@ -1,5 +1,7 @@
 /**
- * Tests for code node dispatch (task 4.2/4.3) and conditional typed-output resolution (task 4.4/4.5).
+ * Tests for code node dispatch (lifecycle events) and typed-output resolution.
+ * Typed outputs from a code node feed downstream steps and code-decision
+ * presence handlers (the canonical replacement for the removed `conditional`).
  */
 
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -123,11 +125,10 @@ export default async function handler(input, ctx) {
 
 // ── 4.4/4.5: Conditional typed-output resolution ────────────────────────────
 
-describe("Conditional typed-output resolution (4.4/4.5)", () => {
-  // These tests work directly with the ctx.results map that executeConditionalStep reads.
-  // We import and test via the flow-execution module's conditional logic.
-  // Since executeConditionalStep is private, we verify the behavior through the
-  // code node executor's output making it into ctx.results correctly.
+describe("typed-output resolution", () => {
+  // A code node's typed outputs land in the ctx.results map and become available
+  // to downstream steps (and to a code-decision presence handler, the canonical
+  // replacement for the removed `conditional` step).
 
   it("typed output from code node is available in results map", async () => {
     const handlerPath = tempHandler(`

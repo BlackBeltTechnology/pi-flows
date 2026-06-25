@@ -11,7 +11,7 @@
  * - Routes FlowHardError as hard failure; everything else as soft failure
  */
 
-import type { CodeStep, AgentResult, CodeNodeContext, FailureInfo } from "./types.js";
+import type { CodeStep, CodeDecisionStep, AgentResult, CodeNodeContext, FailureInfo } from "./types.js";
 import { classifyThrownError } from "./failure.js";
 import { expandTemplateVariables } from "./execution.js";
 import { existsSync } from "node:fs";
@@ -46,11 +46,16 @@ export interface CodeNodeExecOptions {
 // ---- Main executor ---------------------------------------------------------
 
 export async function executeCodeStep(
-  step: CodeStep,
+  step: CodeStep | CodeDecisionStep,
   ctx: CodeNodeFlowCtx,
   options: CodeNodeExecOptions,
   flowName: string,
 ): Promise<AgentResult> {
+  // A `code-decision` node runs identically to `code` but reserves a `branch`
+  // output for routing. Tag lifecycle events with its kind and allow `branch`
+  // through the otherwise-strict undeclared-key check.
+  const isDecision = step.stepType === "code-decision";
+  const kind = isDecision ? "code-decision" : "code";
   // ── Resolve handler path ─────────────────────────────────────────────────
   let handlerPath: string;
   if (step.target) {
@@ -60,7 +65,7 @@ export async function executeCodeStep(
   }
 
   // ── Lifecycle: started ────────────────────────────────────────────────────
-  options.onAgentStarted?.(step.id, step.id, undefined, { kind: "code" });
+  options.onAgentStarted?.(step.id, step.id, undefined, { kind });
 
   // ── Missing handler check ────────────────────────────────────────────────
   if (!existsSync(handlerPath)) {
@@ -73,7 +78,7 @@ export async function executeCodeStep(
       `  cp "${templatePath}" "${handlerPath}"\n` +
       `Then implement the default export function.`,
     );
-    options.onAgentComplete?.(step.id, step.id, missingResult, { kind: "code" });
+    options.onAgentComplete?.(step.id, step.id, missingResult, { kind });
     return missingResult;
   }
 
@@ -123,7 +128,7 @@ export async function executeCodeStep(
     const importErr = makeSoftFailure(
       `Code node "${step.id}": failed to import handler "${handlerPath}": ${(err as Error).message}`,
     );
-    options.onAgentComplete?.(step.id, step.id, importErr, { kind: "code" });
+    options.onAgentComplete?.(step.id, step.id, importErr, { kind });
     return importErr;
   }
 
@@ -132,7 +137,7 @@ export async function executeCodeStep(
     const noExportErr = makeSoftFailure(
       `Code node "${step.id}": handler has no default export function (got ${typeof handler})`,
     );
-    options.onAgentComplete?.(step.id, step.id, noExportErr, { kind: "code" });
+    options.onAgentComplete?.(step.id, step.id, noExportErr, { kind });
     return noExportErr;
   }
 
@@ -151,7 +156,7 @@ export async function executeCodeStep(
       info = { ...base, message: `Code node "${step.id}": handler threw: ${base.message}` };
     }
     const throwResult = makeFailure(info);
-    options.onAgentComplete?.(step.id, step.id, throwResult, { kind: "code" });
+    options.onAgentComplete?.(step.id, step.id, throwResult, { kind });
     return throwResult;
   }
 
@@ -160,20 +165,40 @@ export async function executeCodeStep(
   const returned = rawReturn as Record<string, unknown>;
   const typedOutputs: Record<string, string> = {};
 
+  // code-decision: pull the reserved `branch` routing key out before data-output
+  // validation. It is required, must be a string, and is never a declared data
+  // output. The resolved branch travels to the router via finishParams.branch.
+  let decisionBranch: string | undefined;
+  if (isDecision) {
+    const rawBranch = returned.branch;
+    if (rawBranch === undefined || rawBranch === null) {
+      const missingBranch = makeSoftFailure(`Code node "${step.id}": missing reserved "branch" output (a code-decision handler must return { branch: ... })`);
+      options.onAgentComplete?.(step.id, step.id, missingBranch, { kind });
+      return missingBranch;
+    }
+    if (typeof rawBranch !== "string") {
+      const badBranch = makeSoftFailure(`Code node "${step.id}": reserved "branch" output must be a string (got ${typeof rawBranch})`);
+      options.onAgentComplete?.(step.id, step.id, badBranch, { kind });
+      return badBranch;
+    }
+    decisionBranch = rawBranch;
+  }
+
   // All declared keys must be present
   for (const name of declaredNames) {
     if (!(name in returned)) {
       const contractErr = makeSoftFailure(`Code node "${step.id}": missing declared output "${name}"`);
-      options.onAgentComplete?.(step.id, step.id, contractErr, { kind: "code" });
+      options.onAgentComplete?.(step.id, step.id, contractErr, { kind });
       return contractErr;
     }
   }
 
-  // No undeclared extra keys
+  // No undeclared extra keys (the reserved `branch` key is allowed on code-decision)
   for (const key of Object.keys(returned)) {
+    if (key === "branch" && isDecision) continue;
     if (!declaredNames.includes(key)) {
       const extraErr = makeSoftFailure(`Code node "${step.id}": undeclared output key "${key}" — remove it or add it to outputs:`);
-      options.onAgentComplete?.(step.id, step.id, extraErr, { kind: "code" });
+      options.onAgentComplete?.(step.id, step.id, extraErr, { kind });
       return extraErr;
     }
   }
@@ -189,7 +214,7 @@ export async function executeCodeStep(
     } else {
       const vkind = val === null ? "null" : Array.isArray(val) ? "array" : "object";
       const coerceErr = makeSoftFailure(`Code node "${step.id}": output "${name}" must be a string or primitive value (got ${vkind}); use JSON.stringify() to serialize`);
-      options.onAgentComplete?.(step.id, step.id, coerceErr, { kind: "code" });
+      options.onAgentComplete?.(step.id, step.id, coerceErr, { kind });
       return coerceErr;
     }
   }
@@ -217,8 +242,11 @@ export async function executeCodeStep(
     tokens: { input: 0, output: 0 },
     typedOutputs,
     outcome: "success",
+    // code-decision surfaces its chosen branch to the router the same way an
+    // agent-decision does (via finishParams.branch); data outputs stay separate.
+    ...(decisionBranch !== undefined ? { finishParams: { branch: decisionBranch } } : {}),
   };
-  options.onAgentComplete?.(step.id, step.id, successResult, { kind: "code" });
+  options.onAgentComplete?.(step.id, step.id, successResult, { kind });
   return successResult;
 }
 
@@ -228,7 +256,7 @@ async function executeWithTimeout(
   handler: Function,
   input: Record<string, string>,
   codeCtx: CodeNodeContext,
-  step: CodeStep,
+  step: CodeStep | CodeDecisionStep,
   nodeController: AbortController,
 ): Promise<unknown> {
   const handlerPromise = (handler as (i: any, c: any) => Promise<unknown>)(input, codeCtx);

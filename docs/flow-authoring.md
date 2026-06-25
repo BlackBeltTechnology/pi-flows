@@ -333,7 +333,7 @@ steps:
 The engine splits the flat step list into **segments**:
 
 ```
-steps: [A, B, C, fork, D, E, loop-decision, F]
+steps: [A, B, C, fork, D, E, agent-decision, F]
         ──────────  ────  ──────  ─────────────  ──
          DAG seg    sep   DAG seg    sep          DAG seg
          parallel         parallel
@@ -341,7 +341,7 @@ steps: [A, B, C, fork, D, E, loop-decision, F]
 ```
 
 - **DAG segments** — consecutive `agent` steps. Executed as a parallel wave, respecting `blockedBy` dependencies. All steps in a wave that have no unsatisfied `blockedBy` entries fire concurrently, up to `max_concurrent`.
-- **Separator steps** — `fork`, `conditional`, `agent-decision`, `agent-loop-decision`, `flow-ref`. Execute one at a time and control routing.
+- **Separator steps** — `fork`, `agent-decision`, `code-decision`, `flow-ref`. Execute one at a time and control routing.
 - **Cross-segment routing** — `on_complete` and `on_error` on agent steps can jump to any step ID, including steps in different segments.
 
 ---
@@ -352,15 +352,15 @@ Every step requires a unique `id` field. The `type` field is optional — the en
 
 | Has field | Inferred type |
 |-----------|--------------|
-| `loop_target` | `agent-loop-decision` |
 | `question` | `fork` |
-| `check` | `conditional` |
 | `path` (no `agent`) | `flow-ref` |
 | `branches` (no `question`) | `agent-decision` |
 | `agent` or none of the above | `agent` |
 | _(no distinguishing field)_ | — must use explicit `type: code` |
 
-Use explicit `type:` when the inference would be ambiguous.
+The canonical step types are `agent`, `agent-decision`, `code`, `code-decision`, `fork`, and `flow-ref`. `code` and `code-decision` are **never** inferred — always write their `type:` explicitly. Use explicit `type:` whenever the inference would be ambiguous.
+
+> **Removed types.** `conditional` and `agent-loop-decision` no longer exist. The parser rejects them with migration errors. Replace `conditional` with the code decision step and `agent-loop-decision` with an `agent-decision` loop (see Loops).
 
 ---
 
@@ -449,26 +449,69 @@ Presents a choice to the user and routes to different steps based on the selecti
 
 ---
 
-#### 3. Conditional step
+#### 3. Code decision step
 
-Binary branch based on whether a result field is empty or non-empty.
+Run a TypeScript handler exactly like a [code step](#7-code-step), then route on a reserved `branch` output. Use it for deterministic routing — thresholds, presence checks, computed classification — without spawning an agent.
 
 ```yaml
-- id: has-gaps
-  type: conditional
-  check: researcher.artifacts    # format: stepId.field
-  present: gap-filler             # step ID if field has content
-  absent: finalizer               # step ID if field is empty
+- id: route-approval
+  type: code-decision
+  inputs:
+    score: ${{result.reconcile.score}}
+  outputs:
+    - name: approvers      # optional data outputs (never `branch`)
+  branches:
+    auto_approve: export
+    needs_human: human-review
+    park: hold
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `id` | Yes | Unique step identifier. |
-| `check` | Yes | `stepId.field` — the field to check. Common fields: `summary`, `artifacts`, `files`, or any typed output name. |
-| `present` | Yes | Step ID to route to if the field is non-empty. |
-| `absent` | Yes | Step ID to route to if the field is empty or absent. |
+| `id` | Yes | Unique step identifier. Determines the handler filename — must be filesystem-safe. |
+| `type` | Yes | Must be `code-decision`. Not inferred; always explicit. |
+| `branches` | Yes | Map of branch label → target step ID. Must declare **at least 2** branches. |
+| `inputs` | No | Same as a code step — map of input name → `${{...}}` template string. |
+| `outputs` | No | Optional data outputs the handler must return. **Never include `branch`** — it is reserved. |
+| `target` | No | Override the handler file path. Skips scaffold generation. |
+| `blockedBy` | No | Step IDs that must complete before this step runs. |
+| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). See [Loops](#5-loops). |
+| `timeout` | No | Soft deadline in milliseconds. |
 
-No regex or value comparison — purely presence/absence.
+**Handler contract.** Identical to a [code step](#7-code-step) — same handler path (`.pi/flows/handlers/<flow>/<id>.ts` or explicit `target:`), same `inputs`/`outputs`, same soft/hard failure model and value coercion. The handler ADDITIONALLY returns a reserved `branch: string` key:
+
+```typescript
+import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
+
+interface Input  { score: string }
+type Branch = "auto_approve" | "needs_human" | "park";
+interface Output { approvers: string }
+
+export default async function (
+  input: Input,
+  ctx: CodeNodeContext,
+): Promise<{ branch: Branch } & Output> {
+  const score = Number(input.score);
+  if (score >= 0.9) return { branch: "auto_approve", approvers: "alice,bob" };
+  if (score >= 0.5) return { branch: "needs_human", approvers: "" };
+  return { branch: "park", approvers: "" };
+}
+```
+
+- `branch` resolves against the step's `branches:` map; the flow routes to the mapped step.
+- `branch` is **reserved** — declaring an output named `branch` in `outputs:` is a validation error.
+- Data outputs (e.g. `approvers`) follow the normal code-step return contract.
+
+| Condition | Outcome |
+|-----------|---------|
+| Fewer than 2 `branches` | Validation error — use a plain `code` step with `on_complete`. |
+| `branch` declared in `outputs:` | Validation error — `branch` is reserved. |
+| Handler return omits `branch` | Soft failure naming the reserved `branch` output. |
+| Returned `branch` not in `branches:` | **Hard** failure — halts the flow (consistent with `agent-decision`). |
+
+**Type-safe scaffold.** `/flows:generate` emits a `type Branch = "auto_approve" | "needs_human" | "park";` union per `code-decision` and types the return as `Promise<{ branch: Branch } & Output>`, so an off-map label is a compile-time error. Scaffolds write a `.ts.default` and never overwrite an implemented handler.
+
+> **Migrating from `conditional`.** Replace `type: conditional` with `type: code-decision`. Read the value previously in `check: <stepId>.<key>` as a handler **input** and return `{ branch: "present" }` or `{ branch: "absent" }`, with `branches: { present: <present-target>, absent: <absent-target> }`. Standard fields (`artifacts`, `summary`, `files`, `status`) remain available as `${{result.<stepId>.<field>}}` inputs.
 
 ---
 
@@ -494,40 +537,22 @@ An agent evaluates options and calls `finish({ branch: "chosen" })` to select th
 | `agent` | Yes | Agent that makes the decision. |
 | `task` | Yes | Context for the decision agent. Template string. |
 | `branches` | Yes | Map of branch name → target step ID. |
+| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). See [Loops](#5-loops). |
 
-The guard injects the branch names into the `finish` tool parameters as a union type. The agent must pick one of the declared branch names.
+The guard injects the branch names into the `finish` tool parameters as a union type. The agent must pick one of the declared branch names. A `branch` not in `branches:` hard-fails the flow. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#5-loops).
 
 ---
 
-#### 5. Agent loop decision step
+#### 5. Loops
 
-Iterative loop control. An agent decides to loop back or continue forward.
+A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — whose branch target points to an **earlier** step, re-entering the graph to form a cycle. There is no dedicated loop step type; a loop is just a backward branch edge.
 
-```yaml
-- id: verify-loop
-  type: agent-loop-decision
-  agent: flow-decision
-  task: >
-    Evaluate verification result (iteration ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}).
-    Verifier output: ${{result.verifier.summary}}
-    If all checks pass → "exit". If issues remain → "fixer".
-  loop_target: fixer      # step to jump BACK to (must be an earlier step)
-  exit_target: summarizer  # step to continue FORWARD to
-  max_iterations: 3        # safety cap — forced exit when exceeded
-```
+- A `*-decision` node with a branch target pointing to an earlier step **MUST** declare `max_iterations`.
+- The engine tracks per-node iteration counts and forces exit when the cap is reached — control falls through to the next step.
+- A `*-decision` node whose branches all point forward needs no `max_iterations`.
+- The dashboard ↻ iteration badge is driven by the `flow:loop-iteration` event, emitted only when a backward edge is actually taken — not inferred from the presence of `max_iterations`.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | Yes | Unique step identifier. |
-| `agent` | Yes | Agent that evaluates loop/exit. Typically `flow-decision`. |
-| `task` | Yes | Evaluation context. Template string. Include `${{loop.id.iteration}}` and `${{loop.id.max}}` for transparency. |
-| `loop_target` | Yes | Step ID to jump **back** to. |
-| `exit_target` | Yes | Step ID to continue **forward** to. |
-| `max_iterations` | Yes | Safety cap. When exceeded, the engine forces the exit path without asking the agent. |
-
-The agent calls `finish({ branch: "<loop_target>" })` to loop or `finish({ branch: "<exit_target>" })` to exit.
-
-**Typical verify/fix loop:**
+**Typical verify/fix loop (agent-driven):**
 ```yaml
 - id: implement
   agent: implementer
@@ -539,14 +564,15 @@ The agent calls `finish({ branch: "<loop_target>" })` to loop or `finish({ branc
   task: Run tests and verify the implementation.
 
 - id: should-fix
-  type: agent-loop-decision
+  type: agent-decision
   agent: flow-decision
   task: >
     Iteration ${{loop.should-fix.iteration}}/${{loop.should-fix.max}}.
     Verification: ${{result.verify.summary}}
     Choose "fixer" if failures remain, "done" if all pass.
-  loop_target: fixer
-  exit_target: done
+  branches:
+    fixer: fixer    # backward edge → loop
+    done: done      # forward edge → exit
   max_iterations: 3
 
 - id: fixer
@@ -560,6 +586,12 @@ The agent calls `finish({ branch: "<loop_target>" })` to loop or `finish({ branc
   agent: summarizer
   task: Summarize the completed implementation.
 ```
+
+The agent calls `finish({ branch: "fixer" })` to loop or `finish({ branch: "done" })` to exit. A `code-decision` loops the same way — return `{ branch: "fixer" }` from the handler.
+
+**Routing node semantics.** A routing node (`fork`, `agent-decision`, `code-decision`, `flow-ref`) always executes, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches not taken receive synthetic `skipped` results; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
+
+> **Migrating from `agent-loop-decision`.** Replace `type: agent-loop-decision` with `type: agent-decision`. Move `loop_target` and `exit_target` into `branches:` (e.g. `branches: { rework: <loop_target>, done: <exit_target> }`) and keep `max_iterations`. The agent calls `finish({ branch: "rework" })` or `finish({ branch: "done" })`.
 
 ---
 
@@ -678,25 +710,34 @@ When a `target:` field is present, no template is generated; the author owns tha
 
 After a successful write, the engine emits a non-fatal drift **warning** if the real handler’s `interface Input` / `interface Output` blocks disagree with the YAML — silently skipped when those blocks are absent (runtime shape validation is the backstop).
 
-**Typed outputs in conditionals**
+**Presence routing with a `code-decision`**
 
-A `conditional` step’s `check:` field can reference any typed output from a code step:
+A `code-decision` handler can read any typed output from an upstream code step as an input and route on its presence:
 
 ```yaml
 - id: route-on-valid
-  type: conditional
-  check: validate-nav.valid    # typed output from the code step
-  present: approve
-  absent: park
+  type: code-decision
+  inputs:
+    valid: ${{result.validate-nav.valid}}    # typed output from the code step
+  branches:
+    present: approve
+    absent: park
 ```
 
-The engine resolves `check` against the merged typed-output map first, falling back to `fullOutput` only when the key is absent.
+```typescript
+type Branch = "present" | "absent";
+export default async function (input: { valid: string }): Promise<{ branch: Branch }> {
+  return { branch: input.valid ? "present" : "absent" };
+}
+```
+
+Typed outputs resolve against the merged typed-output map first, falling back to `fullOutput` only when the key is absent.
 
 ---
 
 ### Template variables
 
-Template expressions `${{...}}` are expanded in `task`, `inputs` values, `question`, and `agent-loop-decision.task`. They are **not** validated at parse time — a typo silently resolves to an empty string.
+Template expressions `${{...}}` are expanded in `task`, `inputs` values, and `question`. They are **not** validated at parse time — a typo silently resolves to an empty string.
 
 | Variable | Resolves to |
 |----------|------------|

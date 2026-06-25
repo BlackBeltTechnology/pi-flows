@@ -1,4 +1,4 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, ConditionalStep, AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult, CodeStep } from "./types.js";
+import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
@@ -98,12 +98,12 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
   const { flow, task, cwd } = options;
   const startTime = Date.now();
 
-  // Build loopMaxIterations map from flow steps
+  // Build loopMaxIterations map from any decision node that caps a backward
+  // (loop) edge. A loop is a *-decision branch pointing to an earlier step.
   const loopMaxIterations: Record<string, number> = {};
   for (const step of flow.steps) {
-    if (step.stepType === "agent-loop-decision") {
-      loopMaxIterations[step.id] = step.max_iterations;
-    }
+    const mi = (step as { max_iterations?: number }).max_iterations;
+    if (typeof mi === "number") loopMaxIterations[step.id] = mi;
   }
 
   const ctx: FlowContext = {
@@ -528,12 +528,62 @@ async function executeStep(step: FlowStep, ctx: FlowContext, options: FlowRunOpt
   switch (step.stepType) {
     case "agent": return executeAgentStepWithRouting(step, ctx, options);
     case "code": return executeCodeStepWithRouting(step, ctx, options);
+    case "code-decision": return executeCodeDecisionStep(step, ctx, options);
     case "fork": return executeForkStep(step, ctx, options);
-    case "conditional": return executeConditionalStep(step, ctx, options);
     case "agent-decision": return executeAgentDecisionStep(step, ctx, options);
-    case "agent-loop-decision": return executeAgentLoopDecisionStep(step, ctx, options);
     case "flow-ref": return executeFlowRefStep(step, ctx, options);
   }
+}
+
+// ---- Branch routing (shared by agent-decision and code-decision) -----------
+
+/**
+ * True when `targetId` re-enters the node `stepId` (a backward / loop edge).
+ * Detected from document order: a branch target at or before the deciding
+ * step's position forms a cycle. Forward targets sit strictly after it.
+ */
+function isBackwardTarget(steps: FlowStep[], stepId: string, targetId: string): boolean {
+  const si = steps.findIndex((s) => s.id === stepId);
+  const ti = steps.findIndex((s) => s.id === targetId);
+  return ti >= 0 && si >= 0 && ti <= si;
+}
+
+/**
+ * Resolve a chosen branch label to its routing target, applying the unified
+ * loop semantics: a backward target increments the node's iteration counter
+ * (reused from `loopCounters`) and emits `flow:loop-iteration`. Once the cap
+ * (`max_iterations`) is reached the engine forces exit by falling through to
+ * the next segment (returns `nextStepId: undefined`) instead of re-entering
+ * the loop target. Callers guarantee `branch` is present in `branches`.
+ */
+function routeDecisionBranch(
+  step: { id: string; branches: Record<string, string>; max_iterations?: number },
+  ctx: FlowContext,
+  options: FlowRunOptions,
+  branch: string,
+): { nextStepId?: string } {
+  const target = step.branches[branch];
+  if (!isBackwardTarget(ctx.steps, step.id, target)) {
+    return { nextStepId: target };
+  }
+
+  // Backward (loop) edge. max_iterations is required by validation; default to
+  // the value captured in loopMaxIterations as a backstop.
+  const max = step.max_iterations ?? ctx.loopMaxIterations[step.id];
+  const taken = ctx.loopCounters[step.id] ?? 0;
+  if (max !== undefined && taken >= max) {
+    // Cap reached: stop looping, force exit (fall through to the next segment).
+    return { nextStepId: undefined };
+  }
+  const iteration = taken + 1;
+  ctx.loopCounters[step.id] = iteration;
+
+  // Dashboard cards are keyed by agent name; resolve the loop target's name.
+  const loopTargetStep = ctx.steps.find((s) => s.id === target);
+  const loopTargetAgent = loopTargetStep?.stepType === "agent" ? (loopTargetStep as AgentStep).agent : target;
+  options.onLoopIteration?.(step.id, iteration, max ?? 0, loopTargetAgent);
+
+  return { nextStepId: target };
 }
 
 async function executeAgentStepWithRouting(step: AgentStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
@@ -913,27 +963,43 @@ function storeForkContext(
   });
 }
 
-async function executeConditionalStep(step: ConditionalStep, ctx: FlowContext, _options: FlowRunOptions): Promise<StepResult> {
-  // Parse check field: "step-id.field" or just "step-id"
-  const dotIdx = step.check.lastIndexOf(".");
-  const stepId = dotIdx > 0 ? step.check.slice(0, dotIdx) : step.check;
-  const field = dotIdx > 0 ? step.check.slice(dotIdx + 1) : "artifacts";
+/**
+ * A `code-decision` runs its handler exactly like a `code` node (reusing
+ * executeCodeStep) then routes on the reserved `branch` output resolved against
+ * `branches:`. An execution failure (missing handler, throw, timeout, missing
+ * declared/reserved output) has no `on_error` to fall back to, so it escalates
+ * to a hard flow halt. An off-map `branch` is likewise a hard failure.
+ */
+async function executeCodeDecisionStep(step: CodeDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
+  const result = await executeCodeStep(step, ctx, options, options.flow.name);
 
-  const result = ctx.results[stepId];
-  if (!result) {
-    return { nextStepId: step.absent };
+  // Execution failure: code-decision has no on_error edge, so any soft/hard
+  // failure halts the flow (mirrors a soft failure with no on_error).
+  if (result.outcome !== "success") {
+    result.outcome = "hard";
+    result.failureInfo = {
+      outcome: "hard",
+      message: result.failureInfo?.message ?? result.output ?? "Hard failure",
+      source: result.failureInfo?.source ?? "code_decision_hard_fail",
+    };
+    return { agentResult: result, nextStepId: undefined };
   }
 
-  // Check if the resolved field is non-empty.
-  // Standard fields resolve directly; any other key resolves from typedOutputs
-  // (merged into result map via storeResult) before falling back to fullOutput.
-  const target = field === "artifacts" ? result.artifacts
-    : field === "summary" ? result.summary
-    : field === "files" ? result.files
-    : field === "status" ? result.status
-    : (field in result ? (result as Record<string, string>)[field] : result.fullOutput);
-  const exists = (target ?? "").trim().length > 0;
-  return { nextStepId: exists ? step.present : step.absent };
+  const branch = result.finishParams?.branch as string | undefined;
+
+  // Off-map branch is a hard failure (consistent with agent-decision), halting
+  // the flow independent of any routing.
+  if (!branch || !(branch in step.branches)) {
+    const valid = Object.keys(step.branches).join(", ");
+    const message = `code-decision "${step.id}": branch "${branch ?? "(none)"}" is not in the branches map. Valid branches: ${valid}`;
+    result.outcome = "hard";
+    result.failureInfo = { outcome: "hard", message, source: "code_decision_off_map_branch" };
+    result.result = { ...result.result, status: "error", summary: message };
+    return { agentResult: result, nextStepId: undefined };
+  }
+
+  const { nextStepId } = routeDecisionBranch(step, ctx, options, branch);
+  return { agentResult: result, nextStepId };
 }
 
 async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
@@ -985,90 +1051,18 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
 
   options.onAgentComplete?.(step.agent, step.id, result);
 
-  // Route via finish tool's branch parameter
+  // Route via finish tool's branch parameter. A backward branch target loops
+  // (bounded by max_iterations); a forward target exits.
   const branch = result.finishParams?.branch;
   if (branch && step.branches[branch]) {
-    return { nextStepId: step.branches[branch], agentResult: result };
+    const { nextStepId } = routeDecisionBranch(step, ctx, options, branch);
+    return { nextStepId, agentResult: result };
   }
 
   // Fallback: first branch when agent fails or branch missing
-  const firstBranch = Object.values(step.branches)[0];
-  return { nextStepId: firstBranch, agentResult: result };
-}
-
-async function executeAgentLoopDecisionStep(step: AgentLoopDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
-  // 1-based iteration that stays aligned between the loop body and this
-  // decision step. The counter is initialized lazily to 1 (the first body pass
-  // already observed 1 via expandTemplateVariables' `?? 1` default) and is
-  // incremented on loop-back below, so body pass N and decision pass N agree.
-  const iteration = ctx.loopCounters[step.id] ?? 1;
-  ctx.loopCounters[step.id] = iteration;
-
-  // Emit loop iteration event — resolve loop_target step ID to agent name
-  // (dashboard cards are keyed by agent name, not step ID)
-  const loopTargetStep = ctx.steps.find(s => s.id === step.loop_target);
-  const loopTargetAgent = loopTargetStep?.stepType === "agent" ? (loopTargetStep as AgentStep).agent : step.loop_target;
-  options.onLoopIteration?.(step.id, iteration, step.max_iterations, loopTargetAgent);
-
-  // Safety cap: force exit when max_iterations exceeded
-  if (iteration > step.max_iterations) {
-    return { nextStepId: step.exit_target };
-  }
-
-  const agentConfig = options.getAgent(step.agent);
-  if (!agentConfig) return { nextStepId: step.exit_target };
-
-  const decisionConfig = { ...agentConfig };
-
-  const decisionTask = expandTemplateVariables(step.task, {
-    task: ctx.task, inputs: {},
-    results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-  }) + `\n\nThis is iteration ${iteration} of ${step.max_iterations}.`;
-
-  const templateCtx: TemplateContext = {
-    task: ctx.task, inputs: {},
-    results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-  };
-
-  const skillContents = new Map<string, string>();
-  if (decisionConfig.skills) {
-    for (const skill of decisionConfig.skills) {
-      const content = options.getSkillContent?.(skill);
-      if (content) skillContents.set(skill, content);
-    }
-  }
-  options.onAgentStarted?.(step.agent, step.id);
-
-  const result = await spawnAgent({
-    agent: decisionConfig,
-    task: decisionTask,
-    templateContext: templateCtx,
-    skillContents,
-    pi: options.pi,
-    cwd: options.cwd,
-    authStorage: options.authStorage,
-    modelRegistry: options.modelRegistry,
-    extraAgentExtensions: options.extraAgentExtensions,
-    extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
-    decisionBranches: ["loop", "exit"],
-    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
-    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
-    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text),
-    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text),
-    signal: options.signal,
-  });
-
-  options.onAgentComplete?.(step.agent, step.id, result);
-
-  const branch = result.finishParams?.branch;
-  if (branch === "loop") {
-    // Advance the counter so the NEXT body pass (and the next decision) see N+1.
-    ctx.loopCounters[step.id] = iteration + 1;
-    return { nextStepId: step.loop_target, agentResult: result };
-  }
-  return { nextStepId: step.exit_target, agentResult: result };
+  const firstBranchLabel = Object.keys(step.branches)[0];
+  const { nextStepId } = routeDecisionBranch(step, ctx, options, firstBranchLabel);
+  return { nextStepId, agentResult: result };
 }
 
 async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {

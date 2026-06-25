@@ -10,9 +10,8 @@ import type {
   FlowStep,
   AgentStep,
   ForkStep,
-  ConditionalStep,
   AgentDecisionStep,
-  AgentLoopDecisionStep,
+  CodeDecisionStep,
   FlowRefStep,
 } from "../flow-engine/types.js";
 import { renderBox } from "./box-renderer.js";
@@ -27,12 +26,30 @@ const KEY_BACKSPACE_2 = "\b";
 // Step type symbols
 const SYMBOLS: Record<string, string> = {
   agent: "○",
+  code: "▣",
+  "code-decision": "◈",
   fork: "◇",
-  conditional: "◆",
   "agent-decision": "◈",
-  "agent-loop-decision": "↻",
   "flow-ref": "▷",
 };
+
+/**
+ * A *-decision branch is a backward (loop) edge when its target sits at or
+ * before the deciding step in document order. Mirrors the engine's runtime
+ * detection (isBackwardTarget) so the preview's loop arrows match execution.
+ */
+function backwardBranches(
+  flow: FlowConfig,
+  stepId: string,
+  branches: Record<string, string>,
+): Array<[string, string]> {
+  const order = flow.steps.map((s) => s.id);
+  const si = order.indexOf(stepId);
+  return Object.entries(branches).filter(([, target]) => {
+    const ti = order.indexOf(target);
+    return ti >= 0 && si >= 0 && ti <= si;
+  });
+}
 
 export interface FlowPreviewOverlayOptions {
   flow: FlowConfig;
@@ -63,7 +80,11 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
   }
   const metaParts: string[] = [`${flow.steps.length} steps`];
   if (flow.max_concurrent) metaParts.push(`max concurrent: ${flow.max_concurrent}`);
-  const loopCount = flow.steps.filter(s => s.stepType === "agent-loop-decision").length;
+  // A loop is any *-decision with a backward branch edge.
+  const loopCount = flow.steps.filter((s) =>
+    (s.stepType === "agent-decision" || s.stepType === "code-decision") &&
+    backwardBranches(flow, s.id, (s as AgentDecisionStep | CodeDecisionStep).branches ?? {}).length > 0,
+  ).length;
   if (loopCount > 0) metaParts.push(`${loopCount} loop${loopCount > 1 ? "s" : ""}`);
   lines.push(`  ${fg("dim", metaParts.join(" │ "))}`);
   lines.push(fg("dim", "  " + "─".repeat(Math.max(0, inner))));
@@ -108,33 +129,28 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
         break;
       }
 
-      case "conditional": {
-        const s = step as ConditionalStep;
-        lines.push(`  ${fg("dim", num)} ${fg("warning", sym)} ${fg("accent", s.id)} ${fg("dim", "(conditional)")}`);
-        lines.push(`     ${fg("dim", `check: ${s.check}`)}`);
-        lines.push(`     ${fg("dim", `present → ${s.present}`)}`);
-        lines.push(`     ${fg("dim", `absent → ${s.absent}`)}`);
-        break;
-      }
-
-      case "agent-decision": {
-        const s = step as AgentDecisionStep;
-        lines.push(`  ${fg("dim", num)} ${fg("warning", sym)} ${fg("accent", s.id)} ${fg("dim", "(agent-decision)")}`);
-        lines.push(`     ${fg("dim", `agent: ${s.agent}`)}`);
-        lines.push(`     ${fg("muted", truncate("task: " + s.task, inner - 5))}`);
-        for (const [branch, target] of Object.entries(s.branches)) {
-          lines.push(`     ${fg("dim", `"${branch}" → ${target}`)}`);
+      case "agent-decision":
+      case "code-decision": {
+        const s = step as AgentDecisionStep | CodeDecisionStep;
+        const back = new Set(backwardBranches(flow, s.id, s.branches ?? {}).map(([b]) => b));
+        const looping = back.size > 0;
+        const tag = step.stepType === "code-decision" ? "code-decision" : "agent-decision";
+        const symStyle = looping ? "accent" : "warning";
+        const symbol = looping ? "↻" : sym;
+        lines.push(`  ${fg("dim", num)} ${fg(symStyle, symbol)} ${fg("accent", s.id)} ${fg("dim", `(${tag}${looping ? ", loop" : ""})`)}`);
+        if (step.stepType === "agent-decision") {
+          lines.push(`     ${fg("dim", `agent: ${(s as AgentDecisionStep).agent}`)}`);
+          lines.push(`     ${fg("muted", truncate("task: " + (s as AgentDecisionStep).task, inner - 5))}`);
         }
-        break;
-      }
-
-      case "agent-loop-decision": {
-        const s = step as AgentLoopDecisionStep;
-        lines.push(`  ${fg("dim", num)} ${fg("accent", sym)} ${fg("accent", s.id)} ${fg("dim", "(loop)")}`);
-        lines.push(`     ${fg("dim", `agent: ${s.agent}`)}`);
-        lines.push(`     ${fg("muted", truncate("task: " + s.task, inner - 5))}`);
-        lines.push(`     ${fg("accent", `loop → ${s.loop_target}`)}  ${fg("dim", `(max ${s.max_iterations} iterations)`)}`);
-        lines.push(`     ${fg("dim", `exit → ${s.exit_target}`)}`);
+        const maxIter = (s as { max_iterations?: number }).max_iterations;
+        for (const [branch, target] of Object.entries(s.branches ?? {})) {
+          if (back.has(branch)) {
+            const cap = typeof maxIter === "number" ? `  ${fg("dim", `(max ${maxIter} iterations)`)}` : "";
+            lines.push(`     ${fg("accent", `"${branch}" ↻ ${target}`)}${cap}`);
+          } else {
+            lines.push(`     ${fg("dim", `"${branch}" → ${target}`)}`);
+          }
+        }
         break;
       }
 
@@ -213,7 +229,7 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
   }
 
   // ── Legend ──
-  lines.push(fg("dim", `  Legend: ○ agent  ◇ fork  ◆ conditional  ◈ decision  ↻ loop  ▷ flow-ref`));
+  lines.push(fg("dim", `  Legend: ○ agent  ▣ code  ◈ decision  ◇ fork  ↻ loop  ▷ flow-ref`));
   lines.push("");
   lines.push(fg("dim", "  ↑ ↓ scroll · Backspace close"));
 

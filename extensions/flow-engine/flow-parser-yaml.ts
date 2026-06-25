@@ -10,10 +10,9 @@ import type {
   FlowStep,
   AgentStep,
   CodeStep,
+  CodeDecisionStep,
   ForkStep,
-  ConditionalStep,
   AgentDecisionStep,
-  AgentLoopDecisionStep,
   FlowRefStep,
 } from "./types.js";
 import { readFileSync } from "node:fs";
@@ -79,13 +78,28 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
   const explicitType = raw.type as string | undefined;
   const stepType = explicitType || inferStepType(raw);
 
+  // Removed step types: actionable migration errors (see unify-decision-routing).
+  if (stepType === "conditional") {
+    throw new Error(
+      `Step "${id}": step type "conditional" was removed. Replace with type: code-decision — ` +
+      `read the checked value as a handler input and return { branch: "present" } or { branch: "absent" }, ` +
+      `with branches: { present: <present-target>, absent: <absent-target> }: ${source}`,
+    );
+  }
+  if (stepType === "agent-loop-decision") {
+    throw new Error(
+      `Step "${id}": step type "agent-loop-decision" was removed. Replace with type: agent-decision — ` +
+      `move loop_target and exit_target into branches: (e.g. branches: { rework: <loop_target>, done: <exit_target> }) ` +
+      `and keep max_iterations: ${source}`,
+    );
+  }
+
   switch (stepType) {
     case "agent": return parseAgentStep(raw, source);
     case "code": return parseCodeStep(raw, source);
+    case "code-decision": return parseCodeDecisionStep(raw, source);
     case "fork": return parseForkStep(raw, source);
-    case "conditional": return parseConditionalStep(raw, source);
     case "agent-decision": return parseAgentDecisionStep(raw, source);
-    case "agent-loop-decision": return parseAgentLoopDecisionStep(raw, source);
     case "flow-ref": return parseFlowRefStep(raw, source);
     default:
       throw new Error(`Unknown step type "${stepType}" for step "${id}": ${source}`);
@@ -93,9 +107,9 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
 }
 
 function inferStepType(raw: any): string {
-  if (raw.loop_target) return "agent-loop-decision";
+  if (raw.loop_target) return "agent-loop-decision"; // removed — surfaces a migration error
   if (raw.question) return "fork";
-  if (raw.check) return "conditional";
+  if (raw.check) return "conditional"; // removed — surfaces a migration error
   if (raw.path) return "flow-ref";
   if (raw.branches && !raw.question) return "agent-decision";
   if (raw.agent) return "agent";
@@ -155,16 +169,6 @@ function parseForkStep(raw: any, source: string): ForkStep {
   return step;
 }
 
-function parseConditionalStep(raw: any, source: string): ConditionalStep {
-  return {
-    stepType: "conditional",
-    id: raw.id,
-    check: requireString(raw, "check", source),
-    present: requireString(raw, "present", source),
-    absent: requireString(raw, "absent", source),
-  };
-}
-
 function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
   const branches: Record<string, string> = {};
   if (raw.branches && typeof raw.branches === "object") {
@@ -173,25 +177,55 @@ function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
     }
   }
 
-  return {
+  const step: AgentDecisionStep = {
     stepType: "agent-decision",
     id: raw.id,
     agent: requireString(raw, "agent", source),
     task: requireString(raw, "task", source),
     branches,
   };
+  if (raw.max_iterations !== undefined) step.max_iterations = toInt(raw.max_iterations, source);
+  return step;
 }
 
-function parseAgentLoopDecisionStep(raw: any, source: string): AgentLoopDecisionStep {
-  return {
-    stepType: "agent-loop-decision",
+function parseCodeDecisionStep(raw: any, source: string): CodeDecisionStep {
+  const branches: Record<string, string> = {};
+  if (raw.branches && typeof raw.branches === "object") {
+    for (const [k, v] of Object.entries(raw.branches)) {
+      branches[k] = String(v);
+    }
+  }
+
+  const step: CodeDecisionStep = {
+    stepType: "code-decision",
     id: raw.id,
-    agent: requireString(raw, "agent", source),
-    task: requireString(raw, "task", source),
-    loop_target: requireString(raw, "loop_target", source),
-    exit_target: requireString(raw, "exit_target", source),
-    max_iterations: toInt(raw.max_iterations, source),
+    branches,
   };
+
+  if (raw.target) step.target = String(raw.target);
+  if (raw.max_iterations !== undefined) step.max_iterations = toInt(raw.max_iterations, source);
+  if (raw.timeout !== undefined) step.timeout = toInt(raw.timeout, source);
+
+  if (raw.blockedBy) {
+    step.blockedBy = Array.isArray(raw.blockedBy)
+      ? raw.blockedBy.map(String)
+      : [String(raw.blockedBy)];
+  }
+
+  if (raw.inputs && typeof raw.inputs === "object") {
+    step.inputs = {};
+    for (const [k, v] of Object.entries(raw.inputs)) {
+      step.inputs[k] = String(v);
+    }
+  }
+
+  if (raw.outputs && Array.isArray(raw.outputs)) {
+    step.outputs = raw.outputs.map((output: any) => ({
+      name: typeof output === "string" ? output : String(output.name ?? output),
+    }));
+  }
+
+  return step;
 }
 
 function parseFlowRefStep(raw: any, source: string): FlowRefStep {
