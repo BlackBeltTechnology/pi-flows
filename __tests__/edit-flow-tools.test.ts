@@ -138,6 +138,7 @@ function flowYaml(agentName: string): string {
 description: A test flow
 steps:
   - id: step1
+    type: agent
     agent: ${agentName}
     task: do \${{task}}
 `;
@@ -209,6 +210,7 @@ describe("flow_write", () => {
 description: A test flow
 steps:
   - id: step1
+    type: agent
     agent: alpha
     task: do \${{task}}
   - id: transform

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: every flow step must declare an explicit `type:`** (`decision-routing` capability) — the YAML parser no longer infers a step's type from which fields are present. A step missing `type:` is rejected with an error naming the step id and listing the valid types (`agent`, `agent-decision`, `code`, `code-decision`, `fork`, `flow-ref`). This removes the silent-reclassification footgun (a typo'd discriminator or stray `branches:` no longer changes a step's type) and collapses the rule to one line: every step declares its `type:`. Flows authored before this change that relied on inference must add the `type:` line to each step.
+
 ### Added
 
 - **`code` step type** (`code-node` capability) — run deterministic TypeScript as a first-class DAG node, wired exactly like an agent. A code node's handler is the **default export** of a `.ts` module, invoked `(input, ctx)`: declared `inputs:` are template-expanded to strings; the returned object must contain exactly the declared `outputs:` (primitive values coerced via `String()`, objects/arrays/null rejected) and is merged into the result context as typed outputs. `ctx: CodeNodeContext` (exported from the package, alongside `CodeNodeHandler<I,O>`) carries `signal`, `cwd`, `logger`, `setSummary`, `flowName`, `stepId`, and `task`. Handlers run in-process (jiti dynamic import) with cooperative `AbortSignal`; an optional `timeout` is a soft deadline. Failure routing follows the node-failure-model: a plain `throw` (or a contract/coercion/missing-handler/timeout failure) is **soft**, `throw new FlowHardError(msg)` is **hard**.

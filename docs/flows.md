@@ -6,7 +6,7 @@ Complete reference for authoring flows in pi-flows. Covers all step types with s
 
 ## Flow File Format
 
-Flows are `.yaml` files with YAML frontmatter followed by step definitions. Each step has a unique `id` and is connected to other steps via `blockedBy` declarations to form a directed acyclic graph (DAG).
+Flows are `.yaml` files with YAML frontmatter followed by step definitions. Each step has a unique `id`, an explicit `type:` (one of `agent`, `agent-decision`, `code`, `code-decision`, `fork`, `flow-ref`), and is connected to other steps via `blockedBy` declarations to form a directed acyclic graph (DAG). The parser does not infer `type:` — a step missing it is rejected.
 
 **Location:** each flow is a self-contained directory at `.pi/flows/flows/<namespace>/<name>/`, with the definition file always named `flow.yaml` inside it — `.pi/flows/flows/<namespace>/<name>/flow.yaml`. The command id `<namespace>:<name>` is derived from this directory structure. Package-registered flows directories follow the same `<namespace>/<name>/flow.yaml` layout. A flow's code-node handlers are co-located in the same directory (see below).
 
@@ -45,7 +45,7 @@ task_prompt: "What feature should I research and implement?"
 
 Steps form a DAG based on `blockedBy` declarations. pi-flows schedules steps that have no pending dependencies in parallel, respecting `max_concurrent`.
 
-### Agent Step (default)
+### Agent Step
 
 Dispatches a named agent with a task. This is the most common step type.
 
@@ -54,6 +54,7 @@ Dispatches a named agent with a task. This is the most common step type.
 ```yaml
 steps:
   - id: my-step
+    type: agent
     agent: agent-name
     task: Optional task override with ${{template}} variables
     blockedBy: [step-a, step-b]
@@ -68,6 +69,7 @@ steps:
 | Field | Description |
 |-------|-------------|
 | `id` | **Required.** Unique step identifier |
+| `type` | **Required.** Must be `agent`. Every step declares an explicit `type:`. |
 | `agent` | **Required.** Agent name to dispatch |
 | `task` | Task override (template string). If omitted, uses the flow's task |
 | `blockedBy` | Array of step IDs that must complete before this step starts |
@@ -83,14 +85,17 @@ description: Research multiple domains in parallel
 
 steps:
   - id: backend-research
+    type: agent
     agent: researcher
     task: Investigate backend patterns for ${{task}}
 
   - id: frontend-research
+    type: agent
     agent: researcher
     task: Investigate frontend patterns for ${{task}}
 
   - id: synthesizer
+    type: agent
     agent: synthesizer
     blockedBy: [backend-research, frontend-research]
     inputs:
@@ -123,6 +128,7 @@ Pause execution and present options to the user. The selected option determines 
 
 | Field | Required | Description |
 |-------|:--------:|-------------|
+| `type` | ✓ | Must be `fork`. |
 | `question` | ✓ | Question displayed to the user |
 | `options` | ✓ | Comma-separated or YAML list of choices |
 | `branches` | ✓ | Map of option text → step ID |
@@ -165,7 +171,7 @@ Run a TypeScript handler exactly like a [Code Step](#code-step), then route on a
 | Field | Required | Description |
 |-------|:--------:|-------------|
 | `id` | ✓ | Unique step identifier. Also determines the handler filename — must be filesystem-safe. |
-| `type` | ✓ | Must be `code-decision`. Not inferred; always write it explicitly. |
+| `type` | ✓ | Must be `code-decision`. Like every step, `type:` is required and never inferred. |
 | `branches` | ✓ | Map of branch label → target step ID. Must declare **at least 2** branches. |
 | `inputs` | | Same as a code step — map of input name → `${{...}}` template string. |
 | `outputs` | | Optional data outputs the handler must return. **Never include `branch`** — it is reserved. |
@@ -236,6 +242,7 @@ Delegate a routing decision to an agent. The agent analyzes the context and call
 
 | Field | Required | Description |
 |-------|:--------:|-------------|
+| `type` | ✓ | Must be `agent-decision`. |
 | `agent` | ✓ | Agent name — must call `finish` with a valid `branch` |
 | `task` | ✓ | Task for the decision agent. Supports template variables. |
 | `branches` | ✓ | Map of branch names → step IDs |
@@ -267,6 +274,7 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
 ```yaml
 steps:
   - id: developer
+    type: agent
     agent: developer
     task: Implement ${{task}}
 
@@ -282,6 +290,7 @@ steps:
     max_iterations: 3
 
   - id: finalize
+    type: agent
     agent: summarizer
     task: Summarize the completed implementation
 ```
@@ -316,6 +325,7 @@ Delegate execution to another flow file. The sub-flow runs to completion before 
 
 | Field | Description |
 |-------|-------------|
+| `type` | **Required.** Must be `flow-ref`. |
 | `path` | **Required.** Path to the sub-flow `.yaml` file |
 | `on_complete` | Step ID to route to after sub-flow completes |
 | `on_error` | Step ID to route to if sub-flow errors |
@@ -351,7 +361,7 @@ Execute a TypeScript handler function in-process. Code steps run deterministic, 
 | Field | Required | Description |
 |-------|:--------:|-------------|
 | `id` | ✓ | Unique step identifier. Also determines the handler filename — must be filesystem-safe. |
-| `type` | ✓ | Must be `code`. Not inferred; always write it explicitly. |
+| `type` | ✓ | Must be `code`. Like every step, `type:` is required and never inferred. |
 | `inputs` | | Map of input name → `${{...}}` template string. Each resolved value arrives in the handler as a string. Unresolved templates become `""`. |
 | `outputs` | | List of `{ name }` objects declaring which keys the handler must return. Names must be valid JS identifiers and unique within the step. |
 | `target` | | Override the handler file path. When set, the step imports that file directly and no `.ts.default` scaffold is generated. |
@@ -605,15 +615,18 @@ description: Research, plan, then implement
 
 steps:
   - id: research
+    type: agent
     agent: researcher
     task: Investigate the codebase for ${{task}}
 
   - id: planner
+    type: agent
     agent: planner
     blockedBy: [research]
     task: Create an implementation plan based on: ${{result.research.summary}}
 
   - id: implementer
+    type: agent
     agent: developer
     blockedBy: [planner]
     inputs:
@@ -637,14 +650,17 @@ steps:
       Deep analysis: deep
 
   - id: quick
+    type: agent
     agent: quick-scanner
     task: Quick scan of ${{task}}
 
   - id: deep
+    type: agent
     agent: deep-analyzer
     task: Deep analysis of ${{task}}
 
   - id: report
+    type: agent
     agent: reporter
     blockedBy: [quick, deep]
     task: Generate report from analysis results
@@ -658,10 +674,12 @@ description: Implement with verification loop
 
 steps:
   - id: implement
+    type: agent
     agent: developer
     task: Implement ${{task}}
 
   - id: verify
+    type: agent
     agent: verifier
     blockedBy: [implement]
     task: Verify the implementation
@@ -676,6 +694,7 @@ steps:
     max_iterations: 3
 
   - id: done
+    type: agent
     agent: summarizer
     task: Summarize the completed work
 ```

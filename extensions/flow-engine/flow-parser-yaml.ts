@@ -74,9 +74,14 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
     throw new Error(`Step ${index} missing "id" field: ${source}`);
   }
 
-  // Determine step type: explicit `type:` field or infer from fields
-  const explicitType = raw.type as string | undefined;
-  const stepType = explicitType || inferStepType(raw);
+  // Every step MUST declare its type explicitly; the parser does not infer.
+  const stepType = raw.type as string | undefined;
+  if (!stepType || typeof stepType !== "string") {
+    throw new Error(
+      `Step "${id}" missing required "type" field. ` +
+      `Declare one of: agent, agent-decision, code, code-decision, fork, flow-ref: ${source}`,
+    );
+  }
 
   // Removed step types: actionable migration errors (see unify-decision-routing).
   if (stepType === "conditional") {
@@ -104,16 +109,6 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
     default:
       throw new Error(`Unknown step type "${stepType}" for step "${id}": ${source}`);
   }
-}
-
-function inferStepType(raw: any): string {
-  if (raw.loop_target) return "agent-loop-decision"; // removed — surfaces a migration error
-  if (raw.question) return "fork";
-  if (raw.check) return "conditional"; // removed — surfaces a migration error
-  if (raw.path) return "flow-ref";
-  if (raw.branches && !raw.question) return "agent-decision";
-  if (raw.agent) return "agent";
-  return "agent"; // default
 }
 
 function parseAgentStep(raw: any, source: string): AgentStep {

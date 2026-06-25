@@ -15,7 +15,7 @@ import { generateCodeHandlers } from "../extensions/flow-engine/flow-generate.js
 import { executeCodeStep } from "../extensions/flow-engine/execute-code-step.js";
 import type { CodeStep, FlowConfig } from "../extensions/flow-engine/types.js";
 
-const MIN_FLOW = "name: ignored\ndescription: d\nsteps:\n  - id: s\n    agent: a\n";
+const MIN_FLOW = "name: ignored\ndescription: d\nsteps:\n  - id: s\n    type: agent\n    agent: a\n";
 
 function makeCtx() {
   return { task: "t", results: {}, loopCounters: {}, loopMaxIterations: {} } as any;

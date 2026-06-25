@@ -352,17 +352,18 @@ steps: [A, B, C, fork, D, E, agent-decision, F]
 
 ### Step types
 
-Every step requires a unique `id` field. The `type` field is optional — the engine infers type from which fields are present:
+Every step requires BOTH a unique `id` field AND an explicit `type` field. The parser does **not** infer type from which fields are present — a step missing `type:` is rejected with an error listing the valid types.
 
-| Has field | Inferred type |
-|-----------|--------------|
-| `question` | `fork` |
-| `path` (no `agent`) | `flow-ref` |
-| `branches` (no `question`) | `agent-decision` |
-| `agent` or none of the above | `agent` |
-| _(no distinguishing field)_ | — must use explicit `type: code` |
+The canonical step types are `agent`, `agent-decision`, `code`, `code-decision`, `fork`, and `flow-ref`. The table below is a reference for the fields that distinguish each type; it is **not** an inference rule — you must still declare `type:` on every step.
 
-The canonical step types are `agent`, `agent-decision`, `code`, `code-decision`, `fork`, and `flow-ref`. `code` and `code-decision` are **never** inferred — always write their `type:` explicitly. Use explicit `type:` whenever the inference would be ambiguous.
+| Step type | Distinguishing fields |
+|-----------|----------------------|
+| `fork` | `question` |
+| `flow-ref` | `path` (no `agent`) |
+| `agent-decision` | `branches` (no `question`) |
+| `agent` | `agent` |
+| `code` | (handler-only — no distinguishing field) |
+| `code-decision` | `branches` + handler |
 
 > **Removed types.** `conditional` and `agent-loop-decision` no longer exist. The parser rejects them with migration errors. Replace `conditional` with the code decision step and `agent-loop-decision` with an `agent-decision` loop (see Loops).
 
@@ -374,7 +375,7 @@ The primary step type. Dispatches a named agent with an optional task and inputs
 
 ```yaml
 - id: researcher
-  type: agent           # optional — inferred from "agent:" field
+  type: agent           # required
   agent: my-researcher
   task: >
     Research the codebase for: ${{task}}
