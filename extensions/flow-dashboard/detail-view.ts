@@ -171,7 +171,7 @@ export function renderDetailView(
   headerLines.push(fg("dim", "  " + "─".repeat(Math.max(0, inner))));
 
   // ── Build footer ──
-  const thinkingHint = showThinking ? "ctrl+t hide thinking" : "ctrl+t show thinking";
+  const thinkingHint = showThinking ? "alt+t hide thinking" : "alt+t show thinking";
   const footerLines = [
     "",
     fg("dim", `  Backspace back · ↑ ↓ ${scroll.expandedIndex >= 0 ? "scroll" : "navigate"} · Enter ${scroll.expandedIndex >= 0 ? "collapse" : "expand"} · ${thinkingHint}`),
