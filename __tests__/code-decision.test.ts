@@ -95,8 +95,8 @@ export default async function (input, ctx) { return { branch: "a" }; }
     const kinds: string[] = [];
     await executeCodeStep(step, makeCtx(), {
       cwd: tmpdir(),
-      onAgentStarted: (_n, _s, _m, extra) => kinds.push(extra?.kind ?? ""),
-      onAgentComplete: (_n, _s, _r, extra) => kinds.push(extra?.kind ?? ""),
+      onAgentStarted: (_n, _s, _m, extra) => kinds.push(extra?.nodeKind ?? ""),
+      onAgentComplete: (_n, _s, _r, extra) => kinds.push(extra?.nodeKind ?? ""),
     }, "f");
     expect(kinds).toEqual(["code-decision", "code-decision"]);
   });

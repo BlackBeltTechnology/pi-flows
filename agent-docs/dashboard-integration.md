@@ -145,6 +145,25 @@ See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md`.
 
 **Landing:** Two repos land independently. Reload survival visible once both ship.
 
+## Node kind on agent lifecycle events
+
+`NodeKind` first-class discriminator. Carried end-to-end on flow node lifecycle events.
+`NodeKind` = `"agent" | "fork" | "agent-decision" | "code" | "code-decision" | "flow-ref"`. Defined extensions/flow-engine/types.ts.
+`NodeKind` is node TYPE. Distinct from dashboard timeline-entry `kind` (`text | thinking | tool | error`). Timeline-entry `kind` describes entries inside card.
+
+`EventEmitObserver` puts `nodeKind` on `flow:agent-started` + `flow:agent-complete` payloads for ALL node types.
+Before: only `code`/`code-decision` carried tag. Dropped at FlowManager fan-out.
+`code`/`code-decision` started events also carry resolved handler `target` path.
+
+`FlowEventRecord.data` = exact emitted payload. `nodeKind` lands in persisted records automatically. NO `FlowEventRecord` interface change.
+Replay: dashboard `reduceFlowEvent` reconstructs card TYPE (not just timeline). Reads `nodeKind` off recorded `flow_agent_started`.
+
+`code`/`code-decision` card `assistant-text` entries = program logs by card `nodeKind`. No new event type. No per-line marker. Dashboard infers logs from card kind.
+
+**Cross-repo follow-up:** NO new `FLOW_EVENT_MAP` entry.
+pi-agent-dashboard change reducer-side only. Read `nodeKind` off `flow_agent_started` to select card renderer. Live AND replayed runs.
+Two repos land independently. Unknown/absent `nodeKind` degrades gracefully to generic node card.
+
 ## Inbound event: `flow:set-edit-mode`
 
 Most `flow:*` events go pi-flows -> dashboard. `flow:set-edit-mode { enabled: boolean }` goes dashboard -> pi-flows.

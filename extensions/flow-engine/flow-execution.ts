@@ -1,4 +1,4 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep } from "./types.js";
+import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
@@ -72,8 +72,8 @@ export interface FlowRunOptions {
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkillContent?: (name: string) => string | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
-  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: { kind?: string }) => void;
-  onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { kind?: string }) => void;
+  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }) => void;
+  onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }) => void;
   onToolCall?: (agentName: string, stepId: string, toolName: string, input: any) => void;
   onToolResult?: (agentName: string, stepId: string, toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (agentName: string, stepId: string, text: string) => void;
@@ -641,8 +641,8 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       duration: 0,
       tokens: { input: 0, output: 0 },
     };
-    options.onAgentStarted?.(step.agent, step.id);
-    options.onAgentComplete?.(step.agent, step.id, errorResult);
+    options.onAgentStarted?.(step.agent, step.id, undefined, { nodeKind: "agent" });
+    options.onAgentComplete?.(step.agent, step.id, errorResult, { nodeKind: "agent" });
     return errorResult;
   }
 
@@ -655,7 +655,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     // Model resolution failed — will be caught again inside spawnAgent
   }
 
-  options.onAgentStarted?.(step.agent, step.id, resolvedModelId);
+  options.onAgentStarted?.(step.agent, step.id, resolvedModelId, { nodeKind: "agent" });
 
   // Resolve step inputs at dispatch time.
   // File inputs (file:// prefix) are read from disk. Their content is stored with unique
@@ -779,7 +779,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     resolvedModelId,
   });
 
-  options.onAgentComplete?.(step.agent, step.id, result);
+  options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent" });
   return result;
 }
 
@@ -829,7 +829,7 @@ async function spawnForkDecisionAgent(
   }
 
   const agentName = step.agent || agentConfig.name;
-  options.onAgentStarted?.(agentName, step.id);
+  options.onAgentStarted?.(agentName, step.id, undefined, { nodeKind: "fork" });
 
   const result = await spawnAgent({
     agent: agentConfig,
@@ -849,7 +849,7 @@ async function spawnForkDecisionAgent(
     signal: options.signal,
   });
 
-  options.onAgentComplete?.(agentName, step.id, result);
+  options.onAgentComplete?.(agentName, step.id, result, { nodeKind: "fork" });
 
   const branch = result.finishParams?.branch;
   if (branch && step.branches[branch]) {
@@ -880,7 +880,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
 
   // Signal that the fork step is active (waiting for user input)
   const forkAgentName = step.agent || "fork";
-  options.onAgentStarted?.(forkAgentName, step.id);
+  options.onAgentStarted?.(forkAgentName, step.id, undefined, { nodeKind: "fork" });
 
   const extra: Record<string, boolean | Record<string, string>> = {};
   if (step.multiSelect) extra.multiSelect = true;
@@ -899,18 +899,18 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
 
   // Handle auto-decide: user chose to let the agent decide this fork
   if (response.answer === "__auto_decide__" && step.agent) {
-    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult("Auto-decide"));
+    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult("Auto-decide"), { nodeKind: "fork" });
     return spawnForkDecisionAgent(step, ctx, options);
   }
 
   // Handle custom-decide: user typed freetext via "Other (describe)"
   if (response.answer === "__custom_decide__" && step.agent) {
-    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(response.notes || "Custom"));
+    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(response.notes || "Custom"), { nodeKind: "fork" });
     return spawnForkDecisionAgent(step, ctx, options, response.notes);
   }
 
   // User selected an option directly
-  options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(`Selected: ${response.answer}`));
+  options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(`Selected: ${response.answer}`), { nodeKind: "fork" });
 
   ctx.forks[step.id] = response;
 
@@ -1028,7 +1028,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
       if (content) skillContents.set(skill, content);
     }
   }
-  options.onAgentStarted?.(step.agent, step.id);
+  options.onAgentStarted?.(step.agent, step.id, undefined, { nodeKind: "agent-decision" });
 
   const result = await spawnAgent({
     agent: decisionConfig,
@@ -1049,7 +1049,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     signal: options.signal,
   });
 
-  options.onAgentComplete?.(step.agent, step.id, result);
+  options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent-decision" });
 
   // Route via finish tool's branch parameter. A backward branch target loops
   // (bounded by max_iterations); a forward target exits.

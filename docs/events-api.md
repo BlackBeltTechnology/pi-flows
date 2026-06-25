@@ -300,27 +300,32 @@ pi.events.on("flow:flow-started", (data: {
 
 ### `flow:agent-started`
 
-Emitted when an individual agent step begins.
+Emitted when an individual flow node begins.
 
 ```typescript
 pi.events.on("flow:agent-started", (data: {
   agentName:     string;
   stepId:        string;
   resolvedModel: string;   // actual model ID after role resolution
+  nodeKind?:     NodeKind;  // the node's TYPE (all node types emit this)
+  target?:       string;    // resolved handler path, code / code-decision only
 }) => { ... });
 ```
+
+`nodeKind` is now emitted for **every** node type (see [NodeKind taxonomy](#nodekind-taxonomy)), not just code nodes. `target` is the resolved handler path, present only on `code`/`code-decision` started events.
 
 ---
 
 ### `flow:agent-complete`
 
-Emitted when an agent step finishes (success or error).
+Emitted when a flow node finishes (success or error).
 
 ```typescript
 pi.events.on("flow:agent-complete", (data: {
   agentName: string;
   stepId:    string;
   result:    AgentResult;
+  nodeKind?: NodeKind;   // the node's TYPE (all node types emit this)
 }) => { ... });
 ```
 
@@ -475,6 +480,53 @@ The user dismissed the post-flow summary overlay.
 ```typescript
 pi.events.on("flow:summary-dismissed", () => { ... });
 ```
+
+---
+
+## NodeKind taxonomy
+
+`NodeKind` is a first-class discriminator carried end-to-end on flow node lifecycle events. It is an exported type in `extensions/flow-engine/types.ts`:
+
+```typescript
+type NodeKind =
+  | "agent"
+  | "fork"
+  | "agent-decision"
+  | "code"
+  | "code-decision"
+  | "flow-ref";
+```
+
+`NodeKind` is the node's TYPE. It is **distinct** from the dashboard timeline-entry `kind` (`text | thinking | tool | error`), which describes individual entries inside a card.
+
+Every node executor emits its own `nodeKind` on the node's lifecycle started/complete callbacks. Previously only `code`/`code-decision` carried a tag, and it was silently dropped at the `FlowManager` fan-out. Now `FlowManager` forwards the kind to every observer, and the `EventEmitObserver` puts it on the `flow:agent-started` / `flow:agent-complete` payloads.
+
+### FlowObserver signature change
+
+The `FlowObserver` interface (in `extensions/flow-engine/flow-io.ts`) gained an optional `extra` parameter on two callbacks:
+
+```typescript
+interface FlowObserver {
+  // 5th param added
+  onAgentStarted(
+    agentName: string,
+    stepId: string,
+    resolvedModel: string,
+    /* ... */,
+    extra?: { nodeKind?: NodeKind; target?: string },
+  ): void;
+
+  // 4th param added
+  onAgentComplete(
+    agentName: string,
+    stepId: string,
+    result: AgentResult,
+    extra?: { nodeKind?: NodeKind; target?: string },
+  ): void;
+}
+```
+
+`FlowManager` now forwards this `extra` argument to every observer (it used to discard it — `flow-manager.ts`). The persisted `FlowEventRecord.data` is the exact emitted payload, so `nodeKind` lands in persisted records automatically with **no `FlowEventRecord` interface change**.
 
 ---
 

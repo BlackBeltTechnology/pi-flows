@@ -5,7 +5,7 @@
 // lifecycle observation. Enables TUI, web, headless, and test adapters.
 // ---------------------------------------------------------------------------
 
-import type { AgentConfig, AgentResult, FlowConfig, FlowResult } from "./types.js";
+import type { AgentConfig, AgentResult, FlowConfig, FlowResult, NodeKind } from "./types.js";
 
 // ---- FlowIOAdapter --------------------------------------------------------
 
@@ -69,8 +69,8 @@ export interface FlowIOAdapter {
  */
 export interface FlowObserver {
   onFlowStarted?(flowName: string, flow: FlowConfig, task: string): void;
-  onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string): void;
-  onAgentComplete?(agentName: string, stepId: string, result: AgentResult): void;
+  onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }): void;
+  onAgentComplete?(agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }): void;
   onToolCall?(agentName: string, stepId: string, toolName: string, input: any): void;
   onToolResult?(agentName: string, stepId: string, toolName: string, output: any, isError: boolean): void;
   onAssistantText?(agentName: string, stepId: string, text: string): void;

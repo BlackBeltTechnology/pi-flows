@@ -11,6 +11,7 @@ import type {
   AgentResult,
   FlowConfig,
   FlowResult,
+  NodeKind,
 } from "./types.js";
 import type { FlowObserver } from "./flow-io.js";
 import { FlowEventPersister, type OrphanedRun } from "./flow-persist.js";
@@ -598,11 +599,14 @@ export class EventEmitObserver implements FlowObserver {
     stepId: string,
     config?: AgentConfig,
     resolvedModel?: string,
+    extra?: { nodeKind?: NodeKind; target?: string },
   ): void {
     this.emit("flow:agent-started", {
       agentName,
       stepId,
       resolvedModel,
+      nodeKind: extra?.nodeKind,
+      target: extra?.target,
       config: config
         ? {
             name: config.name,
@@ -619,10 +623,12 @@ export class EventEmitObserver implements FlowObserver {
     agentName: string,
     stepId: string,
     result: AgentResult,
+    extra?: { nodeKind?: NodeKind; target?: string },
   ): void {
     this.emit("flow:agent-complete", {
       agentName,
       stepId,
+      nodeKind: extra?.nodeKind,
       result: {
         success: result.success,
         status: result.result?.status,

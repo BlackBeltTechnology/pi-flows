@@ -121,6 +121,20 @@ export interface FlowConfig {
 
 // ---- Flow steps (discriminated union on `stepType`) -----------------------
 
+/**
+ * First-class node-type discriminator carried end-to-end on a node's lifecycle
+ * events (started/complete), so observers and the dashboard pick a card
+ * renderer for live AND replayed runs. Distinct from the dashboard
+ * timeline-entry `kind` (`text | thinking | tool | error`).
+ */
+export type NodeKind =
+  | "agent"
+  | "fork"
+  | "agent-decision"
+  | "code"
+  | "code-decision"
+  | "flow-ref";
+
 export type FlowStep =
   | AgentStep
   | CodeStep

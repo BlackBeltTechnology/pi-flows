@@ -55,7 +55,7 @@ export default async function handler(input, ctx) { return {}; }
     expect(started).toHaveLength(1);
     expect(started[0].name).toBe("my-code-node");
     expect(started[0].stepId).toBe("my-code-node");
-    expect(started[0].extra?.kind).toBe("code");
+    expect(started[0].extra?.nodeKind).toBe("code");
   });
 
   it("fires onAgentComplete with name=id, result, and kind='code'", async () => {
@@ -77,7 +77,7 @@ export default async function handler(input, ctx) { return { x: "1" }; }
     expect(completed[0].name).toBe("my-code-node");
     expect(completed[0].stepId).toBe("my-code-node");
     expect(completed[0].result.success).toBe(true);
-    expect(completed[0].extra?.kind).toBe("code");
+    expect(completed[0].extra?.nodeKind).toBe("code");
   });
 
   it("fires onAssistantText when handler calls ctx.logger", async () => {
@@ -119,7 +119,7 @@ export default async function handler(input, ctx) {
     await executeCodeStep(step, makeCtx(), opts, "test-flow");
     expect(completed).toHaveLength(1);
     expect(completed[0].result.success).toBe(false);
-    expect(completed[0].extra?.kind).toBe("code");
+    expect(completed[0].extra?.nodeKind).toBe("code");
   });
 });
 

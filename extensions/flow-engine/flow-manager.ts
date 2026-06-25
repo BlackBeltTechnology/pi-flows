@@ -5,7 +5,7 @@
 // interaction and FlowObserver[] for lifecycle event dispatch.
 // ---------------------------------------------------------------------------
 
-import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
+import type { AgentConfig, FlowConfig, FlowResult, NodeKind } from "./types.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -118,11 +118,11 @@ export class FlowManager {
           notes: r.notes,
         };
       },
-      onAgentStarted: (agentName: string, stepId: string, resolvedModel?: string) => {
+      onAgentStarted: (agentName: string, stepId: string, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }) => {
         const agentConfig = config.getAgents().get(agentName);
-        for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig, resolvedModel);
+        for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig, resolvedModel, extra);
       },
-      onAgentComplete: (agentName: string, stepId: string, result: any) => {
+      onAgentComplete: (agentName: string, stepId: string, result: any, extra?: { nodeKind?: NodeKind; target?: string }) => {
         // Step-level (message-level) agent failure: surface as a discrete
         // timeline error entry BEFORE the status flip, so observers (and the
         // persisted stream) capture it. Tool errors travel via onToolResult.
@@ -132,7 +132,7 @@ export class FlowManager {
           );
           for (const obs of observers) obs.onError?.(agentName, stepId, text);
         }
-        for (const obs of observers) obs.onAgentComplete?.(agentName, stepId, result);
+        for (const obs of observers) obs.onAgentComplete?.(agentName, stepId, result, extra);
       },
       onExtensionUIRequest: (agentName: string, request: any, respond: (response: any) => void) => {
         ioAdapter.handleExtensionUIRequest(agentName, request, respond);

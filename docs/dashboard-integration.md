@@ -154,6 +154,18 @@ See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md` for the f
 
 **Landing:** The two repos (pi-flows and pi-agent-dashboard) land independently. Reload survival is visible to end users once **both** ship.
 
+## Node kind on agent lifecycle events
+
+Every flow node now carries a first-class **`NodeKind`** discriminator end-to-end. `NodeKind` is `"agent" | "fork" | "agent-decision" | "code" | "code-decision" | "flow-ref"` (defined in `extensions/flow-engine/types.ts`). It is the node's TYPE, distinct from the dashboard's timeline-entry `kind` (`text | thinking | tool | error`), which describes individual entries inside a card.
+
+The `EventEmitObserver` includes `nodeKind` on the `flow:agent-started` and `flow:agent-complete` event payloads for **all** node types (previously only `code`/`code-decision` carried a tag, and it was dropped at the FlowManager fan-out). For `code`/`code-decision` started events the payload also includes the resolved handler `target` path.
+
+Because a persisted `FlowEventRecord.data` is the exact emitted payload, `nodeKind` lands in the persisted records automatically — **no `FlowEventRecord` interface change**. On replay, the dashboard's `reduceFlowEvent` can reconstruct each card's TYPE (not just its timeline) by reading `nodeKind` off the recorded `flow_agent_started` event.
+
+A `code`/`code-decision` card's `assistant-text` entries are **program logs by virtue of the card's `nodeKind`** — there is no new event type and no per-line marker. The dashboard infers "these are logs" from the card kind.
+
+**Cross-repo follow-up (dashboard reducer only):** there is **NO new `FLOW_EVENT_MAP` entry** for this change. The pi-agent-dashboard work is reducer-side: read `nodeKind` off `flow_agent_started` to select the card renderer for live **and** replayed runs. The two repos land independently; an unknown or absent `nodeKind` degrades gracefully to a generic node card.
+
 ## Inbound event: `flow:set-edit-mode`
 
 Most `flow:*` events flow pi-flows → dashboard. **`flow:set-edit-mode { enabled: boolean }` goes the other way: dashboard → pi-flows.** A dashboard emits it to toggle flow/agent authoring edit-mode live, mirroring the `/flows:edit-mode <on|off>` command:

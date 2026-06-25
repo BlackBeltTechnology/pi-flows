@@ -300,27 +300,32 @@ pi.events.on("flow:flow-started", (data: {
 
 ### `flow:agent-started`
 
-Emitted when individual agent step begins.
+Emitted when flow node begins.
 
 ```typescript
 pi.events.on("flow:agent-started", (data: {
   agentName:     string;
   stepId:        string;
   resolvedModel: string;   // actual model ID after role resolution
+  nodeKind?:     NodeKind;  // node TYPE, all node types emit
+  target?:       string;    // resolved handler path, code / code-decision only
 }) => { ... });
 ```
+
+`nodeKind` emitted for every node type. See NodeKind taxonomy. `target` = resolved handler path. Present only on `code`/`code-decision` started events.
 
 ---
 
 ### `flow:agent-complete`
 
-Emitted when agent step finishes (success or error).
+Emitted when flow node finishes (success or error).
 
 ```typescript
 pi.events.on("flow:agent-complete", (data: {
   agentName: string;
   stepId:    string;
   result:    AgentResult;
+  nodeKind?: NodeKind;   // node TYPE, all node types emit
 }) => { ... });
 ```
 
@@ -475,6 +480,56 @@ User dismissed post-flow summary overlay.
 ```typescript
 pi.events.on("flow:summary-dismissed", () => { ... });
 ```
+
+---
+
+## NodeKind taxonomy
+
+`NodeKind` first-class discriminator. Carried end-to-end on flow node lifecycle events. Exported from extensions/flow-engine/types.ts.
+
+```typescript
+type NodeKind =
+  | "agent"
+  | "fork"
+  | "agent-decision"
+  | "code"
+  | "code-decision"
+  | "flow-ref";
+```
+
+`NodeKind` = node TYPE. Distinct from dashboard timeline-entry `kind` (`text | thinking | tool | error`). Timeline-entry `kind` describes entries inside card.
+
+Every node executor emits own `nodeKind` on node lifecycle started/complete callbacks.
+Before: only `code`/`code-decision` carried tag. Dropped at `FlowManager` fan-out.
+Now `FlowManager` forwards kind to every observer. `EventEmitObserver` puts it on `flow:agent-started` / `flow:agent-complete` payloads.
+
+### FlowObserver signature change
+
+`FlowObserver` interface (extensions/flow-engine/flow-io.ts) gained optional `extra` param on two callbacks.
+`onAgentStarted` gained 5th param `extra?: { nodeKind?: NodeKind; target?: string }`.
+`onAgentComplete` gained 4th param `extra?: { nodeKind?: NodeKind; target?: string }`.
+
+```typescript
+interface FlowObserver {
+  onAgentStarted(
+    agentName: string,
+    stepId: string,
+    resolvedModel: string,
+    /* ... */,
+    extra?: { nodeKind?: NodeKind; target?: string },
+  ): void;
+
+  onAgentComplete(
+    agentName: string,
+    stepId: string,
+    result: AgentResult,
+    extra?: { nodeKind?: NodeKind; target?: string },
+  ): void;
+}
+```
+
+`FlowManager` now forwards `extra` to every observer. Before: discarded it (flow-manager.ts).
+`FlowEventRecord.data` = exact emitted payload. `nodeKind` lands in persisted records automatically. NO `FlowEventRecord` interface change.
 
 ---
 
