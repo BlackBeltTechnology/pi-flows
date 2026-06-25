@@ -49,39 +49,10 @@ longer collide with pi-ai's growing `ctrl+<letter>` defaults and become user-reb
 - README is also **corrected**: it still documents `Ctrl+A` for AUTO even though the code
   already uses `alt+a`.
 
-## Pi 0.80 baseline + the arrow/esc/backspace regression
-
-While applying the above, a second TUI-input bug surfaced: in the flow dashboard
-navigate mode and the agent-detail overlay, **arrow keys, Esc, and Backspace stopped
-working**. Root cause is **not** an API change (`onTerminalInput` /
-`TerminalInputHandler` are byte-identical 0.74→0.80) but a **dependency version skew**:
-
-- pi-flows was pinned to `@earendil-works/* ^0.74.0`, but the runtime `pi` is **0.80.2**.
-- `pi-coding-agent@0.80.2` requires `pi-tui@^0.80.2` and `pi-ai@^0.80.2` (the three are
-  now version-locked), yet the runtime tree resolved **pi-tui 0.75.3** / **pi-ai 0.75.5**.
-- pi-tui owns key decoding + overlay focus. The behavioral cliff is **pi-tui ~0.76.0**
-  ("better terminal editing across environments" — per-terminal key decoding) and
-  **~0.78.1** ("non-capturing overlays remain interactive after UI rerenders and explicit
-  focus release"). Running coding-agent 0.80.2 against pi-tui 0.75.3 breaks exactly the
-  arrow/Esc/Backspace paths the navigate mode + overlay depend on.
-
-Fix = align everything on the 0.80 line:
-
-- **pi-flows:** bump `peerDependencies` + `devDependencies` `^0.74.0` → `^0.80.0` for
-  `pi-coding-agent`, `pi-tui`, `pi-ai`; reinstall. One API break absorbed: pi-ai 0.80
-  removed the standalone `getModel` catalog helper — `execution.ts` drops its dead
-  tertiary fallback (registry resolution per `flow-model-resolution` is unaffected).
-- **Runtime (pi-agent-dashboard tree):** the actual broken install. Bump
-  `packages/server` `pi-coding-agent ^0.78.0 → ^0.80.0` and root `pi-ai ^0.75.5 → ^0.80.0`
-  so the `*`-pinned `pi-tui` unsticks from 0.75.3 to 0.80.2; reinstall. This is what
-  restores the keys at runtime.
-
 ## Impact
 
 - **Affected specs:** new `flow-keybindings` capability (the default key scheme +
-  registration contract + context-guard behavior). `flow-model-resolution` unaffected
-  (the removed pi-ai `getModel` was never part of its fallback contract).
-- **Dependency baseline:** pi-flows now requires `@earendil-works/* ^0.80.0`.
+  registration contract + context-guard behavior).
 - **Affected code:**
   - `extensions/flow-engine/flow-tui.ts` — `KEY_CTRL_O`/`KEY_CTRL_X` raw handling →
     `registerShortcut(alt+o / alt+x)` with context guards; footer hint at L908; comments.
