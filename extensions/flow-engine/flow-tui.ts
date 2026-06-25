@@ -24,7 +24,7 @@ import {
   getLastEventLog,
   getLastCards,
 } from "../flow-summary/index.js";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, Key } from "@earendil-works/pi-tui";
 import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { isAutonomousMode, setAutonomousMode } from "../autonomous-mode.js";
 
@@ -38,6 +38,11 @@ let tui: any = null;
 let overlayOpen = false;
 let overlayDone: ((result: null) => void) | null = null;
 let piRef: ExtensionAPI | null = null;
+
+// Invalidator for the AUTO footer segment, set when the segment registers at
+// session_start. Hoisted to module scope so the keybinding handler (registered
+// once in setupFlowTui) can repaint the footer on toggle.
+let invalidateAutoFooter: (() => void) | null = null;
 
 // Lifecycle-scoped input handler unsubscribers
 let unsubDashboardInput: (() => void) | null = null;
@@ -55,12 +60,19 @@ const KEY_ENTER = "\r";
 const KEY_BACKSPACE_1 = "\x7f";
 const KEY_BACKSPACE_2 = "\b";
 const KEY_CTRL_X = "\x18";
-const KEY_CTRL_A = "\x01";
 
 // ---- Helpers ---------------------------------------------------------------
 
 function requestRender() {
   tui?.requestRender();
+}
+
+// Toggle flow autonomous (AUTO) mode and repaint affected UI.
+function toggleAutonomousMode(pi: ExtensionAPI): void {
+  setAutonomousMode(!isAutonomousMode());
+  pi.events.emit("flow:autonomous-mode-changed", { enabled: isAutonomousMode() });
+  requestRender();
+  invalidateAutoFooter?.();
 }
 
 async function openDetailOverlay(
@@ -735,6 +747,17 @@ export function getIsOverlayOpen(): boolean {
 export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
   piRef = pi;
 
+  // Global: toggle autonomous (AUTO) mode. Registered through the keybinding
+  // manager (NOT raw terminal input) because pi's editor claims ctrl+a for
+  // tui.editor.cursorLineStart and consumes it before raw handlers run.
+  // alt+a (AUTO) is unbound in pi defaults; clean two-key combo (no
+  // ctrl+<letter> two-key combo is free — all are taken or collide with
+  // terminal control codes).
+  pi.registerShortcut(Key.alt("a"), {
+    description: "Toggle flow autonomous (AUTO) mode",
+    handler: () => toggleAutonomousMode(pi),
+  });
+
   // ── Legacy prompt request/response handler REMOVED ──
   // Previously listened for flow:prompt-request and presented via proxied uiCtx,
   // causing duplicate prompts on the dashboard. Now handled by TuiPromptAdapter
@@ -915,8 +938,9 @@ export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
     uiCtx = ctx.ui;
 
     // Register autonomous mode footer segment (must happen at session_start,
-    // after flow-footer's activate() has registered the event listener)
-    let invalidateAutoFooter: (() => void) | null = null;
+    // after flow-footer's activate() has registered the event listener).
+    // invalidateAutoFooter is module-scoped so the AUTO keybinding (registered
+    // in setupFlowTui) can repaint this segment.
     pi.events?.emit("flow:register-footer-segment", {
       name: "autonomous-mode",
       render: (theme?: any) => {
@@ -931,17 +955,9 @@ export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
       },
     });
     ctx.ui.onTerminalInput((data: string) => {
-      // Global: Ctrl+A toggles autonomous mode anytime
-      if (data === KEY_CTRL_A) {
-        setAutonomousMode(!isAutonomousMode());
-        pi.events.emit("flow:autonomous-mode-changed", {
-          enabled: isAutonomousMode(),
-        });
-        requestRender();
-        invalidateAutoFooter?.();
-        return { consume: true };
-      }
-      // Global: Ctrl+X aborts running flow anytime
+      // Global: Ctrl+X aborts running flow anytime.
+      // (AUTO toggle moved to pi.registerShortcut — alt+a — in
+      // setupFlowTui, since the editor consumes ctrl+a for cursorLineStart.)
       if (data === KEY_CTRL_X && flowManager.isRunning) {
         flowManager.abort();
         return { consume: true };

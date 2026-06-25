@@ -128,7 +128,7 @@ Pause execution, present options to user. Selected option determines which branc
 | `branches` | ✓ | Map of option text → step ID |
 | `allowCustom` | | Appends "Other (describe)" option. Custom freetext routes through the fork's `agent`. Requires `agent`. |
 | `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
-| `agent` | | Agent for autonomous decisions (Ctrl+A) and custom freetext routing. Required when `allowCustom` is set. |
+| `agent` | | Agent for autonomous decisions (Alt+A) and custom freetext routing. Required when `allowCustom` is set. |
 | `task` | | Task description for the decision agent. Defaults to question + options. |
 
 **Behavior:**
@@ -137,7 +137,7 @@ Pause execution, present options to user. Selected option determines which branc
 - **Multi-select:** Multiple branches run in parallel.
 - **After selection:** User prompted for optional notes (Enter to skip). Fork context **automatically injected** into branch step's system prompt.
 
-**Autonomous mode:** When Ctrl+A active, fork steps with `agent:` field skip user prompt, let agent decide automatically. Forks without `agent:` always prompt user.
+**Autonomous mode:** When Alt+A active, fork steps with `agent:` field skip user prompt, let agent decide automatically. Forks without `agent:` always prompt user.
 
 ---
 
