@@ -145,6 +145,18 @@ See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md`.
 
 **Landing:** Two repos land independently. Reload survival visible once both ship.
 
+## Inbound event: `flow:set-edit-mode`
+
+Most `flow:*` events go pi-flows -> dashboard. `flow:set-edit-mode { enabled: boolean }` goes dashboard -> pi-flows.
+Dashboard emits it to toggle authoring edit-mode live. Mirrors `/flows:edit-mode <on|off>` command.
+
+```typescript
+pi.events.emit("flow:set-edit-mode", { enabled: true });
+```
+
+Handler writes `flows.editFlow` to project `.pi/settings.json`. Syncs project-local `edit-flow` skill `.pi/skills/edit-flow/SKILL.md` (frontmatter `disable-model-invocation` = `!enabled`). Reconciles `flow_agents`/`flow_write` tools.
+Event path: tools update immediately. Skill visibility next session start. Event runs base `ExtensionContext`, cannot reload (only command path calls `ctx.reload()`). See events-api.md.
+
 ## TUI overlay vs server-driven renderer
 
 Both render same `flow:*` event stream to different targets:

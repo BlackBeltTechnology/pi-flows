@@ -16,6 +16,8 @@ pi-flows registers a set of tools that are exposed to agents running inside flow
 | `flow_write` | Main session (inactive by default) | `registerFlowWriteTool` |
 
 > **Inactive by default:** `flow_agents` and `flow_write` are registered in the main session but remain inactive until enabled via the `flows.editFlow` setting in `.pi/settings.json`. At each session start pi-flows reads `flows.editFlow` and activates or deactivates the two tools accordingly (project `.pi/settings.json`, honored only when the project is trusted, overrides global `~/.pi/agent/settings.json`; a top-level `flowsEditFlow` boolean is accepted as an alias; default when unset is disabled). Flipping the setting takes effect at the next session start. This gating mechanism prevents accidental authoring operations in non-authoring contexts.
+>
+> **Toggle it live:** run `/flows:edit-mode <on|off>` (or have a dashboard emit the inbound `flow:set-edit-mode { enabled: boolean }` event). This writes `flows.editFlow` to the project `.pi/settings.json`, reconciles `flow_agents`/`flow_write` to match, and (command path only) reloads so the change is active in the current session. The `edit-flow` skill's prompt visibility is coupled to the same toggle — edit-mode on makes the skill visible (frontmatter `disable-model-invocation: false`), off hides it from the prompt. The event path updates tools immediately but applies skill visibility on the next session start. See [flow-authoring.md](flow-authoring.md) and [events-api.md](events-api.md).
 
 External packages can add tools to subagent sessions via `flow:register-tool`. See [events-api.md](events-api.md#flowregister-tool).
 

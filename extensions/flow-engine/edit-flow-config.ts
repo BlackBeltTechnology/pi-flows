@@ -10,9 +10,9 @@
 //   - project: <projectRoot>/<CONFIG_DIR>/settings.json  (trusted projects only)
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const CONFIG_DIR = ".pi";
 
@@ -56,4 +56,32 @@ export function isEditFlowEnabled(
   if (projectFlag !== undefined) return projectFlag;
   if (globalFlag !== undefined) return globalFlag;
   return false;
+}
+
+/**
+ * Persist `flows.editFlow` to the PROJECT `.pi/settings.json` (never the global
+ * file). Read-merge-write: all other keys are preserved; the file (and `.pi/`)
+ * is created when absent. The edit-mode toggle owns this write.
+ */
+export function setEditFlowFlag(projectRoot: string, enabled: boolean): void {
+  const path = join(projectRoot, CONFIG_DIR, "settings.json");
+  const existing = readSettingsFile(path);
+  const settings: Record<string, unknown> =
+    existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
+  const flows =
+    settings.flows && typeof settings.flows === "object"
+      ? { ...(settings.flows as Record<string, unknown>) }
+      : {};
+  flows.editFlow = enabled;
+  settings.flows = flows;
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+}
+
+/** Parse an edit-mode command argument. `on`→true, `off`→false, anything else→null. */
+export function parseEditModeArg(arg: string | undefined): boolean | null {
+  const a = (arg ?? "").trim().toLowerCase();
+  if (a === "on" || a === "true" || a === "enable") return true;
+  if (a === "off" || a === "false" || a === "disable") return false;
+  return null;
 }
