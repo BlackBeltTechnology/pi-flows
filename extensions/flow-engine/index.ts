@@ -19,7 +19,8 @@ import {
 import { registerFlowAgentsTool } from "./tools/flow-agents.js";
 import { anthropicMessagesAgentFactory } from "./anthropic-messages-adapter.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
-import { isEditFlowEnabled } from "./edit-flow-config.js";
+import { isEditFlowEnabled, setEditFlowFlag, parseEditModeArg } from "./edit-flow-config.js";
+import { syncEditFlowSkill } from "./edit-flow-skill.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -328,15 +329,73 @@ export function activate(pi: ExtensionAPI) {
   registerFlowAgentsTool(pi, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
   registerFlowWriteTool(pi, () => agents, projectRoot);
 
-  // Reconcile edit-flow-tool activation with the setting at each session start.
+  // Activate/deactivate the authoring tools to match the requested edit-mode.
+  const reconcileEditFlowTools = (enabled: boolean): void => {
+    const active = pi.getActiveTools().filter((n) => !EDIT_FLOW_TOOLS.includes(n));
+    if (enabled) active.push(...EDIT_FLOW_TOOLS);
+    pi.setActiveTools(active);
+  };
+
+  // Shared edit-mode toggle: persist the setting, sync the project-local skill's
+  // model-visibility, reconcile the authoring tools, and (when a reload-capable
+  // context is available — i.e. the command path) reload so the skill change is
+  // live this session. The event path has no `reload()` (base ExtensionContext),
+  // so its skill change applies next session; tools update immediately either way.
+  const applyEditMode = async (
+    enabled: boolean,
+    opts: { reload?: () => Promise<void>; notify?: (msg: string, level?: string) => void } = {},
+  ): Promise<void> => {
+    setEditFlowFlag(projectRoot, enabled);
+    try { syncEditFlowSkill(projectRoot, pkgRoot, enabled); } catch { /* non-fatal */ }
+    reconcileEditFlowTools(enabled);
+    if (opts.reload) {
+      await opts.reload();
+      opts.notify?.(`Edit-mode ${enabled ? "ON" : "OFF"}.`, "info");
+    } else {
+      opts.notify?.(
+        `Edit-mode ${enabled ? "ON" : "OFF"} — tools updated; skill visibility applies next session.`,
+        "info",
+      );
+    }
+  };
+
+  // Reconcile edit-flow tools AND materialize/sync the project-local skill at
+  // each session start (idempotent) so the skill is discoverable by default with
+  // frontmatter reflecting the current setting.
   pi.on("session_start", (_ev: any, ctx: any) => {
     const trusted = (() => {
       try { return ctx?.isProjectTrusted?.() ?? false; } catch { return false; }
     })();
     const enabled = isEditFlowEnabled(projectRoot, { projectTrusted: trusted });
-    const active = pi.getActiveTools().filter((n) => !EDIT_FLOW_TOOLS.includes(n));
-    if (enabled) active.push(...EDIT_FLOW_TOOLS);
-    pi.setActiveTools(active);
+    reconcileEditFlowTools(enabled);
+    try { syncEditFlowSkill(projectRoot, pkgRoot, enabled); } catch { /* non-fatal */ }
+  });
+
+  // `/flows:edit-mode <on|off>` — command path has ctx.reload() for live effect.
+  pi.registerCommand("flows:edit-mode", {
+    description: "Toggle flow/agent authoring (edit-mode): tools + skill visibility, applied live",
+    getArgumentCompletions: (prefix: string) => {
+      const opts = ["on", "off"].filter((o) => o.startsWith(prefix.toLowerCase()));
+      return opts.length ? opts.map((o) => ({ value: o, label: o, description: "edit-mode" })) : null;
+    },
+    handler: async (args: string, ctx: any) => {
+      const enabled = parseEditModeArg(args);
+      if (enabled === null) {
+        ctx.ui?.notify?.("Usage: /flows:edit-mode <on|off>", "warning");
+        return;
+      }
+      await applyEditMode(enabled, {
+        reload: ctx.reload ? () => ctx.reload() : undefined,
+        notify: (m, l) => ctx.ui?.notify?.(m, l),
+      });
+    },
+  });
+
+  // Inbound `flow:set-edit-mode` event (dashboard). Base ExtensionContext has no
+  // reload(); tools update immediately, skill visibility applies next session.
+  pi.events.on("flow:set-edit-mode", (data: any) => {
+    if (typeof data?.enabled !== "boolean") return;
+    void applyEditMode(data.enabled);
   });
 
   // ── Register flow commands ──

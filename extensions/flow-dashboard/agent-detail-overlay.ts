@@ -25,7 +25,9 @@ const KEY_DOWN = "\x1b[B";
 const KEY_ENTER = "\r";
 const KEY_BACKSPACE_1 = "\x7f";
 const KEY_BACKSPACE_2 = "\b";
-const KEY_CTRL_T = "\x14";
+// alt+t arrives as the escape sequence ESC + 't' (delivered atomically, like
+// the arrow-key sequences). Tested before the bare-ESC close branch below.
+const KEY_ALT_T = "\x1bt";
 
 export interface AgentDetailOverlayOptions {
   agentName: string;
@@ -67,14 +69,14 @@ export function createAgentDetailOverlay(opts: AgentDetailOverlayOptions) {
     },
 
     handleInput(data: string): void {
-      if (data === KEY_ESC || data === KEY_BACKSPACE_1 || data === KEY_BACKSPACE_2) {
-        done(null);
+      if (data === KEY_ALT_T) {
+        showThinking = !showThinking;
+        tui?.requestRender();
         return;
       }
 
-      if (data === KEY_CTRL_T) {
-        showThinking = !showThinking;
-        tui?.requestRender();
+      if (data === KEY_ESC || data === KEY_BACKSPACE_1 || data === KEY_BACKSPACE_2) {
+        done(null);
         return;
       }
 

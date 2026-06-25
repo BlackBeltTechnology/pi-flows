@@ -50,7 +50,6 @@ let unsubSummaryInput: (() => void) | null = null;
 
 // ---- Key constants ---------------------------------------------------------
 
-const KEY_CTRL_O = "\x0f";
 const KEY_ESC = "\x1b";
 const KEY_UP = "\x1b[A";
 const KEY_DOWN = "\x1b[B";
@@ -59,7 +58,6 @@ const KEY_LEFT = "\x1b[D";
 const KEY_ENTER = "\r";
 const KEY_BACKSPACE_1 = "\x7f";
 const KEY_BACKSPACE_2 = "\b";
-const KEY_CTRL_X = "\x18";
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -73,6 +71,53 @@ function toggleAutonomousMode(pi: ExtensionAPI): void {
   pi.events.emit("flow:autonomous-mode-changed", { enabled: isAutonomousMode() });
   requestRender();
   invalidateAutoFooter?.();
+}
+
+// Global flow.abort (alt+x): abort a running flow, else dismiss a mounted
+// summary widget. No-op when neither is active, so the key falls through.
+function abortOrDismiss(flowManager: FlowManager): void {
+  if (flowManager.isRunning) {
+    flowManager.abort();
+    if (activeDashboard) {
+      activeDashboard.mode = "passive";
+      requestRender();
+    }
+    return;
+  }
+  const state = getSummaryState();
+  if (state && uiCtx) {
+    setFlowWidget(uiCtx, "flow-summary", undefined);
+    unregisterSummaryInputHandler();
+    setSummaryState(null);
+    requestRender();
+    piRef?.events?.emit("flow:summary-dismissed", {});
+  }
+}
+
+// Global flow.inspect (alt+o): toggle navigate mode on whichever flow surface
+// is mounted (dashboard ⇄ passive, or summary ⇄ navigate). No-op otherwise.
+function toggleInspect(): void {
+  if (activeDashboard) {
+    const db = activeDashboard;
+    if (db.mode === "navigate") {
+      db.mode = "passive";
+    } else {
+      db.mode = "navigate";
+      db.selectedCardIndex = 0;
+    }
+    requestRender();
+    return;
+  }
+  const state = getSummaryState();
+  if (state) {
+    if (state.mode === "navigate") {
+      state.mode = "summary";
+    } else {
+      state.mode = "navigate";
+      state.selectedIndex = 0;
+    }
+    requestRender();
+  }
 }
 
 async function openDetailOverlay(
@@ -142,7 +187,7 @@ function navigateCard(db: any, key: string) {
  * Register the dashboard input handler. Called when the dashboard widget mounts.
  * Returns an unsubscribe function. The handler is automatically removed when called.
  */
-function registerDashboardInputHandler(flowManager: FlowManager): () => void {
+function registerDashboardInputHandler(): () => void {
   if (!uiCtx) return () => {};
 
   // Unsubscribe any stale summary handler — dashboard replaces summary
@@ -156,26 +201,14 @@ function registerDashboardInputHandler(flowManager: FlowManager): () => void {
     const db = activeDashboard;
     const mode = db.mode;
 
+    // passive mode: alt+o (flow.inspect) / alt+x (flow.abort) are handled by
+    // registered shortcuts; raw input passes through to the editor.
     if (mode === "passive") {
-      if (data === KEY_CTRL_O) {
-        db.mode = "navigate";
-        db.selectedCardIndex = 0;
-        requestRender();
-        return { consume: true };
-      }
-      if (data === KEY_CTRL_X) {
-        flowManager.abort();
-        return { consume: true };
-      }
       return undefined;
     }
 
     if (mode === "navigate") {
-      if (data === KEY_CTRL_X) {
-        flowManager.abort();
-        db.mode = "passive";
-        requestRender();
-      } else if (data === KEY_CTRL_O || data === KEY_ESC) {
+      if (data === KEY_ESC) {
         db.mode = "passive";
         requestRender();
       } else if (
@@ -233,27 +266,14 @@ function registerSummaryInputHandler(): void {
 
     const mode = summaryState.mode;
 
+    // summary mode: alt+o (flow.inspect) / alt+x (flow.abort) are handled by
+    // registered shortcuts; raw input passes through to the editor.
     if (mode === "summary") {
-      if (data === KEY_CTRL_O) {
-        summaryState.mode = "navigate";
-        summaryState.selectedIndex = 0;
-        requestRender();
-        return { consume: true };
-      }
-      if (data === KEY_CTRL_X) {
-        if (uiCtx) setFlowWidget(uiCtx, "flow-summary", undefined);
-        unregisterSummaryInputHandler();
-        setSummaryState(null);
-        requestRender();
-        piRef?.events?.emit("flow:summary-dismissed", {});
-        return { consume: true };
-      }
       return undefined;
     }
 
     if (mode === "navigate") {
       if (
-        data === KEY_CTRL_O ||
         data === KEY_ESC ||
         data === KEY_BACKSPACE_1 ||
         data === KEY_BACKSPACE_2
@@ -302,11 +322,11 @@ export function unregisterSummaryInputHandler(): void {
 
 // ---- wireDashboard ---------------------------------------------------------
 
-function wireDashboard(dashboard: any, ui: any, flowManager: FlowManager) {
+function wireDashboard(dashboard: any, ui: any) {
   // Unregister stale summary handler and register dashboard handler
   unregisterSummaryInputHandler();
   activeDashboard = dashboard;
-  registerDashboardInputHandler(flowManager);
+  registerDashboardInputHandler();
 
   let tuiRef: any = null;
   let themeRef: any = null;
@@ -396,11 +416,7 @@ export class TuiFlowObserver implements FlowObserver {
         this.extractAgentConfigs(flow),
         this.buildAgentDeps(flow),
       );
-      this.renderDashboard = wireDashboard(
-        this.dashboard,
-        uiCtx,
-        this.flowManager,
-      );
+      this.renderDashboard = wireDashboard(this.dashboard, uiCtx);
       this.renderDashboard();
     } catch {
       /* flow-dashboard not available */
@@ -749,15 +765,23 @@ export function getIsOverlayOpen(): boolean {
 export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
   piRef = pi;
 
-  // Global: toggle autonomous (AUTO) mode. Registered through the keybinding
-  // manager (NOT raw terminal input) because pi's editor claims ctrl+a for
-  // tui.editor.cursorLineStart and consumes it before raw handlers run.
-  // alt+a (AUTO) is unbound in pi defaults; clean two-key combo (no
-  // ctrl+<letter> two-key combo is free — all are taken or collide with
-  // terminal control codes).
+  // Global flow keybindings live in the alt+<letter> namespace. They are
+  // registered through the keybinding manager (NOT raw terminal input) so they
+  // are user-rebindable and parsed consistently across terminals, and so they
+  // do not collide with pi-ai's ctrl+<letter> editor/app defaults
+  // (e.g. ctrl+o app.tools.expand, ctrl+t app.thinking.toggle, ctrl+a
+  // tui.editor.cursorLineStart). alt+a/o/x are unbound in pi defaults.
   pi.registerShortcut(Key.alt("a"), {
     description: "Toggle flow autonomous (AUTO) mode",
     handler: () => toggleAutonomousMode(pi),
+  });
+  pi.registerShortcut(Key.alt("x"), {
+    description: "Abort running flow / dismiss flow summary",
+    handler: () => abortOrDismiss(flowManager),
+  });
+  pi.registerShortcut(Key.alt("o"), {
+    description: "Inspect flow agents (toggle navigate mode)",
+    handler: () => toggleInspect(),
   });
 
   // ── Legacy prompt request/response handler REMOVED ──
@@ -905,7 +929,7 @@ export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
               content,
               separatorAfter: separators,
               footer: [
-                theme.fg("dim", "Ctrl+O inspect agents · Ctrl+X dismiss"),
+                theme.fg("dim", "alt+o inspect agents · alt+x dismiss"),
               ],
             });
 
@@ -956,17 +980,9 @@ export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
         invalidateAutoFooter = invalidate;
       },
     });
-    ctx.ui.onTerminalInput((data: string) => {
-      // Global: Ctrl+X aborts running flow anytime.
-      // (AUTO toggle moved to pi.registerShortcut — alt+a — in
-      // setupFlowTui, since the editor consumes ctrl+a for cursorLineStart.)
-      if (data === KEY_CTRL_X && flowManager.isRunning) {
-        flowManager.abort();
-        return { consume: true };
-      }
-      // All other keys pass through — dashboard and summary input handlers
-      // are registered/unregistered with their widget lifecycles.
-      return undefined;
-    });
+    // Abort (alt+x) and inspect (alt+o) are registered as keybinding-manager
+    // shortcuts in setupFlowTui; modal navigation (arrows/Enter/Esc/Backspace)
+    // is captured by the dashboard/summary input handlers, which are
+    // registered/unregistered with their widget lifecycles.
   });
 }

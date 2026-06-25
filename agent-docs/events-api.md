@@ -540,6 +540,22 @@ pi.events.emit("flow:toggle-autonomous", {});
 
 ---
 
+### `flow:set-edit-mode`
+
+Toggle authoring edit-mode. Inbound: dashboard -> pi-flows. Same handler as `/flows:edit-mode <on|off>` command.
+
+```typescript
+pi.events.emit("flow:set-edit-mode", { enabled: true });
+```
+
+**Payload:** `{ enabled: boolean }`
+
+Handler writes `flows.editFlow` to project `.pi/settings.json` (read-merge-write, preserves other keys, never global file). Syncs project-local skill `.pi/skills/edit-flow/SKILL.md`, frontmatter `disable-model-invocation` = `!enabled`. Reconciles `flow_agents`/`flow_write` tools.
+Event path runs base `ExtensionContext`. No reload. Tools update immediately. Skill visibility next session start.
+Command `/flows:edit-mode` path adds `ctx.reload()`. Change fully live current session.
+
+---
+
 ### `flow:rediscover`
 
 Force full re-discovery of agents and flows from all registered directories.

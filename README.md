@@ -80,8 +80,12 @@ pi install /path/to/pi-flows
 | `/skill:edit-flow` | Load the flow/agent create-and-edit reference skill |
 | `/flows:delete` | Delete a flow |
 | `/roles` | Assign models to role tiers (@coding, @planning, etc.) |
-| `Ctrl+A` | Toggle auto-routing (agents decide fork branches autonomously) |
-| `Ctrl+X` | Abort running flow |
+| `alt+a` | Toggle auto-routing (agents decide fork branches autonomously) |
+| `alt+x` | Abort running flow / dismiss flow summary |
+| `alt+o` | Inspect agents (enter dashboard/summary navigate mode) |
+| `alt+t` | Toggle thinking in the agent-detail overlay |
+
+Keybindings live in the `alt+<letter>` namespace to avoid colliding with pi's `ctrl+<letter>` defaults, and are rebindable via `~/.pi/agent/keybindings.json`.
 
 Flows also register as slash commands based on file path: `.pi/flows/flows/review.yaml` → `/review`.
 
@@ -145,7 +149,7 @@ Context: ${{input.research_context}}
   branches:
     Quick fix: quick-step
     Full refactor: refactor-step
-  agent: flow-decision    # used when Ctrl+A is active
+  agent: flow-decision    # used when alt+a (AUTO) is active
 ```
 
 **Conditional** — branch on whether a result field is empty:

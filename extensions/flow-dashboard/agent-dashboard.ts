@@ -271,9 +271,9 @@ export class AgentDashboard {
 
     // Footer hints
     if (this.mode === "navigate") {
-      lines.push(t?.fg?.("dim", "  ← → ↑ ↓ navigate · Enter open · Ctrl+X stop · ESC close") ?? "  ← → ↑ ↓ navigate · Enter open · Ctrl+X stop · ESC close");
+      lines.push(t?.fg?.("dim", "  ← → ↑ ↓ navigate · Enter open · alt+x stop · ESC close") ?? "  ← → ↑ ↓ navigate · Enter open · alt+x stop · ESC close");
     } else {
-      const hint = `  Ctrl+O inspect · Ctrl+X stop flow`;
+      const hint = `  alt+o inspect · alt+x stop flow`;
       lines.push(t?.fg?.("dim", hint) ?? hint);
     }
 
