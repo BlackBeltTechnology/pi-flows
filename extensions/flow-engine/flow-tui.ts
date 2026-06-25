@@ -545,8 +545,10 @@ export class EventEmitObserver implements FlowObserver {
       stepType: step.stepType,
       agent: (step as any).agent,
       blockedBy: (step as any).blockedBy || [],
-      loopTarget: (step as any).loop_target,
-      exitTarget: (step as any).exit_target,
+      // Loop edges are now derived from backward branch targets in `branches:`
+      // (the agent-loop-decision type is removed); decision branches are sent so
+      // consumers can detect loops topologically.
+      branches: (step as any).branches,
     }));
     this.emit("flow:flow-started", {
       flowName,

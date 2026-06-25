@@ -18,7 +18,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { CodeStep, FlowConfig, Diagnostic } from "./types.js";
+import type { CodeStep, CodeDecisionStep, FlowConfig, Diagnostic } from "./types.js";
 
 export interface GenerateResult {
   /** Absolute paths of the `.ts.default` templates written. */
@@ -38,10 +38,12 @@ function handlersDirFor(flowName: string, yamlPath: string): string {
   return join(dirname(yamlPath), "..", "handlers", flowName);
 }
 
-/** Render the `.ts.default` scaffold for a single code node. */
-export function renderScaffold(step: CodeStep): string {
+/** Render the `.ts.default` scaffold for a single code or code-decision node. */
+export function renderScaffold(step: CodeStep | CodeDecisionStep): string {
   const inputKeys = Object.keys(step.inputs ?? {});
   const outputKeys = (step.outputs ?? []).map((o) => o.name);
+  const isDecision = step.stepType === "code-decision";
+  const branchKeys = isDecision ? Object.keys((step as CodeDecisionStep).branches ?? {}) : [];
 
   const inputIface = inputKeys.length
     ? `interface Input { ${inputKeys.map((k) => `${k}: string`).join("; ")} }`
@@ -49,16 +51,26 @@ export function renderScaffold(step: CodeStep): string {
   const outputIface = outputKeys.length
     ? `interface Output { ${outputKeys.map((k) => `${k}: string`).join("; ")} }`
     : "interface Output {}";
-  const returnBody = outputKeys.length
-    ? `{ ${outputKeys.map((k) => `${k}: ""`).join(", ")} }`
-    : "{}";
+
+  // code-decision: emit a Branch union from the declared branch labels and type
+  // the return as `{ branch: Branch } & Output` so a wrong label is a compile error.
+  const branchType = branchKeys.length
+    ? `type Branch = ${branchKeys.map((k) => `"${k}"`).join(" | ")};`
+    : "type Branch = string;";
+  const returnType = isDecision ? "Promise<{ branch: Branch } & Output>" : "Promise<Output>";
+
+  const dataBody = outputKeys.map((k) => `${k}: ""`).join(", ");
+  const returnBody = isDecision
+    ? `{ branch: ${branchKeys.length ? `"${branchKeys[0]}"` : `""`}${dataBody ? `, ${dataBody}` : ""} }`
+    : (outputKeys.length ? `{ ${dataBody} }` : "{}");
+
+  const typeBlock = isDecision ? `${branchType}\n${inputIface}\n${outputIface}` : `${inputIface}\n${outputIface}`;
 
   return `import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
 
-${inputIface}
-${outputIface}
+${typeBlock}
 
-export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
+export default async function (input: Input, ctx: CodeNodeContext): ${returnType} {
   // TODO: implement code node "${step.id}"
   return ${returnBody};
 }
@@ -75,8 +87,8 @@ export function generateCodeHandlers(flow: FlowConfig, yamlPath: string): Genera
   const diagnostics: Diagnostic[] = [];
 
   for (const step of flow.steps) {
-    if (step.stepType !== "code") continue;
-    const code = step as CodeStep;
+    if (step.stepType !== "code" && step.stepType !== "code-decision") continue;
+    const code = step as CodeStep | CodeDecisionStep;
     if (code.target) continue; // custom target: author owns the file, no template
 
     mkdirSync(dir, { recursive: true });
@@ -99,7 +111,7 @@ export function generateCodeHandlers(flow: FlowConfig, yamlPath: string): Genera
  * real handler. Returns a warning Diagnostic on mismatch, or undefined when the
  * signatures agree or no interface blocks are present (silent skip).
  */
-function detectDrift(step: CodeStep, realSource: string): Diagnostic | undefined {
+function detectDrift(step: CodeStep | CodeDecisionStep, realSource: string): Diagnostic | undefined {
   const yamlInputs = new Set(Object.keys(step.inputs ?? {}));
   const yamlOutputs = new Set((step.outputs ?? []).map((o) => o.name));
   const realInputs = extractInterfaceKeys(realSource, "Input");

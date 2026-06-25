@@ -124,10 +124,9 @@ export interface FlowConfig {
 export type FlowStep =
   | AgentStep
   | CodeStep
+  | CodeDecisionStep
   | ForkStep
-  | ConditionalStep
   | AgentDecisionStep
-  | AgentLoopDecisionStep
   | FlowRefStep;
 
 export interface AgentStep {
@@ -154,30 +153,13 @@ export interface ForkStep {
   task?: string;          // Context/task for the agent when auto-deciding
 }
 
-export interface ConditionalStep {
-  stepType: "conditional";
-  id: string;
-  check: string; // e.g., "artifacts.gaps"
-  present: string; // Step ID if present
-  absent: string; // Step ID if absent
-}
-
 export interface AgentDecisionStep {
   stepType: "agent-decision";
   id: string;
   agent: string; // Agent to dispatch for decision
   task: string; // Task for the decision agent
-  branches: Record<string, string>; // branch name -> step ID mapping
-}
-
-export interface AgentLoopDecisionStep {
-  stepType: "agent-loop-decision";
-  id: string;
-  agent: string; // Agent to dispatch for loop decision
-  task: string; // Task for the decision agent (template string)
-  loop_target: string; // Step ID to jump back to (backward jump)
-  exit_target: string; // Step ID to continue to (forward)
-  max_iterations: number; // Safety cap — force exit when exceeded
+  branches: Record<string, string>; // branch label -> step ID mapping
+  max_iterations?: number; // Required only when a branch forms a backward (loop) edge
 }
 
 export interface FlowRefStep {
@@ -197,6 +179,26 @@ export interface CodeStep {
   blockedBy?: string[]; // Step IDs that must complete before this step runs
   on_complete?: string; // Route to step ID on success
   on_error?: string; // Route to step ID on error
+  timeout?: number; // Optional soft timeout in milliseconds
+}
+
+/**
+ * A `code-decision` node executes a TypeScript handler exactly like a `code`
+ * node (same handler path convention, input wiring, execution context, soft
+ * timeout, and soft/hard failure model) and additionally routes on a reserved
+ * `branch` output resolved against `branches:`. A branch target may point
+ * forward (decide/exit) or backward (loop), in which case `max_iterations` is
+ * required. The reserved `branch` key MUST NOT be declared as a data output.
+ */
+export interface CodeDecisionStep {
+  stepType: "code-decision";
+  id: string;
+  target?: string; // Optional override handler path
+  inputs?: Record<string, string>; // Named inputs wired from template expressions
+  outputs?: Array<{ name: string }>; // Declared DATA output names (strings only; never `branch`)
+  branches: Record<string, string>; // branch label -> step ID mapping
+  blockedBy?: string[]; // Step IDs that must complete before this step runs
+  max_iterations?: number; // Required only when a branch forms a backward (loop) edge
   timeout?: number; // Optional soft timeout in milliseconds
 }
 
