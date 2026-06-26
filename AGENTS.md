@@ -61,6 +61,7 @@ Grep `docs/<file>.md` (and `README.md`) before reading source:
 - `extending-pi-flows.md` — advanced customization hooks.
 - `dashboard-integration.md` — wire protocol between pi-flows and pi-agent-dashboard.
 - `releasing.md` — operator runbook for cutting releases via `.github/workflows/publish.yml`.
+- `testing.md` — faux-model test harness: write flow/agent tests that drive the real `spawnAgent`/`runFlow` loop with scripted, zero-network responses (`spawnFaux`/`runFaux`/`runFauxFlow`).
 
 ## Code Instructions
 
