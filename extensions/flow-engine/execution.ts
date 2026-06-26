@@ -1,5 +1,6 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
 import { classifyAgentOutcome } from "./failure.js";
+import { createFinishLatch } from "./finish-latch.js";
 import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -490,13 +491,13 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Wire event capture
   const finishToolName = prefixToolName("finish", toolPrefix);
-  let finishParams: any = undefined;
-  let finishToolCallId: string | undefined;
-  // Shared cap (≤2) for both the finish-schema-validation retry (below) and
-  // the no-finish reminder loop. Exhaustion of the reminder loop ends in a
-  // clean SOFT failure via classifyAgentOutcome. See node-failure-model D4.
+  // First-correct-finish-wins latch: captures finish args at END (keyed by
+  // toolCallId), freezes the first non-error finish, and ignores all later
+  // finish ends. See finish-latch.ts and change latch-agent-finish-result.
+  const finishLatch = createFinishLatch();
+  // Cap for the stop-gate reminder loop (below). Exhaustion ends in a clean
+  // SOFT failure via classifyAgentOutcome. See node-failure-model D4.
   const MAX_FINISH_RETRIES = 2;
-  let finishValidationRetries = 0;
   let lastAssistantText = "";
   let lastApiError: string | undefined;
   let accumulatedTokens = { input: 0, output: 0 };
@@ -505,8 +506,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     switch (event.type) {
       case "tool_execution_start": {
         if (event.toolName === finishToolName) {
-          finishParams = event.args;
-          finishToolCallId = event.toolCallId;
+          finishLatch.start(event.toolCallId, event.args);
         }
         const tc: ToolCallRecord = {
           toolName: event.toolName,
@@ -532,26 +532,15 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
         }
         options.onToolResult?.(event.toolName || last?.toolName || "", output, !!event.isError);
 
-        // Handle finish tool completion
-        if (finishToolCallId && event.toolCallId === finishToolCallId) {
-          if (event.isError) {
-            // Finish validation failed — clear state so agent can retry
-            finishParams = undefined;
-            finishToolCallId = undefined;
-
-            // Queue a followUp to force the agent to retry with valid args
-            if (finishValidationRetries < MAX_FINISH_RETRIES) {
-              finishValidationRetries++;
-              session.followUp(
-                `Your \`${finishToolName}\` tool call failed schema validation. ` +
-                `Review the validation error above and call \`${finishToolName}\` again with all required fields. ` +
-                "Make sure to include every required parameter."
-              );
-            }
-          } else {
-            // Abort session immediately after finish tool completes — no more LLM turns needed
-            session.abort();
-          }
+        // First-correct-finish-wins latch (D2/D3). The latch freezes the first
+        // non-error finish and tells us to abort exactly once; it runs AFTER
+        // this tool's result is recorded, so no dangling tool_use is left in
+        // history. Error ends (malformed / guard-blocked duplicate) and any end
+        // after the latch are no-ops: never clear the result, never followUp
+        // here. A malformed single finish self-corrects via the model's natural
+        // retry on the returned error tool result, with the stop-gate as backstop.
+        if (finishLatch.end(event.toolCallId, !!event.isError)) {
+          session.abort();
         }
         break;
       }
@@ -608,8 +597,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   try {
     await session.prompt(userMessage, { expandPromptTemplates: false });
 
-    // Remind (≤2) if the agent didn't call finish; then stop and classify.
-    while (!finishParams && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
+    // Stop-gate: remind (≤MAX) only while no correct finish has been latched;
+    // then stop and classify. Keyed on the latch, not finishParams, so a
+    // duplicate/blocked finish can never spuriously trigger a reminder. (D4)
+    while (!finishLatch.latched && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
       finishRetries++;
       await session.prompt(
         `You did not call the \`${finishToolName}\` tool. You MUST call \`${finishToolName}\` to submit your result.\n\n` +
@@ -631,6 +622,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   const duration = Date.now() - startTime;
   const aborted = options.signal?.aborted;
+  // The frozen result (set once by the latch on the first correct finish).
+  const finishParams: any = finishLatch.params;
 
   // Handle user-initiated abort (Ctrl+X / external signal).
   // Skip this path if finish was called — the session was aborted intentionally
