@@ -1,7 +1,7 @@
 // Wiring coverage for the template-expansion engine (harden-flow-wiring §1).
 // expandTemplateVariables is the resolution layer every node's inputs/task flow
 // through. These tests lock its behavior for all supported variable forms,
-// typed-output resolution, input wiring, flow-ref propagation, and edge cases.
+// typed-output resolution, input wiring, and edge cases.
 
 import { describe, it, expect } from "vitest";
 import { expandTemplateVariables } from "../extensions/flow-engine/execution.js";
@@ -110,15 +110,6 @@ describe("input-block resolution (§1.3)", () => {
     expect(wired).toBe("UPSTREAM");
     // Stage 2: the resolved value is exposed as ${{input.x}} to the step body.
     expect(expandTemplateVariables("x=${{input.x}}", ctx({ inputs: { x: wired } }))).toBe("x=UPSTREAM");
-  });
-});
-
-describe("flow-ref result propagation (§1.4)", () => {
-  it("a sub-flow step result flat-merged into the parent context is referenceable downstream", () => {
-    // executeFlowRefStep flat-merges sub-flow step results into ctx.results.
-    // Once merged, downstream resolution is identical to any other result.
-    const results = { inner: { fullOutput: "", status: "complete", summary: "SUBFLOW", artifacts: "", files: "" } };
-    expect(expandTemplateVariables("${{result.inner.summary}}", ctx({ results }))).toBe("SUBFLOW");
   });
 });
 

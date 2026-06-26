@@ -1,4 +1,4 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, FlowRefStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind } from "./types.js";
+import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
@@ -6,9 +6,9 @@ import { resolveRouteOutcome } from "./failure.js";
 import type { FailureInfo } from "./types.js";
 import { resolveModel } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
-import { parseFlowYamlFile } from "./flow-parser-yaml.js";
+
 import { raceWithAbort } from "./abort-utils.js";
-import { globSync, readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // ---- Flow cancellation error -----------------------------------------------
@@ -166,7 +166,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
         }
         segmentIndex++;
       } else {
-        // Separator step (fork, conditional, agent-decision, flow-ref)
+        // Separator step (fork, conditional, agent-decision)
 
         const stepResult = await executeStep(segment.step, ctx, effectiveOptions);
 
@@ -174,7 +174,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
           lastResult = stepResult.agentResult;
           storeResult(ctx, segment.step.id, stepResult.agentResult);
           // A separator node that hard-fails (e.g. a decision agent hits a
-          // terminal API error, or a flow-ref sub-flow hard-failed) halts.
+          // terminal API error) halts.
           if (stepResult.agentResult.outcome === "hard" && !ctx.hardFail) {
             ctx.hardFail = stepResult.agentResult.failureInfo
               ?? { outcome: "hard", message: stepResult.agentResult.output || "Hard failure", source: "separator_hard_fail" };
@@ -531,7 +531,6 @@ async function executeStep(step: FlowStep, ctx: FlowContext, options: FlowRunOpt
     case "code-decision": return executeCodeDecisionStep(step, ctx, options);
     case "fork": return executeForkStep(step, ctx, options);
     case "agent-decision": return executeAgentDecisionStep(step, ctx, options);
-    case "flow-ref": return executeFlowRefStep(step, ctx, options);
   }
 }
 
@@ -1063,46 +1062,6 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
   const firstBranchLabel = Object.keys(step.branches)[0];
   const { nextStepId } = routeDecisionBranch(step, ctx, options, firstBranchLabel);
   return { nextStepId, agentResult: result };
-}
-
-async function executeFlowRefStep(step: FlowRefStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
-  const expandedPath = expandTemplateVariables(step.path, {
-    task: ctx.task, inputs: {},
-    results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
-  });
-
-  let flowPaths: string[];
-  if (expandedPath.includes("*")) {
-    try { flowPaths = globSync(expandedPath) as string[]; } catch { flowPaths = []; }
-  } else {
-    flowPaths = [expandedPath];
-  }
-
-  let lastAgentResult: AgentResult | null = null;
-  for (const flowPath of flowPaths) {
-    try {
-      const subFlow = parseFlowYamlFile(flowPath);
-      const flowResult = await runFlow({
-        ...options,
-        flow: subFlow,
-        task: ctx.task,
-      });
-      lastAgentResult = flowResult.lastResult;
-      // Merge sub-flow agent results into parent context (flat merge by step ID)
-      for (const [subStepId, subResult] of Object.entries(flowResult.results)) {
-        ctx.results[subStepId] = subResult;
-      }
-      // Also store under flow-ref step ID for backward compatibility
-      if (lastAgentResult) {
-        storeResult(ctx, step.id, lastAgentResult);
-      }
-    } catch { /* skip invalid flows */ }
-  }
-
-  const outcome = lastAgentResult ? resolveRouteOutcome(lastAgentResult, step.on_error) : "soft";
-  const nextStepId = outcome === "success" ? step.on_complete : outcome === "soft" ? step.on_error : undefined;
-  return { agentResult: lastAgentResult ?? undefined, nextStepId };
 }
 
 // ---- Helpers ---------------------------------------------------------------

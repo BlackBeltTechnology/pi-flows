@@ -163,21 +163,4 @@ steps:
 `;
     expect(errs(yaml, catalog(agent("my-agent")))).toHaveLength(0);
   });
-
-  it("does not false-positive on sub-flow results when a flow-ref is ordered-before", () => {
-    const yaml = `name: f
-description: d
-steps:
-  - id: sub
-    type: flow-ref
-    path: ./sub.yaml
-    on_complete: b
-  - id: b
-    type: agent
-    agent: my-agent
-    task: "use $\{{result.inner.summary}}"
-`;
-    // `inner` is a sub-flow step, not statically known; must NOT error.
-    expect(errs(yaml, catalog(agent("my-agent")))).toHaveLength(0);
-  });
 });

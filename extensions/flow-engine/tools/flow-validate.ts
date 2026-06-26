@@ -447,7 +447,6 @@ export function validateFlowContent(
   // unknown-step check and the warning-level output-field check.
   const STANDARD_RESULT_FIELDS = new Set(["summary", "artifacts", "files", "status", "fullOutput"]);
   const orderedBefore = computeOrderedBefore(flow);
-  const flowRefIds = new Set(flow.steps.filter(st => st.stepType === "flow-ref").map(st => st.id));
 
   /** Declared output names for a referenced step, or null when not statically knowable. */
   const declaredOutputsOf = (refStepId: string): Set<string> | null => {
@@ -461,7 +460,7 @@ export function validateFlowContent(
       if (!refAgent) return null; // can't disprove without the catalog
       return new Set((refAgent.outputs ?? []).map(o => o.name));
     }
-    return null; // decision/fork/flow-ref: outputs not statically declared
+    return null; // decision/fork: outputs not statically declared
   };
 
   for (const step of flow.steps) {
@@ -479,10 +478,7 @@ export function validateFlowContent(
     }
     if (templateStrings.length === 0) continue;
 
-    // A flow-ref ordered before this step can inject sub-flow step results
-    // whose IDs are not statically known — relax unknown-step errors then.
     const before = orderedBefore.get(step.id) ?? new Set<string>();
-    const relaxUnknown = [...flowRefIds].some(id => before.has(id));
 
     for (const { tpl, prop } of templateStrings) {
       const line = stepPropLine(idx, step.id, prop) || stepLine(idx, step.id);
@@ -493,7 +489,6 @@ export function validateFlowContent(
         const refField = m[2];
 
         if (!stepIds.has(refStepId)) {
-          if (relaxUnknown) continue; // may be a sub-flow result from a flow-ref
           diagnostics.push({
             line,
             severity: "error",

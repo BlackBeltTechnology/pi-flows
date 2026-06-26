@@ -156,7 +156,7 @@ See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md` for the f
 
 ## Node kind on agent lifecycle events
 
-Every flow node now carries a first-class **`NodeKind`** discriminator end-to-end. `NodeKind` is `"agent" | "fork" | "agent-decision" | "code" | "code-decision" | "flow-ref"` (defined in `extensions/flow-engine/types.ts`). It is the node's TYPE, distinct from the dashboard's timeline-entry `kind` (`text | thinking | tool | error`), which describes individual entries inside a card.
+Every flow node now carries a first-class **`NodeKind`** discriminator end-to-end. `NodeKind` is `"agent" | "fork" | "agent-decision" | "code" | "code-decision"` (defined in `extensions/flow-engine/types.ts`). It is the node's TYPE, distinct from the dashboard's timeline-entry `kind` (`text | thinking | tool | error`), which describes individual entries inside a card.
 
 The `EventEmitObserver` includes `nodeKind` on the `flow:agent-started` and `flow:agent-complete` event payloads for **all** node types (previously only `code`/`code-decision` carried a tag, and it was dropped at the FlowManager fan-out). For `code`/`code-decision` started events the payload also includes the resolved handler `target` path.
 

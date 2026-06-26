@@ -172,13 +172,6 @@ Context: ${{input.research_context}}
   max_iterations: 3
 ```
 
-**Flow Reference** — delegate to a sub-flow:
-```yaml
-- id: run-tests
-  type: flow-ref
-  path: .pi/flows/flows/test-suite/flow.yaml
-```
-
 ## Input Wiring
 
 Steps pass data through `inputs` + template variables:

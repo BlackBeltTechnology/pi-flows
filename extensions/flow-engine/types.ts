@@ -132,16 +132,14 @@ export type NodeKind =
   | "fork"
   | "agent-decision"
   | "code"
-  | "code-decision"
-  | "flow-ref";
+  | "code-decision";
 
 export type FlowStep =
   | AgentStep
   | CodeStep
   | CodeDecisionStep
   | ForkStep
-  | AgentDecisionStep
-  | FlowRefStep;
+  | AgentDecisionStep;
 
 export interface AgentStep {
   stepType: "agent";
@@ -174,14 +172,6 @@ export interface AgentDecisionStep {
   task: string; // Task for the decision agent
   branches: Record<string, string>; // branch label -> step ID mapping
   max_iterations?: number; // Required only when a branch forms a backward (loop) edge
-}
-
-export interface FlowRefStep {
-  stepType: "flow-ref";
-  id: string;
-  path: string; // Path or glob to flow file(s)
-  on_complete?: string;
-  on_error?: string;
 }
 
 export interface CodeStep {

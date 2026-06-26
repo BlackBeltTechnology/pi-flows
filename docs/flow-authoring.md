@@ -24,7 +24,7 @@ Both tools perform validation and write to discoverable locations (no raw `path`
   - Automatically registers as `/<namespace>:<name>` slash-command.
   - To edit an existing flow, read it, then call `flow_write` with the same `namespace` and `name` to overwrite.
 
-> **Bundled flow layout.** Each flow is a **self-contained directory** at `.pi/flows/flows/<namespace>/<name>/`. The definition file is always `flow.yaml` inside it, and that flow's code-node handlers (`<id>.ts` and the generated `<id>.ts.default`) are **co-located in the same directory**. Handlers resolve relative to the flow's own directory — `dirname(flow.source)/<id>.ts` — in both the executor and the generator, so generated and runtime paths are always identical. Deleting a flow removes the whole directory, so handlers can never be orphaned. **BREAKING:** the previous flat layout (`.pi/flows/flows/<namespace>/<name>.yaml`) and the parallel `.pi/flows/handlers/<flow>/` tree are no longer read — there is no fallback. To migrate, move `<name>.yaml` → `<name>/flow.yaml`, move that flow's handlers into the same directory, and repoint any `flow-ref` globs that pointed at `<name>.yaml`.
+> **Bundled flow layout.** Each flow is a **self-contained directory** at `.pi/flows/flows/<namespace>/<name>/`. The definition file is always `flow.yaml` inside it, and that flow's code-node handlers (`<id>.ts` and the generated `<id>.ts.default`) are **co-located in the same directory**. Handlers resolve relative to the flow's own directory — `dirname(flow.source)/<id>.ts` — in both the executor and the generator, so generated and runtime paths are always identical. Deleting a flow removes the whole directory, so handlers can never be orphaned. **BREAKING:** the previous flat layout (`.pi/flows/flows/<namespace>/<name>.yaml`) and the parallel `.pi/flows/handlers/<flow>/` tree are no longer read — there is no fallback. To migrate, move `<name>.yaml` → `<name>/flow.yaml`, move that flow's handlers into the same directory.
 
 ### Model field guidance
 
@@ -345,7 +345,7 @@ steps: [A, B, C, fork, D, E, agent-decision, F]
 ```
 
 - **DAG segments** — consecutive `agent` steps. Executed as a parallel wave, respecting `blockedBy` dependencies. All steps in a wave that have no unsatisfied `blockedBy` entries fire concurrently, up to `max_concurrent`.
-- **Separator steps** — `fork`, `agent-decision`, `code-decision`, `flow-ref`. Execute one at a time and control routing.
+- **Separator steps** — `fork`, `agent-decision`, `code-decision`. Execute one at a time and control routing.
 - **Cross-segment routing** — `on_complete` and `on_error` on agent steps can jump to any step ID, including steps in different segments.
 
 ---
@@ -354,12 +354,11 @@ steps: [A, B, C, fork, D, E, agent-decision, F]
 
 Every step requires BOTH a unique `id` field AND an explicit `type` field. The parser does **not** infer type from which fields are present — a step missing `type:` is rejected with an error listing the valid types.
 
-The canonical step types are `agent`, `agent-decision`, `code`, `code-decision`, `fork`, and `flow-ref`. The table below is a reference for the fields that distinguish each type; it is **not** an inference rule — you must still declare `type:` on every step.
+The canonical step types are `agent`, `agent-decision`, `code`, `code-decision`, and `fork`. The table below is a reference for the fields that distinguish each type; it is **not** an inference rule — you must still declare `type:` on every step.
 
 | Step type | Distinguishing fields |
 |-----------|----------------------|
 | `fork` | `question` |
-| `flow-ref` | `path` (no `agent`) |
 | `agent-decision` | `branches` (no `question`) |
 | `agent` | `agent` |
 | `code` | (handler-only — no distinguishing field) |
@@ -594,36 +593,13 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
 
 The agent calls `finish({ branch: "fixer" })` to loop or `finish({ branch: "done" })` to exit. A `code-decision` loops the same way — return `{ branch: "fixer" }` from the handler.
 
-**Routing node semantics.** A routing node (`fork`, `agent-decision`, `code-decision`, `flow-ref`) always executes, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches not taken receive synthetic `skipped` results; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
+**Routing node semantics.** A routing node (`fork`, `agent-decision`, `code-decision`) always executes, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches not taken receive synthetic `skipped` results; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
 
 > **Migrating from `agent-loop-decision`.** Replace `type: agent-loop-decision` with `type: agent-decision`. Move `loop_target` and `exit_target` into `branches:` (e.g. `branches: { rework: <loop_target>, done: <exit_target> }`) and keep `max_iterations`. The agent calls `finish({ branch: "rework" })` or `finish({ branch: "done" })`.
 
 ---
 
-#### 6. Flow reference step
-
-Delegate execution to another flow file, optionally using a glob pattern.
-
-```yaml
-- id: run-sub-flow
-  type: flow-ref
-  path: "project/changes/*/exec.yaml"    # glob supported
-  on_complete: verify
-  on_error: error-handler
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | Yes | Unique step identifier. |
-| `path` | Yes | Absolute or relative path to a `.yaml` flow file. Glob patterns match multiple files (executed sequentially). |
-| `on_complete` | No | Step ID to route to on success. |
-| `on_error` | No | Step ID to route to on error. |
-
-Sub-flow results are merged into the parent context under the sub-flow's agent step IDs.
-
----
-
-#### 7. Code step
+#### 6. Code step
 
 Run a TypeScript handler function in-process. Use for deterministic logic that does not need an agent — validation, data transformation, computation.
 

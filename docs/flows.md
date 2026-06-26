@@ -6,7 +6,7 @@ Complete reference for authoring flows in pi-flows. Covers all step types with s
 
 ## Flow File Format
 
-Flows are `.yaml` files with YAML frontmatter followed by step definitions. Each step has a unique `id`, an explicit `type:` (one of `agent`, `agent-decision`, `code`, `code-decision`, `fork`, `flow-ref`), and is connected to other steps via `blockedBy` declarations to form a directed acyclic graph (DAG). The parser does not infer `type:` — a step missing it is rejected.
+Flows are `.yaml` files with YAML frontmatter followed by step definitions. Each step has a unique `id`, an explicit `type:` (one of `agent`, `agent-decision`, `code`, `code-decision`, `fork`), and is connected to other steps via `blockedBy` declarations to form a directed acyclic graph (DAG). The parser does not infer `type:` — a step missing it is rejected.
 
 **Location:** each flow is a self-contained directory at `.pi/flows/flows/<namespace>/<name>/`, with the definition file always named `flow.yaml` inside it — `.pi/flows/flows/<namespace>/<name>/flow.yaml`. The command id `<namespace>:<name>` is derived from this directory structure. Package-registered flows directories follow the same `<namespace>/<name>/flow.yaml` layout. A flow's code-node handlers are co-located in the same directory (see below).
 
@@ -303,37 +303,7 @@ The agent calls `finish(branch="rework")` to loop back to `developer`, or `finis
 
 ### Routing Node Semantics
 
-A routing node (`fork`, `agent-decision`, `code-decision`, `flow-ref`) **always executes**, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches that are not taken receive synthetic `skipped` results; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
-
----
-
-### Flow Reference Step
-
-Delegate execution to another flow file. The sub-flow runs to completion before continuing.
-
-**Syntax:**
-
-```yaml
-  - id: run-tests
-    type: flow-ref
-    path: .pi/flows/flows/test-suite.yaml
-    on_complete: deploy-step
-    on_error: fix-step
-```
-
-**Field reference:**
-
-| Field | Description |
-|-------|-------------|
-| `type` | **Required.** Must be `flow-ref`. |
-| `path` | **Required.** Path to the sub-flow `.yaml` file |
-| `on_complete` | Step ID to route to after sub-flow completes |
-| `on_error` | Step ID to route to if sub-flow errors |
-
-**Result propagation:**
-- Sub-flow agent results are flat-merged into the parent's result context
-- The flow-ref step ID stores the last agent's result
-- Downstream steps can reference sub-flow agents: `${{result.sub-agent-id.summary}}`
+A routing node (`fork`, `agent-decision`, `code-decision`) **always executes**, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches that are not taken receive synthetic `skipped` results; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
 
 ---
 
@@ -529,10 +499,6 @@ flowchart TD
   E3 -->|no| ERR
   E3 -->|yes| OK[Reference valid]
 ```
-
-### `flow-ref` exception
-
-Sub-flow step ids are not statically known to the parent. When a `flow-ref` step is ordered before the referencing step, references to ids produced by that sub-flow are **not** flagged as unknown — the `flow-ref` is treated as the ordering guarantee, and field/existence checks are skipped for those ids.
 
 ### Loop iteration is 1-based
 

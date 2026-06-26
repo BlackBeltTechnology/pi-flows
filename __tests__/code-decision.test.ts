@@ -149,7 +149,7 @@ describe("parser: code-decision + removed-type migration errors (6.5)", () => {
   it("rejects a step missing the required type field", () => {
     const yaml = [...base, "  - id: s", "    agent: a", "    task: t"].join("\n");
     expect(() => parseFlowYamlString(yaml, "<t>")).toThrow(/missing required "type"/);
-    expect(() => parseFlowYamlString(yaml, "<t>")).toThrow(/agent, agent-decision, code, code-decision, fork, flow-ref/);
+    expect(() => parseFlowYamlString(yaml, "<t>")).toThrow(/agent, agent-decision, code, code-decision, fork/);
   });
 });
 

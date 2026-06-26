@@ -13,7 +13,6 @@ import type {
   CodeDecisionStep,
   ForkStep,
   AgentDecisionStep,
-  FlowRefStep,
 } from "./types.js";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
@@ -79,7 +78,7 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
   if (!stepType || typeof stepType !== "string") {
     throw new Error(
       `Step "${id}" missing required "type" field. ` +
-      `Declare one of: agent, agent-decision, code, code-decision, fork, flow-ref: ${source}`,
+      `Declare one of: agent, agent-decision, code, code-decision, fork: ${source}`,
     );
   }
 
@@ -105,7 +104,6 @@ function parseStep(raw: any, index: number, source: string): FlowStep {
     case "code-decision": return parseCodeDecisionStep(raw, source);
     case "fork": return parseForkStep(raw, source);
     case "agent-decision": return parseAgentDecisionStep(raw, source);
-    case "flow-ref": return parseFlowRefStep(raw, source);
     default:
       throw new Error(`Unknown step type "${stepType}" for step "${id}": ${source}`);
   }
@@ -219,19 +217,6 @@ function parseCodeDecisionStep(raw: any, source: string): CodeDecisionStep {
       name: typeof output === "string" ? output : String(output.name ?? output),
     }));
   }
-
-  return step;
-}
-
-function parseFlowRefStep(raw: any, source: string): FlowRefStep {
-  const step: FlowRefStep = {
-    stepType: "flow-ref",
-    id: raw.id,
-    path: requireString(raw, "path", source),
-  };
-
-  if (raw.on_complete) step.on_complete = String(raw.on_complete);
-  if (raw.on_error) step.on_error = String(raw.on_error);
 
   return step;
 }

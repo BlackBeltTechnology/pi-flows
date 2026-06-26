@@ -493,8 +493,7 @@ type NodeKind =
   | "fork"
   | "agent-decision"
   | "code"
-  | "code-decision"
-  | "flow-ref";
+  | "code-decision";
 ```
 
 `NodeKind` is the node's TYPE. It is **distinct** from the dashboard timeline-entry `kind` (`text | thinking | tool | error`), which describes individual entries inside a card.

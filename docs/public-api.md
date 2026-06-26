@@ -11,7 +11,7 @@ pi-flows exports its core types and functions from `pi-flows/extensions/flow-eng
 import type {
   AgentConfig, FlowConfig, FlowResult, AgentResult,
   FlowStep, AgentStep, ForkStep, ConditionalStep,
-  AgentDecisionStep, AgentLoopDecisionStep, FlowRefStep, CodeStep,
+  AgentDecisionStep, AgentLoopDecisionStep, CodeStep,
   CodeNodeContext, CodeNodeHandler,
   TemplateContext, SubagentEvent, ArchitectMeta, CardConfig,
   FlowRunOptions, FlowContext, FlowIOAdapter, FlowObserver,
@@ -113,7 +113,6 @@ type FlowStep =
   | ConditionalStep
   | AgentDecisionStep
   | AgentLoopDecisionStep
-  | FlowRefStep
   | CodeStep;
 
 interface AgentStep {
@@ -165,14 +164,6 @@ interface AgentLoopDecisionStep {
   loop_target:    string;
   exit_target:    string;
   max_iterations: number;
-}
-
-interface FlowRefStep {
-  stepType:    "flow-ref";
-  id:          string;
-  path:        string;
-  on_complete?: string;
-  on_error?:   string;
 }
 
 interface CodeStep {

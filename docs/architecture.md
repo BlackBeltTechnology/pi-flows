@@ -25,7 +25,7 @@ The engine is organized as a set of cooperating sub-extensions activated through
 │  │ - DAG walk   │  │ - Process    │  │ - Card grid       │  │
 │  │ - Branching  │  │   isolation  │  │ - Live metrics    │  │
 │  │ - Loops      │  │ - Tool guard │  │ - Status tracking │  │
-│  │ - Sub-flows  │  │ - Env inject │  │                   │  │
+│  │              │  │ - Env inject │  │                   │  │
 │  └──────────────┘  └──────────────┘  └──────────────────┘  │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐   │
@@ -90,7 +90,7 @@ Discovery derives the command id `<namespace>:<name>` from the directory structu
 
 Deleting a flow removes the whole flow directory, so handlers travel with their definition and can never be orphaned.
 
-**Breaking change — clean break.** The previous flat layout (`.pi/flows/flows/<namespace>/<name>.yaml`) and the parallel `.pi/flows/handlers/<flow>/` handler tree are **no longer read**; there is no fallback. To migrate, move `<name>.yaml` → `<name>/flow.yaml`, move that flow's handlers into the same directory, and repoint any `flow-ref` paths or globs that referenced `<name>.yaml`.
+**Breaking change — clean break.** The previous flat layout (`.pi/flows/flows/<namespace>/<name>.yaml`) and the parallel `.pi/flows/handlers/<flow>/` handler tree are **no longer read**; there is no fallback. To migrate, move `<name>.yaml` → `<name>/flow.yaml`, move that flow's handlers into the same directory.
 
 ## Agent Isolation Model
 
@@ -173,13 +173,6 @@ Decision agent → evaluates result → "loop" → jump to loop_target
                                   (max_iterations safety limit)
 ```
 
-**Flow Reference (sub-flow):**
-```
-flow-ref step → resolve path (supports globs) → execute sub-flow
-             → merge sub-flow results into parent context
-             → continue to on_complete target
-```
-
 ### Result Propagation
 
 Results flow through the DAG via interpolation:
@@ -192,11 +185,6 @@ Step B references:
   task: "Use this: ${{result.step-a.summary}}"
   inputs:
     data: "${{result.step-a.artifacts}}"
-
-Sub-flow results are flat-merged:
-  flow-ref runs sub-flow with steps [x, y, z]
-  → parent gets: results["x"], results["y"], results["z"]
-  → also: results["flow-ref-step-id"] = last agent result
 ```
 
 ## Sub-Extension Activation Order

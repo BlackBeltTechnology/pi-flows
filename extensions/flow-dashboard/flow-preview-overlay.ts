@@ -12,7 +12,6 @@ import type {
   ForkStep,
   AgentDecisionStep,
   CodeDecisionStep,
-  FlowRefStep,
 } from "../flow-engine/types.js";
 import { renderBox } from "./box-renderer.js";
 
@@ -30,7 +29,6 @@ const SYMBOLS: Record<string, string> = {
   "code-decision": "◈",
   fork: "◇",
   "agent-decision": "◈",
-  "flow-ref": "▷",
 };
 
 /**
@@ -154,14 +152,6 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
         break;
       }
 
-      case "flow-ref": {
-        const s = step as FlowRefStep;
-        lines.push(`  ${fg("dim", num)} ${fg("dim", sym)} ${fg("accent", s.id)} ${fg("dim", "(flow-ref)")}`);
-        lines.push(`     ${fg("dim", `path: ${s.path}`)}`);
-        if (s.on_complete) lines.push(`     ${fg("dim", `→ on_complete: ${s.on_complete}`)}`);
-        if (s.on_error) lines.push(`     ${fg("dim", `→ on_error: ${s.on_error}`)}`);
-        break;
-      }
     }
 
     lines.push(""); // blank line between steps
@@ -229,7 +219,7 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
   }
 
   // ── Legend ──
-  lines.push(fg("dim", `  Legend: ○ agent  ▣ code  ◈ decision  ◇ fork  ↻ loop  ▷ flow-ref`));
+  lines.push(fg("dim", `  Legend: ○ agent  ▣ code  ◈ decision  ◇ fork  ↻ loop`));
   lines.push("");
   lines.push(fg("dim", "  ↑ ↓ scroll · Backspace close"));
 
