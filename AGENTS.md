@@ -29,7 +29,7 @@ If grep finds nothing, then read source.
 | Watch tests | `npm run test:watch` | |
 | CI | — | `.github/workflows/ci.yml` runs `lint + typecheck + test` on Node 20/22/24 for every push to `develop` and every PR. |
 | Publish | Trigger `Release` workflow in GitHub Actions UI with version input, OR push a `v*` tag | `.github/workflows/publish.yml`. Trusted Publishing via OIDC (`--provenance`), gated by `npm-publish` GH environment. Drafts GitHub Release from CHANGELOG section. See `docs/releasing.md`. |
-| Use flows in a session | `/flows`, `/flows:delete`, `/skill:edit-flow`, `/roles`, `alt+a`, `alt+x`, `alt+o` | Each flow is a self-contained dir `.pi/flows/flows/<namespace>/<name>/` with `flow.yaml`; auto-registers as `/<namespace>:<name>`. Authoring via `flow_agents`/`flow_write` (gated by `flows.editFlow`). |
+| Use flows in a session | `/flows`, `/flows:delete`, `/skill:manage-flows`, `/roles`, `alt+a`, `alt+x`, `alt+o` | Each flow is a self-contained dir `.pi/flows/flows/<namespace>/<name>/` with `flow.yaml`; auto-registers as `/<namespace>:<name>`. Authoring via `flow_agents`/`flow_write` (gated by `flows.editFlow`). |
 
 There is **no compile / bundle / dist step**. TypeScript runs straight from `extensions/` via pi's loader. Treat `extensions/index.ts` as the entrypoint.
 
@@ -97,6 +97,8 @@ Test: every changed line traces directly to the user's request.
 ### 4. Goal-Driven Execution (TDD)
 
 Transform tasks into verifiable goals. Tests first, verify they fail, then minimal implementation to pass. State a brief numbered plan with per-step verification for multi-step work.
+
+**Mandatory order for every change:** (1) write a FAILING test derived ONLY from the proposal's expected behaviour — never from implementation details or existing code; (2) verify it fails; (3) THEN write the plan/tasks; (4) implement minimally until the test passes. The test encodes intent, not mechanism — if you must read source to write it, you are testing the wrong thing.
 
 ### 5. Communication
 

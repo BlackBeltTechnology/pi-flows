@@ -173,7 +173,7 @@ Dashboard emits it to toggle authoring edit-mode live. Mirrors `/flows:edit-mode
 pi.events.emit("flow:set-edit-mode", { enabled: true });
 ```
 
-Handler writes `flows.editFlow` to project `.pi/settings.json`. Syncs project-local `edit-flow` skill `.pi/skills/edit-flow/SKILL.md` (frontmatter `disable-model-invocation` = `!enabled`). Reconciles `flow_agents`/`flow_write` tools.
+Handler writes `flows.editFlow` to project `.pi/settings.json`. Syncs project-local `manage-flows` skill `.pi/skills/manage-flows/SKILL.md` (frontmatter `disable-model-invocation` = `!enabled`). Reconciles `flow_agents`/`flow_write` tools.
 Event path: tools update immediately. Skill visibility next session start. Event runs base `ExtensionContext`, cannot reload (only command path calls `ctx.reload()`). See events-api.md.
 
 ## TUI overlay vs server-driven renderer

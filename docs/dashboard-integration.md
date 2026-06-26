@@ -174,7 +174,7 @@ Most `flow:*` events flow pi-flows → dashboard. **`flow:set-edit-mode { enable
 pi.events.emit("flow:set-edit-mode", { enabled: true });
 ```
 
-The handler writes `flows.editFlow` to the project `.pi/settings.json`, syncs the project-local `edit-flow` skill (`.pi/skills/edit-flow/SKILL.md`, frontmatter `disable-model-invocation: !enabled`), and reconciles the `flow_agents`/`flow_write` tools. On the event path the **tools update immediately**, but **skill visibility applies on the next session start** — the event runs on the base `ExtensionContext`, which cannot reload (only the command path calls `ctx.reload()`). See [events-api.md](events-api.md#flowset-edit-mode).
+The handler writes `flows.editFlow` to the project `.pi/settings.json`, syncs the project-local `manage-flows` skill (`.pi/skills/manage-flows/SKILL.md`, frontmatter `disable-model-invocation: !enabled`), and reconciles the `flow_agents`/`flow_write` tools. On the event path the **tools update immediately**, but **skill visibility applies on the next session start** — the event runs on the base `ExtensionContext`, which cannot reload (only the command path calls `ctx.reload()`). See [events-api.md](events-api.md#flowset-edit-mode).
 
 ## TUI overlay vs server-driven renderer
 

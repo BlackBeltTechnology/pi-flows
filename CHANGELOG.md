@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The flow/agent authoring skill was renamed `edit-flow` → `manage-flows`.** It always created *and* edited flows/agents, but the `edit-flow` label read as modify-only and confused users at invocation. The command is now `/skill:manage-flows`; the packaged skill lives at `skills/manage-flows/SKILL.md` and the project-local copy at `.pi/skills/manage-flows/SKILL.md`. The `flows.editFlow` setting and the `/flows:edit-mode` command are unchanged. (Unreleased rename — no migration; the previous name never shipped.)
+
 ### Removed
 
 - **BREAKING: the `flow-ref` step type was removed.** Flows can no longer delegate to a sub-flow via `type: flow-ref`. The runtime path was fragile (paths resolved against the process CWD rather than the parent flow's directory, and any failure — missing file, parse error, sub-flow throw — was silently swallowed, producing no result and no diagnostic) and sub-flow nodes were never registered in the dashboard grid, so delegated work ran invisibly. Its only unique capability (glob fan-out over flow files) did not justify the maintenance and footgun cost; every other use overlapped existing primitives. A step declaring `type: flow-ref` is now rejected as an unknown step type. Migrate by inlining the sub-flow's steps into the parent flow, or invoke the flow directly.

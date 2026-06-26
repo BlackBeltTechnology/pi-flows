@@ -77,7 +77,7 @@ pi install /path/to/pi-flows
 | Command | Description |
 |---------|-------------|
 | `/flows` | List and manage flows (run, delete) |
-| `/skill:edit-flow` | Load the flow/agent create-and-edit reference skill |
+| `/skill:manage-flows` | Load the flow/agent create-and-edit reference skill |
 | `/flows:delete` | Delete a flow |
 | `/roles` | Assign models to role tiers (@coding, @planning, etc.) |
 | `alt+a` | Toggle auto-routing (agents decide fork branches autonomously) |
@@ -95,7 +95,7 @@ Flows also register as slash commands based on directory path: `.pi/flows/flows/
 - **Flows** — YAML files defining a DAG of steps connected via `blockedBy`. The engine schedules independent steps in parallel, up to `max_concurrent`.
 - **Template variables** — `${{task}}`, `${{result.step-id.summary}}`, `${{input.name}}` wire data between steps at dispatch time.
 - **Model roles** — `@coding`, `@planning`, `@research`, `@compact` map to concrete models via `/roles`. Each agent declares which tier it needs.
-- **Edit flow** — Create and edit flows/agents conversationally in the main session using the `flow_agents` and `flow_write` tools. These tools are off by default; enable them per project or globally with `flows.editFlow: true` in `.pi/settings.json`. Load `/skill:edit-flow` for the format reference.
+- **Edit flow** — Create and edit flows/agents conversationally in the main session using the `flow_agents` and `flow_write` tools. These tools are off by default; enable them per project or globally with `flows.editFlow: true` in `.pi/settings.json`. Load `/skill:manage-flows` for the format reference.
 
 ## Writing Agents
 

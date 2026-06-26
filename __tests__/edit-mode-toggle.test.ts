@@ -22,7 +22,7 @@ function tmpRoot(): string {
 function tmpPkg(skillBody?: string): string {
   const pkg = mkdtempSync(join(tmpdir(), "pi-editpkg-"));
   if (skillBody !== undefined) {
-    const dir = join(pkg, "skills", "edit-flow");
+    const dir = join(pkg, "skills", "manage-flows");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "SKILL.md"), skillBody, "utf-8");
   }
@@ -143,10 +143,10 @@ describe("syncEditFlowSkill — project-local materialization (§2)", () => {
   it("NEVER writes under the packaged (node_modules) skills dir", () => {
     const root = tmpRoot();
     const pkg = tmpPkg(template);
-    const before = readFileSync(join(pkg, "skills", "edit-flow", "SKILL.md"), "utf-8");
+    const before = readFileSync(join(pkg, "skills", "manage-flows", "SKILL.md"), "utf-8");
     syncEditFlowSkill(root, pkg, false);
     syncEditFlowSkill(root, pkg, true);
-    expect(readFileSync(join(pkg, "skills", "edit-flow", "SKILL.md"), "utf-8")).toBe(before);
+    expect(readFileSync(join(pkg, "skills", "manage-flows", "SKILL.md"), "utf-8")).toBe(before);
   });
 
   it("falls back to a built-in template when the package template is missing", () => {
@@ -155,7 +155,7 @@ describe("syncEditFlowSkill — project-local materialization (§2)", () => {
     const res = syncEditFlowSkill(root, pkg, true);
     expect(res.created).toBe(true);
     const content = readFileSync(res.path, "utf-8");
-    expect(content).toContain("name: edit-flow");
+    expect(content).toContain("name: manage-flows");
     expect(content).toContain("disable-model-invocation: false");
   });
 });

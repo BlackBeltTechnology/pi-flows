@@ -324,7 +324,7 @@ export function activate(pi: ExtensionAPI) {
   // appear in any session's system prompt. Activated per session only when
   // settings enable them (`flows.editFlow: true` in .pi/settings.json —
   // project value, when trusted, overrides the global value). The
-  // edit-flow skill stays available as /skill:edit-flow regardless.
+  // manage-flows skill stays available as /skill:manage-flows regardless.
   const EDIT_FLOW_TOOLS = ["flow_agents", "flow_write"];
   registerFlowAgentsTool(pi, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
   registerFlowWriteTool(pi, () => agents, projectRoot);

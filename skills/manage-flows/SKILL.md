@@ -1,9 +1,9 @@
 ---
-name: edit-flow
+name: manage-flows
 description: Create and edit pi-flows flows and agents from the main session. Use when the user wants to create a new flow, add or change an agent, or edit an existing flow/agent. Covers agent frontmatter, flow YAML, step types (agent, fork, agent-decision, code, code-decision, flow-ref), model references, the flow_agents/flow_write tools, code-handler generation, write locations, editing an existing flow vs creating one, and fixing validation errors.
 ---
 
-# Edit Flow
+# Manage Flows
 
 You are creating and editing **pi-flows** flows and agents directly in this session. Tools that do the writing (each validates before writing and returns diagnostics on failure):
 
@@ -13,7 +13,7 @@ You are creating and editing **pi-flows** flows and agents directly in this sess
 
 These tools derive their write locations from the discovery convention — there is **no raw `path`**. Writing to a name that already exists overwrites it (that is how you edit).
 
-> The edit-flow tools are **off by default**. They are active only when `flows.editFlow: true` is set in `.pi/settings.json` (project, when trusted) or `~/.pi/agent/settings.json` (global), toggled live with `/flows:edit-mode <on|off>`. If `flow_agents`/`flow_write` are not available, tell the user to enable edit mode and (if needed) restart the session.
+> The manage-flows tools are **off by default**. They are active only when `flows.editFlow: true` is set in `.pi/settings.json` (project, when trusted) or `~/.pi/agent/settings.json` (global), toggled live with `/flows:edit-mode <on|off>`. If `flow_agents`/`flow_write` are not available, tell the user to enable edit mode and (if needed) restart the session.
 
 ## How it works (execution model)
 

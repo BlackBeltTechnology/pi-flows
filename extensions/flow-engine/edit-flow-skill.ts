@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
-// Edit-flow skill materialization.
+// Manage-flows skill materialization.
 //
-// pi-flows owns a PROJECT-LOCAL copy of the edit-flow skill at
-// `<projectRoot>/.pi/skills/edit-flow/SKILL.md`, materialized from the packaged
+// pi-flows owns a PROJECT-LOCAL copy of the manage-flows skill at
+// `<projectRoot>/.pi/skills/manage-flows/SKILL.md`, materialized from the packaged
 // template. This is the writable, per-project, natively-discovered location —
 // the packaged copy under node_modules is read-only and reinstall-volatile and
 // is NEVER written here. The copy's `disable-model-invocation` frontmatter is
@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const CONFIG_DIR = ".pi";
-const SKILL_NAME = "edit-flow";
+const SKILL_NAME = "manage-flows";
 
 /** Project-local SKILL.md path that pi-flows owns. */
 export function editFlowSkillPath(projectRoot: string): string {
@@ -66,7 +66,7 @@ export function syncEditFlowSkill(
     const template = editFlowTemplatePath(pkgRoot);
     source = existsSync(template)
       ? readFileSync(template, "utf-8")
-      : `---\nname: ${SKILL_NAME}\ndescription: Create and edit pi-flows flows and agents from the main session.\n---\n\n# Edit Flow\n`;
+      : `---\nname: ${SKILL_NAME}\ndescription: Create and edit pi-flows flows and agents from the main session.\n---\n\n# Manage Flows\n`;
   } else {
     source = readFileSync(dest, "utf-8");
   }

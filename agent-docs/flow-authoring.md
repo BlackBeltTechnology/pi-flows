@@ -6,15 +6,15 @@ Complete format reference for agent `.md` files and flow `.yaml` files. Covers e
 
 ## Flow and Agent Authoring Workflow
 
-Set `flows.editFlow: true` in `.pi/settings.json` (e.g. `{ "flows": { "editFlow": true } }`). Session start reads setting, activates `flow_agents` and `flow_write` tools. Change takes effect next session start. Once active, author with `flow_agents`/`flow_write`. Load `/skill:edit-flow` for reference skill (available regardless of setting).
+Set `flows.editFlow: true` in `.pi/settings.json` (e.g. `{ "flows": { "editFlow": true } }`). Session start reads setting, activates `flow_agents` and `flow_write` tools. Change takes effect next session start. Once active, author with `flow_agents`/`flow_write`. Load `/skill:manage-flows` for reference skill (available regardless of setting).
 
 Recommended: `/flows:edit-mode <on|off>` toggles edit-mode live. Preferred over hand-editing settings.json + restart.
 `/flows:edit-mode on` -> write flows.editFlow=true to project `.pi/settings.json`, skill `disable-model-invocation`=false, activate `flow_agents`/`flow_write`, reload.
 `/flows:edit-mode off` -> write flows.editFlow=false, skill `disable-model-invocation`=true, deactivate `flow_agents`/`flow_write`, reload.
 Writes project `.pi/settings.json` read-merge-write. Preserves other keys. Never global file.
-Syncs project-local skill `.pi/skills/edit-flow/SKILL.md` from packaged template. Sets frontmatter `disable-model-invocation` = `!enabled`. Packaged copy under `node_modules` never written.
+Syncs project-local skill `.pi/skills/manage-flows/SKILL.md` from packaged template. Sets frontmatter `disable-model-invocation` = `!enabled`. Packaged copy under `node_modules` never written.
 Command path calls `ctx.reload()`. Change live in current session.
-Edit-mode on -> AI sees `edit-flow` skill + has authoring tools. Off -> skill hidden from prompt (reach via `/skill:edit-flow`), tools inactive.
+Edit-mode on -> AI sees `manage-flows` skill + has authoring tools. Off -> skill hidden from prompt (reach via `/skill:manage-flows`), tools inactive.
 Project-local skill re-synced every session_start (idempotent). Skill discoverable by default, frontmatter reflects current setting.
 Dashboards emit inbound event `flow:set-edit-mode { enabled: boolean }`. Event path: tools update immediately, skill visibility next session start (no reload). See events-api.md.
 
@@ -35,7 +35,7 @@ Tools validate and write to discoverable locations (no raw `path`):
 2. Model ID + thinking: `claude-sonnet-4-20250514:high`. `:high` overrides `thinking:` field.
 3. Bare model ID: `claude-haiku-3-5-20241022`. Thinking from `thinking:` field or none.
 
-`edit-flow` skill documents forms interactively.
+`manage-flows` skill documents forms interactively.
 
 ---
 
