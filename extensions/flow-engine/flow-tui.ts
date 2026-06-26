@@ -27,6 +27,7 @@ import {
 } from "../flow-summary/index.js";
 import { Text, Key } from "@earendil-works/pi-tui";
 import { renderBox } from "../flow-dashboard/box-renderer.js";
+import { renderSummaryContent } from "../flow-summary/summary-render.js";
 import { isAutonomousMode, setAutonomousMode } from "../autonomous-mode.js";
 
 // ---- Module-scoped state ---------------------------------------------------
@@ -807,7 +808,6 @@ export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
     if (!uiCtx) return;
 
     const { flowResult: fr, stats, hasIssue, nextStep, agentNames } = data;
-    const statusIcon = hasIssue ? "⚠" : "✓";
 
     // Register lifecycle-scoped summary input handler
     registerSummaryInputHandler();
@@ -821,7 +821,6 @@ export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
           render(width: number): string[] {
             const state = getSummaryState();
             if (!state) return [];
-            const inner = width - 4;
 
             // ── Navigate mode: agent list with card metrics ──
             if (state.mode === "navigate") {
@@ -889,54 +888,15 @@ export function setupFlowTui(pi: ExtensionAPI, flowManager: FlowManager): void {
               return text.render(width);
             }
 
-            // ── Summary box mode (default) ──
-            const content: string[] = [];
-            const separators: number[] = [];
-
-            const header = `${statusIcon} ${fr.flowName} complete · ${stats.agentCount} agents · ${stats.duration}`;
-            content.push(theme.fg("accent", header));
-            separators.push(0);
-
-            for (const agent of stats.perAgent) {
-              const icon =
-                agent.status === "complete"
-                  ? theme.fg("success", "✓")
-                  : agent.status === "skipped"
-                    ? theme.fg("dim", "✓")
-                    : agent.status === "blocked"
-                      ? theme.fg("warning", "⚠")
-                      : agent.status === "error"
-                        ? theme.fg("error", "⚠")
-                        : theme.fg("dim", "○");
-              const detail =
-                agent.fileCount > 0 ? ` (${agent.fileCount} files)` : "";
-              content.push(`${icon} ${agent.name}${detail}`);
-              // Show truncated finish summary if available
-              const agentSummary = fr.results[agent.name]?.summary;
-              if (agentSummary) {
-                const maxLen = inner - 4;
-                const trimmed =
-                  agentSummary.length > maxLen
-                    ? agentSummary.slice(0, maxLen - 1) + "…"
-                    : agentSummary;
-                content.push(theme.fg("dim", `  ${trimmed}`));
-              }
-            }
-
-            if (nextStep) {
-              separators.push(content.length - 1);
-              const nextLine = `Next: /${nextStep}`;
-              content.push(theme.fg("warning", nextLine));
-            }
-
-            const lines = renderBox({
-              width,
+            // ── Summary box mode (default): frozen cards above summary ──
+            const lines = renderSummaryContent({
+              flowResult: fr,
+              stats,
+              hasIssue,
+              nextStep,
+              cards: getLastCards(),
               theme,
-              content,
-              separatorAfter: separators,
-              footer: [
-                theme.fg("dim", "alt+o inspect agents · alt+x dismiss"),
-              ],
+              width,
             });
 
             state.summaryBoxHeight = lines.length;
