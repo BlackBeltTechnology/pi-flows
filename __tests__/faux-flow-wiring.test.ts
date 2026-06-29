@@ -41,8 +41,34 @@ describe("faux runFlow — multi-step output wiring", () => {
     });
 
     expect(result.results.producer.status).toBe("complete");
-    expect(result.results.producer.out).toBe("WIDGET-42");
+    expect(result.results.producer.outputs.out).toBe("WIDGET-42");
     expect(result.results.consumer.status).toBe("complete");
     expect(result.results.consumer.summary).toContain("WIDGET-42");
+  });
+
+  it("a file:// input is NOT resolved — the literal path string passes through (no injection)", async () => {
+    const flow: FlowConfig = {
+      name: "no-file-inject",
+      description: "file:// is not a special form",
+      source: "<faux>",
+      steps: [
+        {
+          stepType: "agent",
+          id: "reader",
+          agent: "reader",
+          task: "read ${{input.doc}}",
+          inputs: { doc: "file://README.md" },
+        },
+      ],
+    };
+    const agents = [makeAgent({ name: "reader", model: "faux/faux-1", inputs: ["doc"] })];
+    const result = await runFaux({
+      flow,
+      agents,
+      responder: (taskText) => scriptFinish({ status: "complete", summary: `got: ${taskText}` }),
+    });
+    // The literal path is passed through; had file:// been resolved, a sentinel
+    // (not the path) would have appeared and been replaced with file content.
+    expect(result.results.reader.summary).toContain("file://README.md");
   });
 });

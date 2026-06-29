@@ -159,18 +159,16 @@ Fork step → present options to user → user selects → route to branch step(
                                                    → skip non-selected branches
 ```
 
-**Conditional (automatic routing):**
+**Agent Decision (agent routing):**
 ```
-Conditional step → check ctx.results[stepId][field]
-                → non-empty? → route to "present" target
-                → empty?     → route to "absent" target
+Agent decision step → agent calls finish({ branch }) → route to branches[branch] target
+                                                     → backward branch loops (max_iterations safety limit)
 ```
 
-**Agent Loop Decision:**
+**Code Decision (handler routing):**
 ```
-Decision agent → evaluates result → "loop" → jump to loop_target
-                                  → "exit" → jump to exit_target
-                                  (max_iterations safety limit)
+Code decision step → handler returns { branch } → route to branches[branch] target
+                                                → backward branch loops (max_iterations safety limit)
 ```
 
 ### Result Propagation
@@ -179,12 +177,12 @@ Results flow through the DAG via interpolation:
 
 ```
 Step A produces:
-  { summary: "...", artifacts: "...", files: [...] }
+  { status: "complete", summary: "...", fullOutput: "...", outputs: { record: { id: 1 } } }
 
 Step B references:
   task: "Use this: ${{result.step-a.summary}}"
   inputs:
-    data: "${{result.step-a.artifacts}}"
+    data: "${{result.step-a.record}}"   # whole-value ref → handler receives the object { id: 1 }
 ```
 
 ## Sub-Extension Activation Order

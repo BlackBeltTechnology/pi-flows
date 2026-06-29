@@ -7,6 +7,7 @@
 
 import type {
   FlowConfig,
+  FlowInputDecl,
   FlowStep,
   AgentStep,
   CodeStep,
@@ -42,6 +43,7 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
   const max_concurrent = doc.max_concurrent !== undefined ? toInt(doc.max_concurrent, source) : undefined;
   const task_required = doc.task_required === true || doc.task_required === "true";
   const task_prompt = doc.task_prompt ? String(doc.task_prompt) : undefined;
+  const inputs = parseFlowInputs(doc.inputs, source);
 
   const rawSteps = doc.steps;
   if (!Array.isArray(rawSteps)) {
@@ -56,9 +58,29 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
     ...(max_concurrent !== undefined ? { max_concurrent } : {}),
     ...(task_required ? { task_required } : {}),
     ...(task_prompt ? { task_prompt } : {}),
+    ...(inputs ? { inputs } : {}),
     steps,
     source,
   };
+}
+
+const VALID_INPUT_TYPES = new Set(["string", "number", "boolean", "object", "array"]);
+
+/** Parse the optional flow-level `inputs:` schema. (flow-typed-io-and-run-state) */
+function parseFlowInputs(raw: any, source: string): Record<string, FlowInputDecl> | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`Flow "inputs" must be a mapping of name -> { type, required? }: ${source}`);
+  }
+  const out: Record<string, FlowInputDecl> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, any>)) {
+    const t = v?.type;
+    if (!t || typeof t !== "string" || !VALID_INPUT_TYPES.has(t)) {
+      throw new Error(`Flow input "${k}" needs a valid "type" (string|number|boolean|object|array): ${source}`);
+    }
+    out[k] = { type: t as FlowInputDecl["type"], ...(v.required === true ? { required: true } : {}) };
+  }
+  return out;
 }
 
 // ---- Step parsing ----------------------------------------------------------

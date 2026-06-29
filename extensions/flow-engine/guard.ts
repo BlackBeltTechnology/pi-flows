@@ -86,15 +86,6 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
           Type.Literal("blocked"),
         ], { description: "Result status" }),
         summary: Type.String({ description: "Brief summary of what was accomplished or what went wrong" }),
-        files: Type.Array(Type.Object({
-          path: Type.String({ description: "File path" }),
-          action: Type.Union([
-            Type.Literal("created"),
-            Type.Literal("modified"),
-            Type.Literal("read"),
-          ], { description: "What was done to this file" }),
-        }), { description: "Files created, modified, or read" }),
-        artifacts: Type.Optional(Type.String({ description: "Optional structured data (XML or other)" })),
       };
 
       if (decisionBranches) {
@@ -149,7 +140,7 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
           : [
               "You MUST call the `finish` tool as your final action to submit your result.",
               "Do NOT output a <result> XML block — use the `finish` tool instead.",
-              "Provide a clear summary, list all files you created/modified/read, and set the correct status.",
+              "Provide a clear summary, set the correct status, and supply every declared output.",
             ],
         parameters: Type.Object(baseParams),
         execute: async () => {

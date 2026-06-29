@@ -178,7 +178,7 @@ ${{input.research_context}}
 
 - Each input name must be wired in the flow step's `inputs:` block.
 - Unset inputs expand to empty string.
-- Use `file://` prefix in the flow's `inputs:` value to inject file content (see [File content injection](#file-content-injection)).
+- To pass a file's **contents**, pass its **path** as an input (typically a `*_path` output) and have the agent read it at runtime via its `read` tool (subject to `access.read`). The engine no longer injects file content (see [Passing file-backed data](#passing-file-backed-data)).
 
 #### Outputs
 
@@ -214,8 +214,8 @@ outputs:
 ---
 ```
 
-- `type` — one of `string`, `number`, or `boolean`. Outputs stay string-valued downstream; `type` constrains the string content (`number` → numeric string, `boolean` → `true`|`false`).
-- `pattern` — a regex the string must match. Explicit `pattern` wins over `type`. An invalid regex degrades to an unconstrained required string.
+- `type` — one of `string`, `number`, `boolean`, `object`, or `array`. The output is **stored in its real JSON type** under the result's `outputs`, never coerced to a string. When the declared `type` is non-string, the `finish` schema accepts that type and validates the emitted value against it before storing it.
+- `pattern` — a regex the value (as text) must match. Explicit `pattern` wins over `type`. An invalid regex degrades to an unconstrained required string.
 
 **Required by default:** declared outputs are required. Missing or `type`/`pattern`-violating outputs cause the `finish` call to be rejected and the agent re-prompted via the existing finish retry loop; the step fails after `MAX_FINISH_RETRIES`. Enforced at the finish-tool schema level.
 
@@ -224,7 +224,6 @@ Declared outputs become parameters on the `finish` tool. The agent sets them whe
 finish({
   status: "complete",
   summary: "Analysis complete",
-  files: [],
   findings: "Found 3 critical issues...",
   verdict: "fail"
 })
@@ -316,6 +315,9 @@ description: What this flow does # REQUIRED — shown in listings
 max_concurrent: 3                # optional — parallel agent cap (default: 4)
 task_required: true              # optional — prompt user for task if no args given
 task_prompt: "Enter your task:"  # optional — custom prompt text
+inputs:                          # optional — typed input schema (see below)
+  ref:   { type: string, required: true }
+  count: { type: number }
 
 steps:
   - ...
@@ -329,6 +331,40 @@ steps:
 | `max_concurrent` | No | `4` | Maximum number of agent steps running in parallel within a DAG segment. |
 | `task_required` | No | `false` | When `true`, prompts the user for a task description if the slash-command is invoked with no arguments. The answer becomes `${{task}}`. |
 | `task_prompt` | No | `"Describe what you want <name> to do:"` | Custom prompt text shown when `task_required` triggers. |
+| `inputs` | No | — | Optional typed input schema (see [Typed flow inputs](#typed-flow-inputs)). |
+
+---
+
+### Typed flow inputs
+
+A flow may declare an optional `inputs:` schema — a mapping of input name to `{ type, required? }`:
+
+```yaml
+inputs:
+  ref:   { type: string, required: true }
+  count: { type: number }
+  config: { type: object }
+```
+
+| Field | Description |
+|-------|-------------|
+| `type` | One of `string`, `number`, `boolean`, `object`, `array`. Required; an omitted or unknown type is a validation error. |
+| `required` | When `true`, the run fails to start if the input is absent. Default `false`. |
+
+**Starting a run with structured inputs.** Alongside the existing `task` string, a run may be started with a structured `inputs` object across every invocation path (slash command, the `flow:run` event's `inputs` field, and the programmatic run API). Provided inputs are validated against the schema; a missing `required` input or a type mismatch fails the run start with a diagnostic. A flow with no `inputs:` schema is still startable with only `task`, and `${{task}}` resolves as before — the structured object is additive.
+
+**Referencing inputs.** Declared inputs are referenceable as `${{flow.input.<name>}}`. They follow the same typed-delivery rules as result outputs: a code-node input wired to exactly `${{flow.input.count}}` receives the typed value (e.g. the number `3`), while a flow input interpolated into agent text or an embedded expression is JIT-serialized to compact JSON.
+
+---
+
+### Typed data between steps
+
+Declared `outputs` cross step boundaries in their **real JSON types** — they are never coerced to strings in storage. Serialization happens just-in-time, only at a text boundary:
+
+- **Whole-value code-node input** — when a code node's input value is *exactly* one reference (`${{result.X.name}}` or `${{flow.input.name}}`, no surrounding text), the handler receives the value **unchanged** (object/array/number/boolean/string).
+- **Embedded reference** — when a reference sits inside other text, or is interpolated into an agent system prompt/task, the non-string value is serialized to **compact JSON** at that point. Scalar strings pass through unchanged.
+
+`code → code` whole-value handoff therefore involves zero stringify/parse round-trips. For large or file-backed data, pass a path and read it just-in-time (see [Passing file-backed data](#passing-file-backed-data)) rather than inlining it.
 
 ---
 
@@ -515,7 +551,7 @@ export default async function (
 
 **Type-safe scaffold.** `/flows:generate` emits a `type Branch = "auto_approve" | "needs_human" | "park";` union per `code-decision` and types the return as `Promise<{ branch: Branch } & Output>`, so an off-map label is a compile-time error. Scaffolds write a `.ts.default` and never overwrite an implemented handler.
 
-> **Migrating from `conditional`.** Replace `type: conditional` with `type: code-decision`. Read the value previously in `check: <stepId>.<key>` as a handler **input** and return `{ branch: "present" }` or `{ branch: "absent" }`, with `branches: { present: <present-target>, absent: <absent-target> }`. Standard fields (`artifacts`, `summary`, `files`, `status`) remain available as `${{result.<stepId>.<field>}}` inputs.
+> **Migrating from `conditional`.** Replace `type: conditional` with `type: code-decision`. Read the value previously in `check: <stepId>.<key>` as a handler **input** and return `{ branch: "present" }` or `{ branch: "absent" }`, with `branches: { present: <present-target>, absent: <absent-target> }`. Standard fields (`summary`, `status`, `fullOutput`) remain available as `${{result.<stepId>.<field>}}` inputs.
 
 ---
 
@@ -621,7 +657,7 @@ Run a TypeScript handler function in-process. Use for deterministic logic that d
 |-------|----------|-------------|
 | `id` | Yes | Unique step identifier. Determines the handler filename — must be filesystem-safe. |
 | `type` | Yes | Must be `"code"`. Always set explicitly; this type is not inferred. |
-| `inputs` | No | Map of input name → `${{...}}` template string. Values are template-expanded and passed to the handler as strings. Unresolved templates become `""`. Input names must be valid JS identifiers. |
+| `inputs` | No | Map of input name → `${{...}}` template string. When a value is **exactly one** reference (`${{result.X.name}}` or `${{flow.input.name}}`, no surrounding text) the handler receives that value **unchanged** in its real JSON type; when the reference is embedded in other text the handler receives the interpolated (JIT-serialized) string. Unresolved templates become `""`. Input names must be valid JS identifiers. |
 | `outputs` | No | List of `{ name }` objects. Each name must be a valid JS identifier, unique within the step. The handler return object must contain exactly these keys. |
 | `target` | No | Override the handler file path. Skips scaffold generation; the author owns the file. |
 | `blockedBy` | No | Step IDs that must complete before this step runs. |
@@ -636,13 +672,13 @@ The handler is the module’s **default export**, an `async` function `(input, c
 ```typescript
 import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
 
-interface Input  { invoice: string }
-interface Output { valid: string; nav_record: string }
+interface Input  { invoice: Record<string, unknown> }
+interface Output { valid: boolean; nav_record: Record<string, unknown> }
 
 export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
   ctx.logger("validating invoice...");
   ctx.setSummary("Invoice validated");
-  return { valid: "true", nav_record: "..." };
+  return { valid: true, nav_record: { id: 1 } };
 }
 ```
 
@@ -658,15 +694,9 @@ export default async function (input: Input, ctx: CodeNodeContext): Promise<Outp
 | `stepId` | `string` | The step’s `id`. |
 | `task` | `string` | The task string passed when the flow was invoked. |
 
-**Return contract:** the returned object must contain **exactly** the declared `outputs` — every declared key present, no undeclared extras. A step with no `outputs` must return `{}`.
+**Return contract:** the returned object must contain **exactly** the declared `outputs` — every declared key present, no undeclared extras. A step with no `outputs` must return `{}`. A missing or extra key is a soft failure naming the offending key.
 
-**Value coercion:**
-
-| Value type | Behaviour |
-|------------|-----------|
-| `string` | Passes through |
-| `number`, `boolean`, `bigint` | `String()` conversion |
-| `object`, `array`, `null` | Soft failure naming the key — use `JSON.stringify()` intentionally |
+**Structured returns:** a handler may return **any JSON-compatible value** (`string`, `number`, `boolean`, `object`, `array`, `null`) for each declared output. Each value is stored in its real type under the result's `outputs` — there is no string coercion, and an `object`/`array`/`null` return is **no longer** a soft failure.
 
 **Failure modes:**
 
@@ -726,10 +756,9 @@ Template expressions `${{...}}` are expanded in `task`, `inputs` values, and `qu
 | `${{input.NAME}}` | Named input passed to this step via the `inputs:` block. |
 | `${{result.STEP_ID.status}}` | Step result status: `"complete"`, `"error"`, `"blocked"`, `"unknown"`. |
 | `${{result.STEP_ID.summary}}` | Summary string from the step's `finish` call. |
-| `${{result.STEP_ID.artifacts}}` | Raw artifacts XML from the step. |
-| `${{result.STEP_ID.files}}` | Comma-separated list of files created/modified. |
 | `${{result.STEP_ID.fullOutput}}` | Full raw output text. Use sparingly — can be very large. |
-| `${{result.STEP_ID.OUTPUTNAME}}` | Typed output declared in agent's `outputs:` frontmatter. |
+| `${{result.STEP_ID.OUTPUTNAME}}` | A declared typed output (from an agent's or code step's `outputs:`), held under the result's `outputs`. A produced file path is conveyed this way as a `*_path` output. |
+| `${{flow.input.NAME}}` | A declared flow input (see [Typed flow inputs](#typed-flow-inputs)). |
 | `${{loop.STEP_ID.iteration}}` | Current iteration count of a loop decision step. |
 | `${{loop.STEP_ID.max}}` | Max iterations configured for a loop decision step. |
 
@@ -753,7 +782,7 @@ Inputs are the mechanism for passing data between steps. An agent declares what 
   blockedBy: [researcher]
   inputs:
     research_context: ${{result.researcher.summary}}
-    project_root: ${{result.researcher.artifacts}}
+    project_root: ${{result.researcher.project_root}}
 ```
 
 In the implementer's system prompt:
@@ -769,23 +798,29 @@ Working in: ${{input.project_root}}
 
 ---
 
-### File content injection
+### Passing file-backed data
 
-Prefix an input value with `file://` to inject file content directly into the agent's prompt at dispatch time.
+The engine does **not** read a file and inject its content into a prompt — the `file://` input prefix is no longer a special form. Instead, pass the file's **path** as a value (typically a declared `*_path` output) and let the consumer read it just-in-time: an agent reads it via its `read` tool (subject to `access.read`), and a code node reads it from the filesystem.
 
 ```yaml
 - id: validator
-  agent: validator
+  agent: validator         # must declare the `read` tool
+  blockedBy: [generator]
   inputs:
-    spec_content: file://specs/api-spec.md
-    output_content: file://${{result.generator.files}}
+    spec_path: specs/api-spec.md
+    report_path: ${{result.generator.report_path}}
+```
+
+The agent's prompt then instructs it to read those paths:
+
+```markdown
+Read the spec at ${{input.spec_path}} and the generated report at ${{input.report_path}}.
 ```
 
 Rules:
-- `file://${{result.STEP.files}}` — only use when the step produces exactly **one** file (the `files` field is comma-separated for multiple files).
-- File content is injected **verbatim** — never template-expanded.
-- The step whose file is referenced must be in `blockedBy`.
-- If the file does not exist at dispatch time, the step fails with an error.
+- The producing step must be in `blockedBy` so the file exists by the time the consumer reads it.
+- The consuming agent must hold the `read` tool and a matching `access.read` glob. Flow validation emits a **warning** when a `*_path`/`*_file` input is wired into an agent that lacks the `read` tool.
+- For small, always-needed files, `context_files` (read at spawn) remains available.
 
 ---
 

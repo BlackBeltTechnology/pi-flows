@@ -11,9 +11,9 @@
  * - Routes FlowHardError as hard failure; everything else as soft failure
  */
 
-import type { CodeStep, CodeDecisionStep, AgentResult, CodeNodeContext, FailureInfo, NodeKind } from "./types.js";
+import type { CodeStep, CodeDecisionStep, AgentResult, CodeNodeContext, FailureInfo, NodeKind, StepResultValue } from "./types.js";
 import { classifyThrownError } from "./failure.js";
-import { expandTemplateVariables } from "./execution.js";
+import { resolveCodeInput } from "./execution.js";
 import { existsSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 
@@ -22,14 +22,8 @@ import { resolve, join, dirname } from "node:path";
 /** The parts of FlowContext the executor needs. */
 export interface CodeNodeFlowCtx {
   task: string;
-  results: Record<string, {
-    fullOutput: string;
-    status: string;
-    summary: string;
-    artifacts: string;
-    files: string;
-    [key: string]: string;
-  }>;
+  flowInput?: Record<string, unknown>;
+  results: Record<string, StepResultValue>;
   loopCounters: Record<string, number>;
   loopMaxIterations: Record<string, number>;
 }
@@ -104,12 +98,14 @@ export async function executeCodeStep(
     inputs: {} as Record<string, string>,
     results: ctx.results,
     loopCounters: ctx.loopCounters,
-    loopMaxIterations: ctx.loopMaxIterations,
+    loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   };
-  const input: Record<string, string> = {};
+  const input: Record<string, unknown> = {};
   if (step.inputs) {
     for (const [key, template] of Object.entries(step.inputs)) {
-      input[key] = expandTemplateVariables(template, templateCtx);
+      // Typed delivery (Option A): a whole-value reference arrives typed;
+      // an embedded reference arrives as a JIT-serialized string.
+      input[key] = resolveCodeInput(template, templateCtx);
     }
   }
 
@@ -179,7 +175,7 @@ export async function executeCodeStep(
   // ── Validate and coerce outputs ───────────────────────────────────────────
   const declaredNames = (step.outputs ?? []).map((o) => o.name);
   const returned = rawReturn as Record<string, unknown>;
-  const typedOutputs: Record<string, string> = {};
+  const typedOutputs: Record<string, unknown> = {};
 
   // code-decision: pull the reserved `branch` routing key out before data-output
   // validation. It is required, must be a string, and is never a declared data
@@ -219,20 +215,12 @@ export async function executeCodeStep(
     }
   }
 
-  // Coerce each declared output value
+  // Store each declared output with its real type. Structured returns
+  // (object/array) are allowed (change: flow-typed-io-and-run-state); a `bigint`
+  // is still narrowed to string since it is not JSON-serializable.
   for (const name of declaredNames) {
     const val = returned[name];
-    const t = typeof val;
-    if (t === "string") {
-      typedOutputs[name] = val as string;
-    } else if (t === "number" || t === "boolean" || t === "bigint") {
-      typedOutputs[name] = String(val);
-    } else {
-      const vkind = val === null ? "null" : Array.isArray(val) ? "array" : "object";
-      const coerceErr = makeSoftFailure(`Code node "${step.id}": output "${name}" must be a string or primitive value (got ${vkind}); use JSON.stringify() to serialize`);
-      options.onAgentComplete?.(step.id, step.id, coerceErr, lifecycle);
-      return coerceErr;
-    }
+    typedOutputs[name] = typeof val === "bigint" ? String(val) : val;
   }
 
   // ── Build AgentResult ─────────────────────────────────────────────────────
@@ -270,7 +258,7 @@ export async function executeCodeStep(
 
 async function executeWithTimeout(
   handler: Function,
-  input: Record<string, string>,
+  input: Record<string, unknown>,
   codeCtx: CodeNodeContext,
   step: CodeStep | CodeDecisionStep,
   nodeController: AbortController,

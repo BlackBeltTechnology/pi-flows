@@ -258,6 +258,10 @@ model: @planning
 tools: read, grep, find, ls, bash, skill_read
 inputs:
   - implementation_output
+outputs:
+  - name: gaps
+    type: array
+    description: List of gaps requiring fixes (empty when clean)
 card:
   type: verifier
   metric: verifier
@@ -282,21 +286,17 @@ Build the project and verify all acceptance criteria.
 Report any gaps found.
 ```
 
-**Gap reporting format:**
-```xml
-<result status="complete">
-  <artifacts>
-    <gaps count="2">
-      <gap id="G1" severity="critical" agent="backend-developer" criterion="...">
-        Description of what's missing.
-      </gap>
-      <gap id="G2" severity="major" agent="frontend-developer" criterion="...">
-        Description of what's missing.
-      </gap>
-    </gaps>
-  </artifacts>
-  <summary>Found 2 gaps requiring fixes.</summary>
-</result>
+**Gap reporting format:** declare a typed `gaps` output (an array) and emit it via `finish`. The structured value is stored under the result's `outputs` and read downstream as `${{result.verify.gaps}}`.
+
+```
+finish({
+  status: "complete",
+  summary: "Found 2 gaps requiring fixes.",
+  gaps: [
+    { id: "G1", severity: "critical", agent: "backend-developer", criterion: "...", detail: "Description of what's missing." },
+    { id: "G2", severity: "major",    agent: "frontend-developer", criterion: "...", detail: "Description of what's missing." }
+  ]
+})
 ```
 
 ---

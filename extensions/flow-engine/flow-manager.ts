@@ -73,12 +73,13 @@ export class FlowManager {
     flow: FlowConfig;
     flowName: string;
     task: string;
+    flowInput?: Record<string, unknown>;
   }): Promise<void> {
     if (this._activeFlow) {
       throw new Error("A flow is already running");
     }
 
-    const { flow, flowName, task } = options;
+    const { flow, flowName, task, flowInput } = options;
     const abortController = new AbortController();
     const { config, ioAdapter, observers } = this;
 
@@ -94,6 +95,7 @@ export class FlowManager {
     const promise = runFlowFn({
       flow,
       task,
+      flowInput,
       cwd: config.getProjectRoot(),
       authStorage: config.getAuthStorage(),
       modelRegistry: config.getModelRegistry(),

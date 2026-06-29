@@ -445,7 +445,7 @@ export function validateFlowContent(
   // references to unknown steps, unknown output fields, or steps that are not
   // ordered-before the referencing step. Replaces the prior input-only
   // unknown-step check and the warning-level output-field check.
-  const STANDARD_RESULT_FIELDS = new Set(["summary", "artifacts", "files", "status", "fullOutput"]);
+  const STANDARD_RESULT_FIELDS = new Set(["summary", "status", "fullOutput"]);
   const orderedBefore = computeOrderedBefore(flow);
 
   /** Declared output names for a referenced step, or null when not statically knowable. */
@@ -473,6 +473,20 @@ export function validateFlowContent(
       for (const [key, val] of Object.entries(stepInputs)) {
         if (typeof val === "string" && !val.startsWith("file://")) {
           templateStrings.push({ tpl: val, prop: `input.${key}` });
+        }
+        // G5: file-backed data is passed as a path the consumer reads at
+        // runtime (no more file:// injection). Flag a path-like input wired
+        // into an agent that lacks the `read` tool — it could not read the file.
+        if (/(_path|_file)$/.test(key) && step.stepType === "agent") {
+          const consumer = getDiscoveredAgents?.()?.get((step as AgentStep).agent);
+          if (consumer && Array.isArray(consumer.tools) && !consumer.tools.includes("read")) {
+            diagnostics.push({
+              line: stepPropLine(idx, step.id, `input.${key}`) || stepLine(idx, step.id),
+              severity: "warning",
+              message: `Input "${key}" looks like a file path, but agent "${consumer.name}" has no "read" tool and cannot read it at runtime`,
+              suggestion: `Add "read" to agent "${consumer.name}" tools (with an access.read glob covering the path), or pass the data as a declared typed output instead of a path`,
+            });
+          }
         }
       }
     }
@@ -517,8 +531,8 @@ export function validateFlowContent(
               severity: "error",
               message: `Reference result.${refStepId}.${refField} uses field "${refField}" which is not a declared output of "${refStepId}"`,
               suggestion: declared.size > 0
-                ? `Declared outputs: ${[...declared].join(", ")}. Standard fields: summary, artifacts, files, status`
-                : `"${refStepId}" declares no outputs. Use .summary, .artifacts, .files, or .status`,
+                ? `Declared outputs: ${[...declared].join(", ")}. Standard fields: summary, status, fullOutput`
+                : `"${refStepId}" declares no outputs. Use .summary, .status, or .fullOutput`,
             });
           }
         }

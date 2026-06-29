@@ -63,10 +63,8 @@ All faux-provider knowledge is confined to `faux-harness.ts`. Suites speak only 
 interface FinishArgs {
   status: "complete" | "error" | "blocked";
   summary: string;
-  files?: Array<{ path: string; action: "created" | "modified" | "read" }>;
-  artifacts?: string;
   branch?: string;            // decision branch — only under decisionBranches
-  [key: string]: unknown;     // declared typed outputs (string-valued)
+  [key: string]: unknown;     // declared typed outputs (any JSON type)
 }
 ```
 
@@ -157,7 +155,6 @@ describe("faux spawnAgent — finish happy path", () => {
         scriptFinish({
           status: "complete",
           summary: "did the thing",
-          files: [{ path: "a.txt", action: "created" }],
         }),
       ],
     });

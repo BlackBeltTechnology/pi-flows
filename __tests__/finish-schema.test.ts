@@ -27,10 +27,11 @@ function buildFinishSchema(agentOutputs?: AgentOutput[]): any {
 }
 
 describe("finish schema — base params", () => {
-  it("status, summary, files are required; artifacts optional", () => {
+  it("status and summary are required; files and artifacts are not in the schema", () => {
     const schema = buildFinishSchema();
-    expect(schema.required).toEqual(expect.arrayContaining(["status", "summary", "files"]));
-    expect(schema.required).not.toContain("artifacts");
+    expect(schema.required).toEqual(expect.arrayContaining(["status", "summary"]));
+    expect(schema.properties).not.toHaveProperty("files");
+    expect(schema.properties).not.toHaveProperty("artifacts");
   });
 });
 

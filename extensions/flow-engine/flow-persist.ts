@@ -85,6 +85,89 @@ export function findOrphanedRun(entries: unknown): OrphanedRun | null {
   return { flowRunId: latestId, maxSeq: globalMaxSeq, flowName: latest.flowName };
 }
 
+// ---------------------------------------------------------------------------
+// Run-state projection (read-only seam — change: flow-typed-io-and-run-state)
+//
+// Projects the persisted flow-event stream into per-run, per-node status for a
+// read-only inspection seam. Derives `running`/`finished` from the
+// agent-started/agent-complete records and run liveness from `flow_complete`.
+// Produced typed values are NOT in the event stream (they live in the
+// completed-run result JSON); the read tool merges them in for finished runs.
+// Total and read-only: never throws, never mutates.
+// ---------------------------------------------------------------------------
+
+export interface ProjectedNode {
+  stepId: string;
+  status: "pending" | "running" | "finished";
+  resultStatus?: string; // complete | error | blocked | skipped
+  summary?: string;
+}
+
+export interface ProjectedRun {
+  flowRunId: string;
+  flowName: string;
+  live: boolean; // true until a terminal flow_complete record
+  nodes: ProjectedNode[]; // started/finished in event order, then pending in declared order
+}
+
+export function projectRuns(entries: unknown): ProjectedRun[] {
+  if (!Array.isArray(entries)) return [];
+  const runs = new Map<string, ProjectedRun & { _order: number; _nodes: Map<string, ProjectedNode>; _declared: string[] }>();
+  let order = 0;
+  for (const entry of entries) {
+    const e = entry as { customType?: string; data?: FlowEventRecord };
+    if (!e || e.customType !== FLOW_EVENT_ENTRY_TYPE || !e.data) continue;
+    const rec = e.data;
+    const runId = rec.flowRunId;
+    if (!runId) continue;
+    let run = runs.get(runId);
+    if (!run) {
+      run = { flowRunId: runId, flowName: "", live: true, nodes: [], _order: order++, _nodes: new Map(), _declared: [] };
+      runs.set(runId, run);
+    }
+    const d = (rec.data ?? {}) as { flowName?: unknown; stepId?: unknown; steps?: unknown; result?: { status?: unknown; summary?: unknown } };
+    switch (rec.eventType) {
+      case "flow_started":
+        if (typeof d.flowName === "string") run.flowName = d.flowName;
+        if (Array.isArray(d.steps)) {
+          run._declared = d.steps.map((s) => (s as { id?: unknown })?.id).filter((x): x is string => typeof x === "string");
+        }
+        break;
+      case "flow_agent_started":
+        if (typeof d.stepId === "string") {
+          // (Re)entry: a loop re-runs a node, so reset it to running.
+          run._nodes.set(d.stepId, { stepId: d.stepId, status: "running" });
+        }
+        break;
+      case "flow_agent_complete":
+        if (typeof d.stepId === "string") {
+          const node: ProjectedNode = run._nodes.get(d.stepId) ?? { stepId: d.stepId, status: "finished" };
+          node.status = "finished";
+          const r = d.result;
+          if (r && typeof r === "object") {
+            if (typeof r.status === "string") node.resultStatus = r.status;
+            if (typeof r.summary === "string") node.summary = r.summary;
+          }
+          run._nodes.set(d.stepId, node);
+        }
+        break;
+      case "flow_complete":
+        run.live = false;
+        break;
+    }
+  }
+  return [...runs.values()]
+    .sort((a, b) => a._order - b._order)
+    .map((r) => {
+      const nodes = [...r._nodes.values()];
+      const seen = new Set(nodes.map((n) => n.stepId));
+      for (const id of r._declared) {
+        if (!seen.has(id)) nodes.push({ stepId: id, status: "pending" });
+      }
+      return { flowRunId: r.flowRunId, flowName: r.flowName, live: r.live, nodes };
+    });
+}
+
 // Records flow-run events into the pi session. Reusable: a follow-up change can
 // add architect channels to FLOW_EVENT_NAME_MAP and reuse the same persister.
 export class FlowEventPersister {

@@ -70,36 +70,77 @@ export function loadContextFiles(
   return { sections, missing, unreadable };
 }
 
-/**
- * Replace sentinel placeholders with actual file content.
- * Sentinels are unique strings like `__FILE_INPUT_name_timestamp__` that were inserted
- * during input resolution so that expandTemplateVariables would not parse the file content
- * (which may contain ${{}} syntax).
- */
-function replaceSentinels(text: string, sentinelMap: Record<string, string>): string {
-  for (const [sentinel, content] of Object.entries(sentinelMap)) {
-    text = text.replaceAll(sentinel, content);
-  }
-  return text;
-}
-
 // Template variable expansion
 export function expandTemplateVariables(template: string, ctx: TemplateContext): string {
   return template
     // Primary syntax: ${{...}}
     .replace(/\$\{\{task\}\}/g, ctx.task)
     .replace(/\$\{\{input\.([\w-]+)\}\}/g, (_, name) => ctx.inputs[name] ?? "")
+    .replace(/\$\{\{flow\.input\.([\w-]+)\}\}/g, (_, name) => serializeForText(ctx.flowInput?.[name]))
     .replace(/\$\{\{result\.([\w-]+)\.status\}\}/g, (_, id) => ctx.results[id]?.status ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.summary\}\}/g, (_, id) => ctx.results[id]?.summary ?? "")
-    .replace(/\$\{\{result\.([\w-]+)\.artifacts\}\}/g, (_, id) => ctx.results[id]?.artifacts ?? "")
-    .replace(/\$\{\{result\.([\w-]+)\.files\}\}/g, (_, id) => ctx.results[id]?.files ?? "")
-    // Catch-all for typed outputs: ${{result.STEP.anyField}}
-    .replace(/\$\{\{result\.([\w-]+)\.([\w]+)\}\}/g, (_, id, field) => ctx.results[id]?.[field] ?? "")
+    // Catch-all for typed outputs: ${{result.STEP.anyField}} resolves against the
+    // typed `outputs` map and is serialized at this text boundary (compact JSON
+    // for non-strings). Standard fields above are matched first.
+    .replace(/\$\{\{result\.([\w-]+)\.([\w]+)\}\}/g, (_, id, field) => serializeForText(ctx.results[id]?.outputs?.[field]))
     .replace(/\$\{\{result\.([\w-]+)\}\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
     // 1-based: an uninitialized counter (e.g. the first loop-body pass, before
     // the decision step has run) resolves to 1 so body and decision agree.
     .replace(/\$\{\{loop\.([\w-]+)\.iteration\}\}/g, (_, id) => String(ctx.loopCounters?.[id] ?? 1))
     .replace(/\$\{\{loop\.([\w-]+)\.max\}\}/g, (_, id) => String(ctx.loopMaxIterations?.[id] ?? 0));
+}
+
+/**
+ * Serialize a value for insertion at a TEXT boundary (agent prompt / template).
+ * Strings pass through; primitives via String(); objects/arrays via compact
+ * JSON. null/undefined -> empty string. (change: flow-typed-io-and-run-state)
+ */
+/**
+ * Coerce a declared agent output to its declared type. The finish schema has
+ * already validated the (string) form; a non-string value (model emitted a
+ * typed tool arg) passes through. (change: flow-typed-io-and-run-state)
+ */
+export function coerceDeclaredOutput(raw: unknown, type?: string): unknown {
+  if (typeof raw !== "string") return raw;
+  if (type === "number") { const n = Number(raw); return Number.isNaN(n) ? raw : n; }
+  if (type === "boolean") return raw === "true" ? true : raw === "false" ? false : raw;
+  return raw;
+}
+
+export function serializeForText(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") return String(v);
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+const WHOLE_RESULT_FIELD = /^\$\{\{result\.([\w-]+)\.([\w]+)\}\}$/;
+const WHOLE_RESULT_BARE = /^\$\{\{result\.([\w-]+)\}\}$/;
+const WHOLE_FLOW_INPUT = /^\$\{\{flow\.input\.([\w-]+)\}\}$/;
+
+/**
+ * Resolve a code-node input value (Option A / typed delivery). When the input
+ * is EXACTLY a single result reference, return the TYPED value unchanged; a
+ * standard string field returns its string; a reference embedded in other text
+ * returns the interpolated string. (change: flow-typed-io-and-run-state)
+ */
+export function resolveCodeInput(template: string, ctx: TemplateContext): unknown {
+  const m = template.match(WHOLE_RESULT_FIELD);
+  if (m) {
+    const r = ctx.results[m[1]];
+    if (!r) return "";
+    switch (m[2]) {
+      case "status": return r.status;
+      case "summary": return r.summary;
+      case "fullOutput": return r.fullOutput;
+      default: return r.outputs?.[m[2]] ?? "";
+    }
+  }
+  const b = template.match(WHOLE_RESULT_BARE);
+  if (b) return ctx.results[b[1]]?.fullOutput ?? "";
+  const fi = template.match(WHOLE_FLOW_INPUT);
+  if (fi) return ctx.flowInput?.[fi[1]] ?? "";
+  return expandTemplateVariables(template, ctx);
 }
 
 // Tool factory map: agent tool name -> SDK tool factory
@@ -119,8 +160,6 @@ export interface SpawnOptions {
   templateContext: TemplateContext;
   skillContents?: Map<string, string>;
   preambleSections?: string[];
-  /** File inputs (file:// resolved) — injected AFTER template expansion to prevent content from being parsed */
-  fileInputs?: Record<string, string>;
   /** Extension API handle — used by `resolveModel` to emit `model:resolve`
    *  and fall back to `pi.modelRegistry`. */
   pi: ExtensionAPI;
@@ -254,10 +293,6 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     systemPrompt = `## Context\n\n${preamble}\n\n` + systemPrompt;
   }
 
-  // Replace file input sentinels with actual content AFTER template expansion
-  if (options.fileInputs) {
-    systemPrompt = replaceSentinels(systemPrompt, options.fileInputs);
-  }
 
   // Resolve Model object from modelId
   // modelId may be "provider/model-id" or just "model-id"
@@ -581,11 +616,6 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Build user message
   let userMessage = `Task: ${expandTemplateVariables(task, templateContext)}`;
 
-  // Replace file input sentinels in user message AFTER template expansion
-  if (options.fileInputs) {
-    userMessage = replaceSentinels(userMessage, options.fileInputs);
-  }
-
   // Execute prompt with a CAPPED no-finish reminder (not an unbounded nag).
   // The guard's agent_end → followUp retry doesn't work in-process because
   // Agent.emit() doesn't await async listeners, so we remind here explicitly.
@@ -606,9 +636,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
         `You did not call the \`${finishToolName}\` tool. You MUST call \`${finishToolName}\` to submit your result.\n\n` +
         "Call it now with:\n" +
         "- status: \"complete\", \"error\", or \"blocked\"\n" +
-        "- summary: brief description of what you did\n" +
-        "- files: array of { path, action } for files you touched\n" +
-        "- artifacts: (optional) any structured data",
+        "- summary: brief description of what you did",
         { expandPromptTemplates: false }
       );
     }
@@ -684,12 +712,15 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     : parseResult(lastAssistantText);
 
   // Extract typed outputs from finishParams based on agent's declared outputs
-  const typedOutputs: Record<string, string> = {};
+  const typedOutputs: Record<string, unknown> = {};
   if (finishParams && agent.outputs) {
     for (const output of agent.outputs) {
-      if (finishParams[output.name] !== undefined) {
-        typedOutputs[output.name] = String(finishParams[output.name]);
-      }
+      const raw = finishParams[output.name];
+      if (raw === undefined) continue;
+      // Store the declared output in its real type. The finish schema validates
+      // the string form (incl. numeric/boolean patterns); here we coerce that
+      // validated string to the declared type so downstream gets a real value.
+      typedOutputs[output.name] = coerceDeclaredOutput(raw, (output as { type?: string }).type);
     }
   }
 

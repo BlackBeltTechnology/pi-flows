@@ -148,7 +148,7 @@ See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md`.
 ## Node kind on agent lifecycle events
 
 `NodeKind` first-class discriminator. Carried end-to-end on flow node lifecycle events.
-`NodeKind` = `"agent" | "fork" | "agent-decision" | "code" | "code-decision" | "flow-ref"`. Defined extensions/flow-engine/types.ts.
+`NodeKind` = `"agent" | "fork" | "agent-decision" | "code" | "code-decision"`. Defined extensions/flow-engine/types.ts.
 `NodeKind` is node TYPE. Distinct from dashboard timeline-entry `kind` (`text | thinking | tool | error`). Timeline-entry `kind` describes entries inside card.
 
 `EventEmitObserver` puts `nodeKind` on `flow:agent-started` + `flow:agent-complete` payloads for ALL node types.

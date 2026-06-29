@@ -21,6 +21,9 @@ description: Research the codebase then implement changes
 max_concurrent: 2
 task_required: true
 task_prompt: "What feature should I research and implement?"
+inputs:
+  ref:   { type: string, required: true }
+  count: { type: number }
 ---
 ```
 
@@ -31,6 +34,19 @@ task_prompt: "What feature should I research and implement?"
 | `max_concurrent` | | Maximum agents running in parallel (default: `4`) |
 | `task_required` | | When `true`, prompts the user for a task if none was provided |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
+| `inputs` | | Optional typed input schema (see [Typed Flow Inputs](#typed-flow-inputs)) |
+
+### Typed Flow Inputs
+
+Optional `inputs:` schema — mapping name → `{ type, required? }`. `type` is one of `string`, `number`, `boolean`, `object`, `array` (omitted/unknown → validation error); `required: true` fails the run start when absent.
+
+```yaml
+inputs:
+  ref:   { type: string, required: true }
+  count: { type: number }
+```
+
+A run accepts a structured `inputs` object alongside `task` across every path (slash command, `flow:run` event's `inputs` field, programmatic run API). Provided inputs validated against schema — missing `required` or type mismatch fails the run start. A flow with no `inputs:` schema is still startable with only `task`. Referenced as `${{flow.input.<name>}}`; same typed-delivery rules as result outputs (typed to code handlers as a whole value, JIT-serialized to compact JSON in text).
 
 > **Command name = file path, not `name:` field.** Slash command derived from file path:
 >
@@ -45,7 +61,7 @@ task_prompt: "What feature should I research and implement?"
 
 Steps form DAG based on `blockedBy` declarations. pi-flows schedules steps with no pending dependencies in parallel, respecting `max_concurrent`.
 
-### Agent Step (default)
+### Agent Step
 
 Dispatches named agent with task. Most common step type.
 
@@ -212,7 +228,7 @@ export default async function (
 
 **Type-safe scaffold:** `/flows:generate` emits `type Branch = "auto_approve" | "needs_human" | "park";` per `code-decision`. Types return `Promise<{ branch: Branch } & Output>`. Off-map label → compile-time error. Scaffolds write `.ts.default`. Never overwrite implemented handler.
 
-**Migrating from `conditional`:** Replace `type: conditional` with `type: code-decision`. Read `check: <stepId>.<key>` value as handler input. Return `{ branch: "present" }` or `{ branch: "absent" }`. Set `branches: { present: <present-target>, absent: <absent-target> }`. Standard fields (`artifacts`, `summary`, `files`, `status`) available as `${{result.<stepId>.<field>}}` inputs.
+**Migrating from `conditional`:** Replace `type: conditional` with `type: code-decision`. Read `check: <stepId>.<key>` value as handler input. Return `{ branch: "present" }` or `{ branch: "absent" }`. Set `branches: { present: <present-target>, absent: <absent-target> }`. Standard fields (`summary`, `status`, `fullOutput`) available as `${{result.<stepId>.<field>}}` inputs.
 
 ---
 
@@ -294,36 +310,7 @@ Agent calls `finish(branch="rework")` to loop back to `developer`. Calls `finish
 
 ### Routing Node Semantics
 
-Routing node (`fork`, `agent-decision`, `code-decision`, `flow-ref`) always executes. Own outputs always populated. Loop node outputs reflect LAST iteration. Forward branches not taken get synthetic `skipped` results. Unresolved `${{result.<id>.<field>}}` expands to empty string. Never `undefined`.
-
----
-
-### Flow Reference Step
-
-Delegate execution to another flow file. Sub-flow runs to completion before continuing.
-
-**Syntax:**
-
-```yaml
-  - id: run-tests
-    type: flow-ref
-    path: .pi/flows/flows/test-suite.yaml
-    on_complete: deploy-step
-    on_error: fix-step
-```
-
-**Field reference:**
-
-| Field | Description |
-|-------|-------------|
-| `path` | **Required.** Path to the sub-flow `.yaml` file |
-| `on_complete` | Step ID to route to after sub-flow completes |
-| `on_error` | Step ID to route to if sub-flow errors |
-
-**Result propagation:**
-- Sub-flow agent results flat-merged into parent's result context
-- flow-ref step ID stores last agent's result
-- Downstream steps can reference sub-flow agents: `${{result.sub-agent-id.summary}}`
+Routing node (`fork`, `agent-decision`, `code-decision`) always executes. Own outputs always populated. Loop node outputs reflect LAST iteration. Forward branches not taken get synthetic `skipped` results. Unresolved `${{result.<id>.<field>}}` expands to empty string. Never `undefined`.
 
 ---
 
@@ -337,7 +324,7 @@ Execute TypeScript handler function in-process. No agent or LLM dispatch.
   - id: validate
     type: code
     inputs:
-      data: "${{result.fetcher.artifacts}}"
+      data: "${{result.fetcher.record}}"
     outputs:
       - name: is_valid
       - name: error_message
@@ -352,7 +339,7 @@ Execute TypeScript handler function in-process. No agent or LLM dispatch.
 |-------|:--------:|-------------|
 | `id` | ✓ | Unique step identifier. Filesystem-safe. Becomes handler filename. |
 | `type` | ✓ | Must be `code`. |
-| `inputs` | | Map of name → `${{...}}` template expression. Each value expanded to string at runtime. Unresolved → `""`. Never `undefined`. |
+| `inputs` | | Map of name → `${{...}}` template expression. A **whole-value** reference (`${{result.X.name}}` / `${{flow.input.name}}`, no surrounding text) arrives unchanged in its real JSON type; an embedded reference arrives as the interpolated (JIT-serialized) string. Unresolved → `""`. Never `undefined`. |
 | `outputs` | | List of `{ name }` objects. Names unique, valid JS identifiers. Optional — omit for side-effect-only steps. |
 | `target` | | Override handler file path. Steps with `target` get no generated scaffold. |
 | `blockedBy` | | Array of step IDs that must complete before this step runs. |
@@ -374,13 +361,13 @@ Copy `.ts.default` → remove `.default` suffix → implement. Scaffold always r
 ```typescript
 import type { CodeNodeContext } from "@blackbelt-technology/pi-flows";
 
-interface Input  { data: string }                                    // one key per declared input
-interface Output { is_valid: string; error_message: string }         // one key per declared output
+interface Input  { data: Record<string, unknown> }                   // whole-value ref → real JSON type
+interface Output { is_valid: boolean; error_message: string }        // one key per declared output (any JSON type)
 
 export default async function (input: Input, ctx: CodeNodeContext): Promise<Output> {
   ctx.logger("validating...");
   ctx.setSummary("Validation complete");
-  return { is_valid: "true", error_message: "" };
+  return { is_valid: true, error_message: "" };
 }
 ```
 
@@ -398,11 +385,9 @@ export default async function (input: Input, ctx: CodeNodeContext): Promise<Outp
 
 **Return rules:**
 
-- Return exactly declared outputs. All keys present. No extras.
+- Return exactly declared outputs. All keys present. No extras (missing/extra key → soft failure).
 - No `outputs:` declared → return `{}`.
-- `string` values: passthrough verbatim.
-- `number` / `boolean` / `bigint` → coerced via `String()`.
-- `object` / `array` / `null` → soft failure naming the offending key.
+- A handler may return **any JSON-compatible value** (`string`/`number`/`boolean`/`object`/`array`/`null`) per declared output. Stored in its real type under the result's `outputs` — no string coercion; `object`/`array`/`null` is **no longer** a soft failure.
 
 **Failure modes:**
 
@@ -410,7 +395,6 @@ export default async function (input: Input, ctx: CodeNodeContext): Promise<Outp
 |-------|---------|
 | Plain `throw` (any `Error`) | `soft` — routes `on_error`, else hard-fails flow |
 | Contract violation (wrong/missing output keys) | `soft` |
-| Coercion failure (`object`/`array`/`null` value) | `soft` |
 | Missing handler file | `soft` |
 | Timeout expired | `soft` |
 | `throw new FlowHardError(msg)` | `hard` — stops flow regardless of `on_error` |
@@ -423,7 +407,7 @@ If real handler's `Input`/`Output` interfaces mismatch YAML `inputs`/`outputs` �
 
 **Presence routing with code-decision:**
 
-`code-decision` handler reads `${{result.stepId.outputName}}` as input. Routes on presence. Typed output resolves from merged result map. Falls back to `fullOutput` only when key absent. Standard fields (`summary`, `artifacts`, `files`, `status`) resolved as normal.
+`code-decision` handler reads `${{result.stepId.outputName}}` as input. Routes on presence. Typed output resolves from merged result map. Falls back to `fullOutput` only when key absent. Standard fields (`summary`, `status`, `fullOutput`) resolved as normal.
 
 ---
 
@@ -495,9 +479,8 @@ Template variables: placeholders in `task`, `inputs`, `question` fields. Expande
 | `${{result.STEP-ID}}` | Full raw output from a completed step |
 | `${{result.STEP-ID.summary}}` | Summary from `finish(summary:)` |
 | `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |
-| `${{result.STEP-ID.artifacts}}` | The `<artifacts>` XML block from `finish` |
-| `${{result.STEP-ID.files}}` | Comma-separated file paths created/modified |
-| `${{result.STEP-ID.<outputName>}}` | A typed output from the agent's `outputs:` declaration |
+| `${{result.STEP-ID.<outputName>}}` | A declared typed output (agent or code step), held under the result's `outputs` in its real JSON type. A produced file path is conveyed as a `*_path` output. |
+| `${{flow.input.NAME}}` | A declared flow input (see [Typed Flow Inputs](#typed-flow-inputs)) |
 | `${{loop.STEP-ID.iteration}}` | Current iteration (1-based) in a loop step |
 | `${{loop.STEP-ID.max}}` | Maximum iterations configured for a loop |
 
@@ -515,7 +498,7 @@ Three rules:
 
 **1. Step must exist.** Reference unknown step id -> hard validation error. Blocks flow.
 
-**2. `.field` must resolve.** Agent and code steps: `.field` must be declared output (agent `outputs:` or code-step `outputs:`) OR standard field. Standard fields always resolve: `summary`, `status`, `artifacts`, `files`, `fullOutput`. `.field` neither declared output nor standard -> hard validation error.
+**2. `.field` must resolve.** Agent and code steps: `.field` must be declared output (agent `outputs:` or code-step `outputs:`) OR standard field. Standard fields always resolve: `summary`, `status`, `fullOutput`. `.field` neither declared output nor standard -> hard validation error.
 
 **3. Referenced step must be ordered first.** `${{result.X}}` valid only if X guaranteed to complete before referencing step. Guarantee holds when X is transitive `blockedBy` ancestor OR X routes into referencing step via `on_complete` / `on_error` / branch / loop edge chain. Neither path -> hard validation error.
 
@@ -531,10 +514,6 @@ flowchart TD
   E3 -->|no| ERR
   E3 -->|yes| OK[Reference valid]
 ```
-
-### `flow-ref` exception
-
-Sub-flow step ids not statically known to parent. `flow-ref` step ordered before referencing step -> references to sub-flow ids NOT flagged as unknown. `flow-ref` is ordering guarantee. Field/existence checks skipped for those ids.
 
 ### Loop iteration 1-based
 
@@ -563,7 +542,7 @@ inputs:
     blockedBy: [researcher]
     inputs:
       research_output: "${{result.researcher.summary}}"
-      ticket_context: "${{result.ticket-fetch.artifacts}}"
+      ticket_context: "${{result.ticket-fetch.ticket}}"
 ```
 
 ### Reference in the system prompt
@@ -578,32 +557,24 @@ ${{input.ticket_context}}
 
 If `inputs:` not declared in agent's frontmatter, input values substituted but system prompt has no `${{input.NAME}}` to expand them into.
 
-### File Content Injection (`file://` prefix)
+### Passing File-Backed Data
 
-When agent needs **content** of file (not just path), use `file://` prefix:
-
-```yaml
-  - id: validate
-    agent: validator
-    blockedBy: [researcher]
-    inputs:
-      report: file://research/findings.md
-```
-
-**Dynamic path from previous step:**
+Engine does **not** read a file and inject its content — the `file://` input prefix is no longer a special form. Pass the file's **path** (typically a `*_path` output); the consumer reads it just-in-time via its `read` tool (agent, subject to `access.read`) or the filesystem (code node):
 
 ```yaml
   - id: summarize
-    agent: summarizer
+    agent: summarizer        # must declare the `read` tool
     blockedBy: [writer]
     inputs:
-      report: file://${{result.writer.files}}
+      report_path: ${{result.writer.report_path}}
 ```
 
+The prompt instructs the agent to read: `Read the report at ${{input.report_path}}.`
+
 **Rules:**
-- Producing step **MUST** be in `blockedBy` so file exists at dispatch time
-- File content injected **verbatim** (never template-expanded)
-- If file doesn't exist, step fails with clear error
+- Producing step **MUST** be in `blockedBy` so the file exists when the consumer reads it.
+- Consuming agent needs the `read` tool + matching `access.read` glob. Flow validation **warns** when a `*_path`/`*_file` input is wired into an agent lacking `read`.
+- For small, always-needed files, `context_files` (read at spawn) remains available.
 
 ---
 

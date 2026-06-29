@@ -109,12 +109,23 @@ export interface AccessRules {
 
 // ---- Flow configuration (parsed from .yaml flow files) --------------------
 
+/**
+ * A declared flow-level input (change: flow-typed-io-and-run-state). A run may
+ * be started with a structured object validated against this schema; values are
+ * referenceable as `${{flow.input.<name>}}` and delivered typed to code nodes.
+ */
+export interface FlowInputDecl {
+  type: "string" | "number" | "boolean" | "object" | "array";
+  required?: boolean;
+}
+
 export interface FlowConfig {
   name: string;
   description: string;
   max_concurrent?: number;
   task_required?: boolean; // Prompt user for task if no command args provided
   task_prompt?: string; // Custom prompt text (default: "Describe what you want <name> to do:")
+  inputs?: Record<string, FlowInputDecl>; // Optional typed flow-input schema
   steps: FlowStep[];
   source: string; // File path where this flow was discovered
 }
@@ -218,7 +229,7 @@ export interface AgentResult {
   duration: number; // ms
   tokens: { input: number; output: number };
   finishParams?: Record<string, any>; // Raw finish tool call args (if captured)
-  typedOutputs?: Record<string, string>; // Extracted typed output values from declared agent outputs
+  typedOutputs?: Record<string, unknown>; // Extracted typed output values from declared agent/code outputs (real JSON types)
   /**
    * True when the step did not complete because the run was cancelled
    * mid-batch via AbortSignal. See change: fix-pi-flows-end-to-end (Group 3).
@@ -257,9 +268,25 @@ export interface ResultFile {
 
 // ---- Enriched flow result (returned by runFlow) ---------------------------
 
+/**
+ * A step's stored result. `status`/`summary`/`fullOutput` are string meta;
+ * `outputs` is the typed value channel (declared outputs in their real JSON
+ * types) and the ONLY channel referenced for values. Template
+ * `${{result.X.<name>}}` resolves against `outputs`; a whole-value code-node
+ * input receives the typed value (change: flow-typed-io-and-run-state). The
+ * legacy `artifacts`/`files` fields are removed; a produced path is a declared
+ * `*_path` output.
+ */
+export interface StepResultValue {
+  status: string;
+  summary: string;
+  fullOutput: string;
+  outputs: Record<string, unknown>;
+}
+
 export interface FlowResult {
   lastResult: AgentResult;
-  results: Record<string, { fullOutput: string; status: string; summary: string; artifacts: string; files: string; [key: string]: string }>;
+  results: Record<string, StepResultValue>;
   forks: Record<string, { answer: string; notes?: string }>;
   flowName: string;
   stepCount: number;
@@ -272,19 +299,11 @@ export interface FlowResult {
 export interface TemplateContext {
   task: string;
   inputs: Record<string, string>;
-  results: Record<
-    string,
-    {
-      fullOutput: string;
-      status: string;
-      summary: string;
-      artifacts: string;
-      files: string;
-      [key: string]: string; // Typed outputs from agent declarations
-    }
-  >;
+  results: Record<string, StepResultValue>;
   loopCounters?: Record<string, number>;
   loopMaxIterations?: Record<string, number>;
+  /** Typed flow-level inputs, referenceable as `${{flow.input.<name>}}`. */
+  flowInput?: Record<string, unknown>;
 }
 
 // ---- Persisted flow-event record ------------------------------------------
@@ -323,7 +342,7 @@ export interface CodeNodeContext {
  * Handler is the default export of a .ts module.
  * Input keys are always strings (template-expanded); output must match declared outputs.
  */
-export type CodeNodeHandler<I = Record<string, string>, O = Record<string, string>> = (
+export type CodeNodeHandler<I = Record<string, unknown>, O = Record<string, unknown>> = (
   input: I,
   ctx: CodeNodeContext,
 ) => Promise<O>;

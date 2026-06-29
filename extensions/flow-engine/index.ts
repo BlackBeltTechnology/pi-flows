@@ -445,18 +445,18 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Programmatic flow execution ──
 
-  async function runFlowByName(flowName: string) {
+  async function runFlowByName(flowName: string, opts?: { task?: string; flowInput?: Record<string, unknown> }) {
     if (flowManager.isRunning) return;
     const flowConfig = flows.get(flowName);
     if (!flowConfig) return;
     const gateMsg = checkGate(flowName);
     if (gateMsg) return;
-    await flowManager.start({ flow: flowConfig, flowName, task: "" });
+    await flowManager.start({ flow: flowConfig, flowName, task: opts?.task ?? "", flowInput: opts?.flowInput });
   }
 
   pi.events?.on("flow:run", async (data: any) => {
     if (flowManager.isRunning) return;
-    await runFlowByName(data?.flowName);
+    await runFlowByName(data?.flowName, { task: data?.task, flowInput: data?.inputs });
   });
 
   pi.events.on("flow:rediscover", () => {

@@ -251,16 +251,17 @@ steps:
     agent: fixer
     blockedBy: [verify]
     inputs:
-      issues: "${{result.verify.artifacts}}"
+      issues: "${{result.verify.gaps}}"
 
   - id: decision
-    type: agent-loop-decision
+    type: agent-decision
     agent: flow-decision
     task: >
-      Issues: ${{result.verify.artifacts}}
+      Issues: ${{result.verify.gaps}}
       Loop if issues remain, exit if clean.
-    loop_target: fix
-    exit_target: done
+    branches:
+      rework: fix
+      done: done
     max_iterations: 3
 
   - id: done

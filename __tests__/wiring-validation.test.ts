@@ -28,6 +28,21 @@ function catalog(...agents: AgentConfig[]): () => Map<string, AgentConfig> {
 const errs = (yaml: string, cat?: () => Map<string, AgentConfig>) =>
   validateFlowContent(yaml, cat).diagnostics.filter((d) => d.severity === "error");
 
+const warns = (yaml: string, cat?: () => Map<string, AgentConfig>) =>
+  validateFlowContent(yaml, cat).diagnostics.filter((d) => d.severity === "warning");
+
+function agentNoRead(name: string, outputs?: string[]): AgentConfig {
+  return {
+    name,
+    description: `${name} agent`,
+    model: "@coding",
+    tools: ["bash"],
+    systemPrompt: "x",
+    source: `${name}.md`,
+    ...(outputs ? { outputs: outputs.map((n) => ({ name: n })) } : {}),
+  };
+}
+
 describe("unknown reference rejection (§2)", () => {
   it("rejects a reference to an unknown step ID", () => {
     const yaml = `name: f
@@ -86,7 +101,7 @@ steps:
     type: agent
     agent: my-agent
     blockedBy: [extract]
-    task: "$\{{result.extract.summary}} $\{{result.extract.status}} $\{{result.extract.artifacts}} $\{{result.extract.files}}"
+    task: "$\{{result.extract.summary}} $\{{result.extract.status}} $\{{result.extract.fullOutput}}"
 `;
     expect(errs(yaml, catalog(agent("my-agent"), agent("extractor")))).toHaveLength(0);
   });
@@ -162,5 +177,38 @@ steps:
     task: "use $\{{result.a.summary}}"
 `;
     expect(errs(yaml, catalog(agent("my-agent")))).toHaveLength(0);
+  });
+});
+
+describe("path input without read access (G5)", () => {
+  const pathFlow = (reader: AgentConfig) => ({
+    yaml: `name: f
+description: d
+steps:
+  - id: a
+    type: agent
+    agent: writer
+    outputs:
+      - name: report_path
+  - id: b
+    type: agent
+    agent: ${reader.name}
+    blockedBy: [a]
+    inputs:
+      report_path: "$\{{result.a.report_path}}"
+`,
+    cat: catalog(agent("writer", ["report_path"]), reader),
+  });
+
+  it("warns when a *_path input is wired into an agent lacking the read tool", () => {
+    const { yaml, cat } = pathFlow(agentNoRead("reader"));
+    const w = warns(yaml, cat);
+    expect(w.some((d) => /no "read" tool/i.test(d.message))).toBe(true);
+  });
+
+  it("does not warn when the consuming agent has the read tool", () => {
+    const { yaml, cat } = pathFlow(agent("reader"));
+    const w = warns(yaml, cat);
+    expect(w.some((d) => /no "read" tool/i.test(d.message))).toBe(false);
   });
 });

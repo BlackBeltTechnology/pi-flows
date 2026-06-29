@@ -98,13 +98,13 @@ describe("faux runFlow — kitchen-sink integration (pass path with verify loop)
     });
 
     // Fan-in input wiring: research-a received intake.topic.
-    expect(result.results.intake.topic).toBe("WIDGETS");
+    expect(result.results.intake.outputs.topic).toBe("WIDGETS");
     expect(result.results["research-a"].summary).toContain("WIDGETS");
     expect(result.results["research-b"].status).toBe("complete");
 
     // Code node typed outputs flow downstream.
-    expect(result.results.merge.count).toBe("2");
-    expect(result.results.merge.joined).toContain("WIDGETS");
+    expect(result.results.merge.outputs.count).toBe("2");
+    expect(result.results.merge.outputs.joined as string).toContain("WIDGETS");
 
     // code-decision routed PASS → build ran, remediate skipped (branch exclusivity).
     expect(result.results.build.status).toBe("complete");
@@ -161,7 +161,7 @@ describe("faux runFlow — code-decision FAIL branch exclusivity", () => {
       codeHandlers: { merge: failMerge, gate: GATE_HANDLER },
     });
 
-    expect(result.results.merge.count).toBe("1");
+    expect(result.results.merge.outputs.count).toBe("1");
     expect(result.results.remediate.summary).toBe("remediated");
     expect(result.results.build.status).toBe("skipped");
   });

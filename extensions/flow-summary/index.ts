@@ -44,10 +44,11 @@ export function computeStats(fr: FlowResult): { agentCount: number; duration: st
   const perAgent: { name: string; status: string; fileCount: number }[] = [];
 
   for (const [name, r] of entries) {
-    const files = r.files ? r.files.split(", ").filter(Boolean).length : 0;
-    totalFiles += files;
-    perAgent.push({ name, status: r.status, fileCount: files });
+    // File tracking was removed from the result contract (typed-io change);
+    // fileCount is retained at 0 for render/back-compat.
+    perAgent.push({ name, status: r.status, fileCount: 0 });
   }
+  void totalFiles;
 
   return {
     agentCount: entries.length,
@@ -103,25 +104,17 @@ export function activate(pi: ExtensionAPI) {
       // Build markdown summary from per-agent finish data
       const summaryMdLines: string[] = [];
       summaryMdLines.push(`## Flow: ${fr.flowName}`);
-      summaryMdLines.push(`Duration: ${stats.duration} | Agents: ${stats.agentCount} | Files: ${stats.fileCount}`);
+      summaryMdLines.push(`Duration: ${stats.duration} | Agents: ${stats.agentCount}`);
       summaryMdLines.push("");
       summaryMdLines.push("### Results");
       for (const [name, r] of Object.entries(fr.results)) {
         const icon = r.status === "complete" ? "✓"
           : r.status === "skipped" ? "✓"
           : (r.status === "blocked" || r.status === "error") ? "⚠" : "✗";
-        const fileCount = r.files ? r.files.split(", ").filter(Boolean).length : 0;
-        const detail = fileCount > 0 ? ` (${fileCount} files)` : "";
         const summary = r.summary ? `: ${r.summary}` : "";
-        summaryMdLines.push(`${icon} ${name}${detail}${summary}`);
+        summaryMdLines.push(`${icon} ${name}${summary}`);
       }
       summaryMdLines.push("");
-      summaryMdLines.push("### Files Modified");
-      for (const [name, r] of Object.entries(fr.results)) {
-        if (r.files) {
-          summaryMdLines.push(`- **${name}**: ${r.files}`);
-        }
-      }
 
       writeFileSync(summaryPath, summaryMdLines.join("\n"), "utf-8");
       writeFileSync(jsonPath, JSON.stringify(fr, null, 2), "utf-8");

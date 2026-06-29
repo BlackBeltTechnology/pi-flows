@@ -35,7 +35,7 @@ function storeResult(results: Record<string, any>, stepId: string, result: Agent
     summary: result.result.summary,
     artifacts: result.result.artifacts,
     files: result.result.files.map((f) => f.path).join(", "),
-    ...(result.typedOutputs ?? {}),
+    outputs: result.typedOutputs ?? {},
   };
 }
 

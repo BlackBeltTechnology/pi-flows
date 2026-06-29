@@ -19,6 +19,8 @@ pi-flows registers a set of tools that are exposed to agents running inside flow
 >
 > **Toggle it live:** run `/flows:edit-mode <on|off>` (or have a dashboard emit the inbound `flow:set-edit-mode { enabled: boolean }` event). This writes `flows.editFlow` to the project `.pi/settings.json`, reconciles `flow_agents`/`flow_write` to match, and (command path only) reloads so the change is active in the current session. The `manage-flows` skill's prompt visibility is coupled to the same toggle — edit-mode on makes the skill visible (frontmatter `disable-model-invocation: false`), off hides it from the prompt. The event path updates tools immediately but applies skill visibility on the next session start. See [flow-authoring.md](flow-authoring.md) and [events-api.md](events-api.md).
 
+The main session also exposes `flow_results` (registered by the flow-context sub-extension) for read-only inspection of flow results and run state — see below.
+
 External packages can add tools to subagent sessions via `flow:register-tool`. See [events-api.md](events-api.md#flowregister-tool).
 
 ---
@@ -106,7 +108,30 @@ Run a named agent as a subprocess. This is the internal tool that powers agent s
 }
 ```
 
-**Returns:** The agent's `finish` call result, including `status`, `summary`, `files`, and typed outputs.
+**Returns:** The agent's `finish` call result: `status`, `summary`, and the declared typed outputs (stored under `outputs` in their real JSON types).
+
+---
+
+### `flow_results`
+
+Read-only inspection of flow execution results and live/historical run state. The tool can only read — it has no operation that resumes, re-routes, or otherwise mutates a run.
+
+**Available in:** Main session.
+
+**Parameters:**
+```typescript
+{
+  action: "list" | "summary" | "agent" | "runs";
+  flow?:  string;   // required for "summary" and "agent"; optional for "runs"
+  agent?: string;   // required for "agent"
+}
+```
+
+**Actions:**
+- `list` — list the available stored flow results.
+- `summary` — per-agent summaries for a flow's run. Each entry shows the step's `status`, `summary`, and `Outputs:` (the declared output names it produced).
+- `agent` — full detail for one agent/step within a flow.
+- `runs` — the read-only run-state seam. With no `flow`, lists this session's runs (live and finished) with per-node counts. With a `flow` name, details that flow's latest run as per-node state — each node reported as `pending`/`running`/`finished` together with its result status and summary — merging the produced `outputs` from the completed-run result JSON. Serves both live and historical runs.
 
 ---
 
@@ -246,16 +271,14 @@ Submit the agent's final structured result. **Every agent must call `finish` as 
 {
   status:    "complete" | "error" | "blocked";
   summary:   string;    // Brief summary of what was accomplished or what went wrong
-  files:     Array<{ path: string; action: "created" | "modified" | "read" }>;
-  artifacts?: string;   // Optional structured data (XML or other)
-  branch?:   string;    // Required for agent-decision and agent-loop-decision steps
-  // ...typed output fields declared in agent's outputs frontmatter
+  branch?:   string;    // Required for agent-decision steps
+  // ...typed output fields declared in agent's outputs frontmatter (any JSON type)
 }
 ```
 
-**Branch routing:** For `agent-decision` and `agent-loop-decision` steps, the guard injects a `branch` parameter whose allowed values are the defined branch names. The agent's `branch` choice is used by the engine to route to the next step.
+**Branch routing:** For `agent-decision` steps, the guard injects a `branch` parameter whose allowed values are the defined branch names. The agent's `branch` choice is used by the engine to route to the next step.
 
-**Typed outputs:** If the agent declares `outputs:` in its frontmatter, those names are added as optional string parameters on `finish`. Downstream steps can read them via `${{result.STEP_ID.outputName}}`.
+**Typed outputs:** If the agent declares `outputs:` in its frontmatter, those names are added as parameters on `finish`, typed to their declared type — `string` by default, or `number`/`boolean`/`object`/`array` when declared non-string. The `finish` schema validates the emitted value against the declared type, and the engine stores it with that type under the result's `outputs`. Downstream steps read them via `${{result.STEP_ID.outputName}}`.
 
 **Post-finish blocking:** Once `finish` is called, the guard blocks any further tool calls. The engine extracts the result from the `finish` call parameters.
 

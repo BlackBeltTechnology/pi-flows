@@ -19,6 +19,8 @@ pi-flows registers tools exposed to agents running inside flow sessions. Tools d
 >
 > **Toggle live:** `/flows:edit-mode <on|off>` toggles this. Inbound event `flow:set-edit-mode { enabled: boolean }` does same. Writes `flows.editFlow` to project `.pi/settings.json`, reconciles `flow_agents`/`flow_write`. Command path reloads (live this session). Event path: tools immediate, skill visibility next session. `manage-flows` skill prompt visibility coupled to same toggle: on -> `disable-model-invocation`=false (visible), off -> hidden. See flow-authoring.md, events-api.md.
 
+The main session also exposes `flow_results` (registered by flow-context) for read-only inspection of flow results and run state — see below.
+
 External packages can add tools to subagent sessions via `flow:register-tool`. See [events-api.md](events-api.md#flowregister-tool).
 
 ---
@@ -106,7 +108,28 @@ Run named agent as subprocess. Internal tool powering agent steps in flows. Also
 }
 ```
 
-**Returns:** Agent's `finish` call result, including `status`, `summary`, `files`, typed outputs.
+**Returns:** Agent's `finish` call result: `status`, `summary`, declared typed outputs (stored under `outputs` in real JSON types).
+
+---
+
+### `flow_results`
+
+Read-only inspection of flow results and live/historical run state (registered by flow-context). Cannot mutate a run.
+
+**Available in:** Main session.
+
+```typescript
+{
+  action: "list" | "summary" | "agent" | "runs";
+  flow?:  string;   // required for "summary"/"agent"; optional for "runs"
+  agent?: string;   // required for "agent"
+}
+```
+
+- `list` — list stored flow results.
+- `summary` — per-agent summaries for a flow; each shows `status`, `summary`, `Outputs:` (declared output names).
+- `agent` — full detail for one agent/step in a flow.
+- `runs` — read-only run-state seam. No args: lists this session's runs (live + finished) with per-node counts. With `flow`: latest run's per-node state (`pending`/`running`/`finished` + result status/summary), merging produced `outputs` from the completed-run result JSON. Serves live + historical runs.
 
 ---
 
@@ -246,16 +269,14 @@ Submit agent's final structured result. **Every agent must call `finish` as last
 {
   status:    "complete" | "error" | "blocked";
   summary:   string;    // Brief summary of what was accomplished or what went wrong
-  files:     Array<{ path: string; action: "created" | "modified" | "read" }>;
-  artifacts?: string;   // Optional structured data (XML or other)
-  branch?:   string;    // Required for agent-decision and agent-loop-decision steps
-  // ...typed output fields declared in agent's outputs frontmatter
+  branch?:   string;    // Required for agent-decision steps
+  // ...typed output fields declared in agent's outputs frontmatter (any JSON type)
 }
 ```
 
-**Branch routing:** For `agent-decision` and `agent-loop-decision` steps, guard injects `branch` parameter whose allowed values are defined branch names. Agent's `branch` choice used by engine to route to next step.
+**Branch routing:** For `agent-decision` steps, guard injects `branch` parameter whose allowed values are defined branch names. Agent's `branch` choice used by engine to route to next step.
 
-**Typed outputs:** If agent declares `outputs:` in frontmatter, those names added as optional string parameters on `finish`. Downstream steps read via `${{result.STEP_ID.outputName}}`.
+**Typed outputs:** If agent declares `outputs:` in frontmatter, those names added as parameters on `finish`, typed to their declared type (`string` by default; `number`/`boolean`/`object`/`array` when non-string). The schema validates the emitted value; the engine stores it typed under the result's `outputs`. Downstream steps read via `${{result.STEP_ID.outputName}}`.
 
 **Post-finish blocking:** Once `finish` called, guard blocks any further tool calls. Engine extracts result from `finish` call parameters.
 

@@ -10,8 +10,8 @@ pi-flows exports its core types and functions from `pi-flows/extensions/flow-eng
 // Core engine: types, execution, discovery, parsing
 import type {
   AgentConfig, FlowConfig, FlowResult, AgentResult,
-  FlowStep, AgentStep, ForkStep, ConditionalStep,
-  AgentDecisionStep, AgentLoopDecisionStep, CodeStep,
+  FlowStep, AgentStep, ForkStep,
+  AgentDecisionStep, CodeStep, CodeDecisionStep,
   CodeNodeContext, CodeNodeHandler,
   TemplateContext, SubagentEvent, ArchitectMeta, CardConfig,
   FlowRunOptions, FlowContext, FlowIOAdapter, FlowObserver,
@@ -110,10 +110,9 @@ interface FlowConfig {
 type FlowStep =
   | AgentStep
   | ForkStep
-  | ConditionalStep
   | AgentDecisionStep
-  | AgentLoopDecisionStep
-  | CodeStep;
+  | CodeStep
+  | CodeDecisionStep;
 
 interface AgentStep {
   stepType:    "agent";
@@ -140,30 +139,13 @@ interface ForkStep {
   task?:       string;
 }
 
-interface ConditionalStep {
-  stepType: "conditional";
-  id:       string;
-  check:    string;    // "stepId.field"
-  present:  string;    // step ID if field has content
-  absent:   string;    // step ID if field is empty
-}
-
 interface AgentDecisionStep {
   stepType: "agent-decision";
   id:       string;
   agent:    string;
   task:     string;
   branches: Record<string, string>;   // branch name → step ID
-}
-
-interface AgentLoopDecisionStep {
-  stepType:       "agent-loop-decision";
-  id:             string;
-  agent:          string;
-  task:           string;
-  loop_target:    string;
-  exit_target:    string;
-  max_iterations: number;
+  max_iterations?: number;             // required when a branch loops backward
 }
 
 interface CodeStep {
@@ -175,6 +157,18 @@ interface CodeStep {
   blockedBy?:  string[];
   on_complete?: string;
   on_error?:   string;
+  timeout?:    number;                    // soft deadline — milliseconds
+}
+
+interface CodeDecisionStep {
+  stepType:    "code-decision";
+  id:          string;
+  inputs?:     Record<string, string>;    // key → template expression
+  outputs?:    Array<{ name: string }>;  // declared DATA output names (never `branch`)
+  branches:    Record<string, string>;    // branch name → step ID
+  target?:     string;                    // overrides handler file path
+  blockedBy?:  string[];
+  max_iterations?: number;                // required when a branch loops backward
   timeout?:    number;                    // soft deadline — milliseconds
 }
 ```
@@ -196,21 +190,15 @@ interface AgentResult {
   duration:      number;             // milliseconds
   tokens:        { input: number; output: number };
   finishParams?: Record<string, any>; // raw finish tool call parameters
-  typedOutputs?: Record<string, string>; // extracted typed outputs
+  typedOutputs?: Record<string, unknown>; // declared outputs in their real JSON types
   outcome?:      FailureOutcome;       // structural failure classification
   failureInfo?:  FailureInfo;          // present on soft/hard failures
 }
 
 interface ParsedResult {
   status:    "complete" | "error" | "blocked" | "unknown";
-  files:     ResultFile[];
-  artifacts: string;   // raw XML artifacts string
   summary:   string;
-}
-
-interface ResultFile {
-  path:   string;
-  action: "created" | "modified" | "read";
+  outputs:   Record<string, unknown>;   // declared outputs in their real JSON types
 }
 
 interface ToolCallRecord {
@@ -278,9 +266,7 @@ interface StepResultEntry {
   fullOutput:  string;
   status:      string;      // "complete" | "error" | "blocked" | "aborted" | "skipped"
   summary:     string;
-  artifacts:   string;
-  files:       string;
-  [key: string]: string;   // typed outputs
+  outputs:     Record<string, unknown>;   // declared outputs in their real JSON types
 }
 ```
 
@@ -298,9 +284,7 @@ interface TemplateContext {
     fullOutput:  string;
     status:      string;
     summary:     string;
-    artifacts:   string;
-    files:       string;
-    [key: string]: string;  // typed outputs
+    outputs:     Record<string, unknown>;  // declared outputs in their real JSON types
   }>;
   loopCounters?:     Record<string, number>;
   loopMaxIterations?: Record<string, number>;
@@ -654,7 +638,7 @@ export default async function (input: { invoice: string }, ctx: CodeNodeContext)
 Helper type for declaring a typed code-step handler. The generic parameters `I` (input shape) and `O` (output shape) match the step’s `inputs` and `outputs` declarations.
 
 ```typescript
-type CodeNodeHandler<I = Record<string, string>, O = Record<string, string>> =
+type CodeNodeHandler<I = Record<string, unknown>, O = Record<string, unknown>> =
   (input: I, ctx: CodeNodeContext) => Promise<O>;
 ```
 

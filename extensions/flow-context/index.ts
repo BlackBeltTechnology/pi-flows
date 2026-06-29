@@ -13,6 +13,7 @@ import { Container, type SelectItem, SelectList, Spacer, Text } from "@earendil-
 import { Type } from "@sinclair/typebox";
 import { readFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
+import { projectRuns } from "../flow-engine/flow-persist.js";
 
 function getFlowResultNames(resultsDir: string): string[] {
   if (!existsSync(resultsDir)) return [];
@@ -133,6 +134,11 @@ export function activate(pi: ExtensionAPI) {
   const projectRoot = process.cwd();
   const resultsDir = join(projectRoot, ".pi", "flows", "results");
 
+  // Captured on session_start; used by the read-only `runs` action to project
+  // the persisted flow-event stream into live/historical per-node run state.
+  let sessionManager: any = null;
+  pi.on?.("session_start", (_ev: any, ctx: any) => { sessionManager = ctx?.sessionManager ?? null; });
+
   // -- Event API: flow:delete-request -----------------------------------------
 
   pi.events.on("flow:delete-request", (data: any) => {
@@ -155,14 +161,17 @@ export function activate(pi: ExtensionAPI) {
     label: "Flow Results",
     description:
       "Read flow execution results. Use action 'list' to see available results, " +
-      "'summary' to get per-agent summaries for a flow, or 'agent' to get full " +
-      "detail for a specific agent within a flow.",
+      "'summary' to get per-agent summaries for a flow, 'agent' to get full " +
+      "detail for a specific agent within a flow, or 'runs' to inspect live and " +
+      "historical run state (per-node pending/running/finished) for this session. " +
+      "All actions are read-only.",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"),
         Type.Literal("summary"),
         Type.Literal("agent"),
-      ], { description: "Action: 'list' all results, 'summary' per-agent summaries, 'agent' full detail for one agent" }),
+        Type.Literal("runs"),
+      ], { description: "Action: 'list' all results, 'summary' per-agent summaries, 'agent' full detail for one agent, 'runs' live/historical per-node run state" }),
       flow: Type.Optional(Type.String({ description: "Flow name (required for summary and agent actions)" })),
       agent: Type.Optional(Type.String({ description: "Agent/step name (required for agent action)" })),
     }),
@@ -198,6 +207,51 @@ export function activate(pi: ExtensionAPI) {
         return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
       }
 
+      // -- runs action: read-only projection of the persisted flow-event stream --
+      if (action === "runs") {
+        let entries: unknown = [];
+        try { entries = sessionManager?.getEntries?.() ?? []; } catch { entries = []; }
+        const runs = projectRuns(entries);
+        if (runs.length === 0) {
+          return { content: [{ type: "text" as const, text: "No flow runs recorded in this session." }], details: {} };
+        }
+        // With a flow name → detail the latest run of that flow.
+        if (flow) {
+          const matching = runs.filter(r => r.flowName === flow);
+          if (matching.length === 0) {
+            return { content: [{ type: "text" as const, text: `No run found for flow "${flow}" in this session. Runs: ${runs.map(r => r.flowName).join(", ")}` }], details: {} };
+          }
+          const run = matching[matching.length - 1];
+          // Merge produced outputs from the completed-run result JSON when present.
+          let resultsJson: Record<string, any> = {};
+          const jsonPath = join(resultsDir, `${flow}.json`);
+          if (existsSync(jsonPath)) {
+            try { resultsJson = JSON.parse(readFileSync(jsonPath, "utf-8")).results || {}; } catch { /* ignore */ }
+          }
+          const lines: string[] = [`Run: ${run.flowName}  (${run.live ? "in progress" : "finished"})`, ""];
+          for (const node of run.nodes) {
+            const label = node.status === "finished" ? (node.resultStatus ?? "finished") : node.status;
+            lines.push(`## ${node.stepId} (${label})`);
+            if (node.summary) lines.push(`Summary: ${node.summary}`);
+            const outs = resultsJson[node.stepId]?.outputs;
+            if (outs && typeof outs === "object" && Object.keys(outs).length > 0) {
+              lines.push(`Outputs: ${Object.keys(outs).join(", ")}`);
+            }
+            lines.push("");
+          }
+          return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+        }
+        // No flow name → list runs with per-node counts.
+        const lines: string[] = ["Flow runs (this session):", ""];
+        for (const run of runs) {
+          const finished = run.nodes.filter(n => n.status === "finished").length;
+          const running = run.nodes.filter(n => n.status === "running").length;
+          const pending = run.nodes.filter(n => n.status === "pending").length;
+          lines.push(`• ${run.flowName || "(unnamed)"} — ${run.live ? "in progress" : "finished"} (${finished} finished, ${running} running, ${pending} pending)`);
+        }
+        return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
+      }
+
       // -- summary and agent actions require flow param --
       if (!flow) {
         return { content: [{ type: "text" as const, text: `Error: 'flow' parameter is required for action '${action}'.` }], details: {} };
@@ -228,7 +282,10 @@ export function activate(pi: ExtensionAPI) {
             const status = r.status || "unknown";
             lines.push(`## ${stepId} (${status})`);
             if (r.summary) lines.push(`Summary: ${r.summary}`);
-            if (r.files) lines.push(`Files: ${r.files}`);
+            const outs = r.outputs && typeof r.outputs === "object" ? r.outputs as Record<string, unknown> : undefined;
+            if (outs && Object.keys(outs).length > 0) {
+              lines.push(`Outputs: ${Object.keys(outs).join(", ")}`);
+            }
             lines.push("");
           }
         }
@@ -261,11 +318,14 @@ export function activate(pi: ExtensionAPI) {
           }
           lines.push(`## Full Output`, output, "");
         }
-        if (agentResult.artifacts) {
-          lines.push(`## Artifacts`, agentResult.artifacts, "");
-        }
-        if (agentResult.files) {
-          lines.push(`## Files`, agentResult.files, "");
+        const outs = agentResult.outputs && typeof agentResult.outputs === "object"
+          ? agentResult.outputs as Record<string, unknown>
+          : undefined;
+        if (outs && Object.keys(outs).length > 0) {
+          const rendered = Object.entries(outs)
+            .map(([k, v]) => `- ${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+            .join("\n");
+          lines.push(`## Outputs`, rendered, "");
         }
         return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
       }

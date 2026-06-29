@@ -1,4 +1,4 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind } from "./types.js";
+import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
@@ -35,7 +35,9 @@ export interface ForkContext {
 
 export interface FlowContext {
   task: string;
-  results: Record<string, { fullOutput: string; status: string; summary: string; artifacts: string; files: string }>;
+  /** Typed flow-level inputs (G6), referenceable as `${{flow.input.<name>}}`. */
+  flowInput?: Record<string, unknown>;
+  results: Record<string, StepResultValue>;
   forks: Record<string, { answer: string; notes?: string }>;
   loopCounters: Record<string, number>;
   loopMaxIterations: Record<string, number>;
@@ -58,6 +60,8 @@ export interface FlowContext {
 export interface FlowRunOptions {
   flow: FlowConfig;
   task: string;
+  /** Structured flow-level inputs, validated against `flow.inputs`. */
+  flowInput?: Record<string, unknown>;
   cwd: string;
   authStorage?: any;
   modelRegistry?: any;
@@ -98,6 +102,19 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
   const { flow, task, cwd } = options;
   const startTime = Date.now();
 
+  // Validate structured flow inputs against the declared schema (G6). A missing
+  // required input or a type mismatch fails the run start with a diagnostic.
+  const inputError = validateFlowInput(flow, options.flowInput);
+  if (inputError) {
+    const errResult: AgentResult = {
+      success: false, output: inputError, stderr: "", exitCode: null,
+      result: { status: "error" as const, summary: inputError, files: [], artifacts: "" },
+      toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+      outcome: "hard", failureInfo: { outcome: "hard", message: inputError, source: "flow_input_invalid" },
+    };
+    return { lastResult: errResult, results: {}, forks: {}, flowName: flow.name, stepCount: 0, totalDuration: 0, status: "error" };
+  }
+
   // Build loopMaxIterations map from any decision node that caps a backward
   // (loop) edge. A loop is a *-decision branch pointing to an earlier step.
   const loopMaxIterations: Record<string, number> = {};
@@ -108,6 +125,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
 
   const ctx: FlowContext = {
     task,
+    flowInput: options.flowInput,
     results: {},
     forks: {},
     loopCounters: {},
@@ -270,8 +288,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
           fullOutput: "",
           status: "aborted",
           summary: "Aborted by user",
-          artifacts: "",
-          files: "",
+          outputs: {},
         };
       }
     }
@@ -358,7 +375,7 @@ async function runDagSegment(
       if (!activeSteps.has(step.id)) {
         completed.add(step.id);
         // Store synthetic "skipped" result so blockedBy refs auto-satisfy
-        const skippedResult = { fullOutput: "", status: "skipped" as const, summary: "", artifacts: "", files: "" };
+        const skippedResult = { fullOutput: "", status: "skipped" as const, summary: "", outputs: {} };
         ctx.results[step.id] = skippedResult;
         // Don't emit events for skipped agents — they stay "pending" in the dashboard
       }
@@ -496,7 +513,7 @@ async function runDagSegment(
             for (const s of steps) {
               if (!reachable.has(s.id) && !completed.has(s.id)) {
                 completed.add(s.id);
-                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", artifacts: "", files: "" };
+                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", outputs: {} };
               }
             }
           } else {
@@ -504,7 +521,7 @@ async function runDagSegment(
             for (const s of steps) {
               if (!completed.has(s.id)) {
                 completed.add(s.id);
-                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", artifacts: "", files: "" };
+                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", outputs: {} };
               }
             }
             return { lastResult, routeToStepId: routeTarget };
@@ -656,57 +673,21 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
 
   options.onAgentStarted?.(step.agent, step.id, resolvedModelId, { nodeKind: "agent" });
 
-  // Resolve step inputs at dispatch time.
-  // File inputs (file:// prefix) are read from disk. Their content is stored with unique
-  // sentinel placeholders so that expandTemplateVariables never sees the raw file content
-  // (which could contain ${{}} syntax that would be incorrectly expanded).
+  // Resolve step inputs at dispatch time via plain template expansion (strings).
+  // File-backed data is passed as a PATH and read just-in-time by the agent's
+  // `read` tool — engine-side `file://` injection was removed
+  // (change: flow-typed-io-and-run-state).
   const resolvedInputs: Record<string, string> = {};
-  const fileInputs: Record<string, string> = {};  // sentinel → file content
   if (step.inputs) {
     const resolveCtx: TemplateContext = {
       task: ctx.task,
       inputs: {},
       results: ctx.results,
       loopCounters: ctx.loopCounters,
-      loopMaxIterations: ctx.loopMaxIterations,
+      loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
     };
     for (const [name, expr] of Object.entries(step.inputs)) {
-      const resolved = expandTemplateVariables(expr, resolveCtx);
-      if (resolved.startsWith("file://")) {
-        const filePath = resolved.slice(7);
-        if (!filePath) {
-          return {
-            success: false,
-            output: `File input "${name}" resolved to empty path (was: ${expr})`,
-            stderr: `file:// input "${name}" has empty path after template expansion`,
-            exitCode: 1,
-            result: { status: "error" as const, files: [], artifacts: "", summary: "" },
-            toolCalls: [],
-            duration: 0,
-            tokens: { input: 0, output: 0 },
-          };
-        }
-        const absPath = resolve(options.cwd, filePath);
-        if (!existsSync(absPath)) {
-          return {
-            success: false,
-            output: `File input "${name}" not found: ${absPath} (resolved from: ${expr})`,
-            stderr: `file:// input "${name}" references missing file: ${absPath}`,
-            exitCode: 1,
-            result: { status: "error" as const, files: [], artifacts: "", summary: "" },
-            toolCalls: [],
-            duration: 0,
-            tokens: { input: 0, output: 0 },
-          };
-        }
-        const content = readFileSync(absPath, "utf-8");
-        // Use a sentinel placeholder that won't appear in normal text or be matched by template expansion
-        const sentinel = `__FILE_INPUT_${name}_${Date.now()}__`;
-        resolvedInputs[name] = sentinel;
-        fileInputs[sentinel] = content;
-      } else {
-        resolvedInputs[name] = resolved;
-      }
+      resolvedInputs[name] = expandTemplateVariables(expr, resolveCtx);
     }
   }
 
@@ -715,7 +696,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     inputs: resolvedInputs,
     results: ctx.results,
     loopCounters: ctx.loopCounters,
-    loopMaxIterations: ctx.loopMaxIterations,
+    loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   };
 
   // Determine user message: step task override or fallback to flow task
@@ -759,7 +740,6 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     templateContext: templateCtx,
     skillContents,
     preambleSections,
-    fileInputs: Object.keys(fileInputs).length > 0 ? fileInputs : undefined,
     pi: options.pi,
     cwd: options.cwd,
     authStorage: options.authStorage,
@@ -815,7 +795,7 @@ async function spawnForkDecisionAgent(
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
     results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   };
 
   let decisionTask = step.task
@@ -869,7 +849,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   const expandedQuestion = expandTemplateVariables(step.question, {
     task: ctx.task, inputs: {},
     results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   });
 
   // ── Autonomous mode: auto-decide via agent (named agent, or built-in flow-decision) ──
@@ -1011,13 +991,13 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
   const decisionTask = expandTemplateVariables(step.task, {
     task: ctx.task, inputs: {},
     results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   });
 
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
     results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations,
+    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   };
 
   const skillContents = new Map<string, string>();
@@ -1066,15 +1046,40 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
 
 // ---- Helpers ---------------------------------------------------------------
 
+/**
+ * Validate a structured flow-input object against the flow's declared schema.
+ * Returns an error message on the first violation, or null when valid.
+ * (change: flow-typed-io-and-run-state)
+ */
+function validateFlowInput(flow: FlowConfig, input: Record<string, unknown> | undefined): string | null {
+  if (!flow.inputs) return null;
+  const provided = input ?? {};
+  for (const [name, decl] of Object.entries(flow.inputs)) {
+    if (!Object.prototype.hasOwnProperty.call(provided, name)) {
+      if (decl.required) return `Flow "${flow.name}": missing required input "${name}"`;
+      continue;
+    }
+    const v = provided[name];
+    const t = decl.type;
+    const ok =
+      t === "string" ? typeof v === "string" :
+      t === "number" ? typeof v === "number" :
+      t === "boolean" ? typeof v === "boolean" :
+      t === "array" ? Array.isArray(v) :
+      t === "object" ? (typeof v === "object" && v !== null && !Array.isArray(v)) :
+      true;
+    if (!ok) return `Flow "${flow.name}": input "${name}" expected ${t}, got ${Array.isArray(v) ? "array" : typeof v}`;
+  }
+  return null;
+}
+
 function storeResult(ctx: FlowContext, stepId: string, result: AgentResult): void {
   ctx.results[stepId] = {
     fullOutput: result.output,
     status: result.result.status,
     summary: result.result.summary,
-    artifacts: result.result.artifacts,
-    files: result.result.files.map(f => f.path).join(", "),
-    // Merge typed outputs from agent's declared outputs
-    ...(result.typedOutputs ?? {}),
+    // Typed declared outputs live in their own map, in real JSON types.
+    outputs: result.typedOutputs ?? {},
   };
 }
 

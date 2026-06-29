@@ -21,6 +21,9 @@ description: Research the codebase then implement changes
 max_concurrent: 2
 task_required: true
 task_prompt: "What feature should I research and implement?"
+inputs:
+  ref:   { type: string, required: true }
+  count: { type: number }
 ---
 ```
 
@@ -31,6 +34,19 @@ task_prompt: "What feature should I research and implement?"
 | `max_concurrent` | | Maximum agents running in parallel (default: `4`) |
 | `task_required` | | When `true`, prompts the user for a task if none was provided |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
+| `inputs` | | Optional typed input schema (see [Typed Flow Inputs](#typed-flow-inputs)) |
+
+### Typed Flow Inputs
+
+A flow may declare an optional `inputs:` schema — a mapping of name to `{ type, required? }`. `type` is one of `string`, `number`, `boolean`, `object`, `array` (an omitted or unknown type is a validation error); `required: true` makes the run fail to start when the input is absent.
+
+```yaml
+inputs:
+  ref:   { type: string, required: true }
+  count: { type: number }
+```
+
+A run accepts a structured `inputs` object alongside the `task` string across every invocation path (slash command, the `flow:run` event's `inputs` field, and the programmatic run API). Provided inputs are validated against the schema — a missing `required` input or a type mismatch fails the run start. A flow with no `inputs:` schema is still startable with only `task`. Declared inputs are referenceable as `${{flow.input.<name>}}` and follow the same typed-delivery rules as result outputs (typed to code handlers when wired as a whole value, JIT-serialized to compact JSON in text).
 
 > **Command name = file path, not `name:` field.** The slash command is derived from the file path:
 >
@@ -218,7 +234,7 @@ export default async function (
 
 **Type-safe scaffold:** `/flows:generate` emits a `type Branch = "auto_approve" | "needs_human" | "park";` union for each `code-decision` and types the handler return as `Promise<{ branch: Branch } & Output>`, so an off-map label is a compile-time error. Scaffolds write a `.ts.default` and never overwrite an implemented handler.
 
-> **Migrating from `conditional`.** The removed `conditional` step is replaced by `code-decision`. Read the value previously in `check: <stepId>.<key>` as a handler **input** and return `{ branch: "present" }` or `{ branch: "absent" }`, with `branches: { present: <present-target>, absent: <absent-target> }`. Standard fields (`artifacts`, `summary`, `files`, `status`) remain available as `${{result.<stepId>.<field>}}` inputs.
+> **Migrating from `conditional`.** The removed `conditional` step is replaced by `code-decision`. Read the value previously in `check: <stepId>.<key>` as a handler **input** and return `{ branch: "present" }` or `{ branch: "absent" }`, with `branches: { present: <present-target>, absent: <absent-target> }`. Standard fields (`summary`, `status`, `fullOutput`) remain available as `${{result.<stepId>.<field>}}` inputs.
 
 ---
 
@@ -332,7 +348,7 @@ Execute a TypeScript handler function in-process. Code steps run deterministic, 
 |-------|:--------:|-------------|
 | `id` | ✓ | Unique step identifier. Also determines the handler filename — must be filesystem-safe. |
 | `type` | ✓ | Must be `code`. Like every step, `type:` is required and never inferred. |
-| `inputs` | | Map of input name → `${{...}}` template string. Each resolved value arrives in the handler as a string. Unresolved templates become `""`. |
+| `inputs` | | Map of input name → `${{...}}` template string. When a value is **exactly one** reference (`${{result.X.name}}` or `${{flow.input.name}}`) the handler receives that value **unchanged** in its real JSON type; an embedded reference arrives as the interpolated (JIT-serialized) string. Unresolved templates become `""`. |
 | `outputs` | | List of `{ name }` objects declaring which keys the handler must return. Names must be valid JS identifiers and unique within the step. |
 | `target` | | Override the handler file path. When set, the step imports that file directly and no `.ts.default` scaffold is generated. |
 | `blockedBy` | | Array of step IDs that must complete before this step runs. |
@@ -356,17 +372,13 @@ export default async function (input: Input, ctx: CodeNodeContext): Promise<Outp
 }
 ```
 
-- **`input`** — every declared input, template-expanded to a string, keyed by name.
+- **`input`** — every declared input, keyed by name. A whole-value reference arrives in its real JSON type; an embedded reference arrives as the interpolated string. The handler input type is `Record<string, unknown>`.
 - **`ctx`** — a `CodeNodeContext` with `signal`, `cwd`, `logger`, `setSummary`, `flowName`, `stepId`, and `task`. See [public-api.md → CodeNodeContext](./public-api.md#codenodecontext).
 - **Return** — an object containing **exactly** the declared `outputs`. Every declared key must be present; no undeclared extras. A step with no `outputs` must return `{}`.
 
-**Value coercion:**
+**Return values:**
 
-| Return value type | Behaviour |
-|-------------------|-----------|
-| `string` | Passes through unchanged |
-| `number`, `boolean`, `bigint` | Converted via `String()` |
-| `object`, `array`, `null` | Soft failure naming the offending key — call `JSON.stringify()` intentionally if you need serialised data |
+A handler may return **any JSON-compatible value** (`string`, `number`, `boolean`, `object`, `array`, `null`) for each declared output. Each value is stored in its real type under the result's `outputs` — there is no string coercion, and an `object`/`array`/`null` return is **no longer** a soft failure. The only contract is that the returned object contains **exactly** the declared keys.
 
 **Handler location and generation:**
 
@@ -453,9 +465,8 @@ Template variables are placeholders in `task`, `inputs`, and `question` fields. 
 | `${{result.STEP-ID}}` | Full raw output from a completed step |
 | `${{result.STEP-ID.summary}}` | Summary from `finish(summary:)` |
 | `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |
-| `${{result.STEP-ID.artifacts}}` | The `<artifacts>` XML block from `finish` |
-| `${{result.STEP-ID.files}}` | Comma-separated file paths created/modified |
-| `${{result.STEP-ID.<outputName>}}` | A typed output from the agent's `outputs:` declaration |
+| `${{result.STEP-ID.<outputName>}}` | A declared typed output (agent or code step), held under the result's `outputs` in its real JSON type. A produced file path is conveyed this way as a `*_path` output. |
+| `${{flow.input.NAME}}` | A declared flow input (see [Typed Flow Inputs](#typed-flow-inputs)) |
 | `${{loop.STEP-ID.iteration}}` | Current iteration (1-based) in a loop step |
 | `${{loop.STEP-ID.max}}` | Maximum iterations configured for a loop |
 
@@ -479,8 +490,6 @@ Three rules are enforced:
 |----------------|-----------------|
 | `summary` | ✓ |
 | `status` | ✓ |
-| `artifacts` | ✓ |
-| `files` | ✓ |
 | `fullOutput` | ✓ |
 
 A `.field` that is neither a declared output nor a standard field is an error.
@@ -527,7 +536,7 @@ inputs:
     blockedBy: [researcher]
     inputs:
       research_output: "${{result.researcher.summary}}"
-      ticket_context: "${{result.ticket-fetch.artifacts}}"
+      ticket_context: "${{result.ticket-fetch.ticket}}"
 ```
 
 ### Reference in the system prompt
@@ -542,32 +551,24 @@ ${{input.ticket_context}}
 
 If `inputs:` is not declared in the agent's frontmatter, the input values are substituted but the system prompt has no `${{input.NAME}}` to expand them into.
 
-### File Content Injection (`file://` prefix)
+### Passing File-Backed Data
 
-When an agent needs the **content** of a file (not just a path), use the `file://` prefix:
-
-```yaml
-  - id: validate
-    agent: validator
-    blockedBy: [researcher]
-    inputs:
-      report: file://research/findings.md
-```
-
-**Dynamic path from previous step:**
+The engine does **not** read a file and inject its content into a prompt — the `file://` input prefix is no longer a special form. To give an agent the **content** of a file, pass its **path** (typically a declared `*_path` output) and have the agent read it just-in-time via its `read` tool:
 
 ```yaml
   - id: summarize
-    agent: summarizer
+    agent: summarizer        # must declare the `read` tool
     blockedBy: [writer]
     inputs:
-      report: file://${{result.writer.files}}
+      report_path: ${{result.writer.report_path}}
 ```
 
+The agent's prompt instructs it to read the path: `Read the report at ${{input.report_path}}.` A code node reads the path from the filesystem instead.
+
 **Rules:**
-- The producing step **MUST** be in `blockedBy` so the file exists at dispatch time
-- File content is injected **verbatim** (never template-expanded)
-- If the file doesn't exist, the step fails with a clear error
+- The producing step **MUST** be in `blockedBy` so the file exists by the time the consumer reads it.
+- The consuming agent needs the `read` tool and a matching `access.read` glob. Flow validation **warns** when a `*_path`/`*_file` input is wired into an agent that lacks the `read` tool.
+- For small, always-needed files, `context_files` (read at spawn) remains available.
 
 ---
 

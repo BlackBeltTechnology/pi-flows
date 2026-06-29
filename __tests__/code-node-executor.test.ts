@@ -92,7 +92,7 @@ export default async function handler(input, ctx) {
     });
     const ctx = makeCtx({
       results: {
-        extract: { fullOutput: "", status: "complete", summary: "", artifacts: "", files: "", canonical: "INV-001" },
+        extract: { fullOutput: "", status: "complete", summary: "", artifacts: "", files: "", outputs: { canonical: "INV-001" } },
       },
     });
 
@@ -223,7 +223,7 @@ export default async function handler(input, ctx) {
     expect(result.success).toBe(true);
   });
 
-  it("coerces number and boolean to string", async () => {
+  it("stores number and boolean typed", async () => {
     const handlerPath = tempHandler(`
 export default async function handler(input, ctx) {
   return { count: 42, flag: true };
@@ -235,8 +235,8 @@ export default async function handler(input, ctx) {
     });
     const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
     expect(result.success).toBe(true);
-    expect(result.typedOutputs?.count).toBe("42");
-    expect(result.typedOutputs?.flag).toBe("true");
+    expect(result.typedOutputs?.count).toBe(42);
+    expect(result.typedOutputs?.flag).toBe(true);
   });
 
   it("coerces bigint to string", async () => {
@@ -254,7 +254,7 @@ export default async function handler(input, ctx) {
     expect(result.typedOutputs?.big).toBe("9007199254740993");
   });
 
-  it("soft failure when output value is an object", async () => {
+  it("stores an object output typed", async () => {
     const handlerPath = tempHandler(`
 export default async function handler(input, ctx) {
   return { record: { id: 1 } };
@@ -265,12 +265,11 @@ export default async function handler(input, ctx) {
       outputs: [{ name: "record" }],
     });
     const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
-    expect(result.success).toBe(false);
-    expect(result.result.status).toBe("error");
-    expect(result.output).toContain("record");
+    expect(result.success).toBe(true);
+    expect(result.typedOutputs?.record).toEqual({ id: 1 });
   });
 
-  it("soft failure when output value is null", async () => {
+  it("stores a null output", async () => {
     const handlerPath = tempHandler(`
 export default async function handler(input, ctx) {
   return { field: null };
@@ -281,11 +280,11 @@ export default async function handler(input, ctx) {
       outputs: [{ name: "field" }],
     });
     const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
-    expect(result.success).toBe(false);
-    expect(result.output).toContain("field");
+    expect(result.success).toBe(true);
+    expect(result.typedOutputs?.field).toBeNull();
   });
 
-  it("soft failure when output value is an array", async () => {
+  it("stores an array output typed", async () => {
     const handlerPath = tempHandler(`
 export default async function handler(input, ctx) {
   return { items: [1, 2, 3] };
@@ -296,8 +295,8 @@ export default async function handler(input, ctx) {
       outputs: [{ name: "items" }],
     });
     const result = await executeCodeStep(step, makeCtx(), makeOptions(), "test-flow", "");
-    expect(result.success).toBe(false);
-    expect(result.output).toContain("items");
+    expect(result.success).toBe(true);
+    expect(result.typedOutputs?.items).toEqual([1, 2, 3]);
   });
 });
 

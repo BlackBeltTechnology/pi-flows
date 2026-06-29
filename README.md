@@ -131,9 +131,12 @@ Context: ${{input.research_context}}
 
 ### Step Types
 
+Every step declares an explicit `type:` (the parser does not infer it). There are five: `agent`, `fork`, `agent-decision`, `code`, `code-decision`.
+
 **Agent** — dispatch a named agent with a task:
 ```yaml
 - id: impl
+  type: agent
   agent: backend-dev
   blockedBy: [research]
   inputs:
@@ -152,24 +155,38 @@ Context: ${{input.research_context}}
   agent: flow-decision    # used when alt+a (AUTO) is active
 ```
 
-**Conditional** — branch on whether a result field is empty:
-```yaml
-- id: check
-  type: conditional
-  check: researcher.artifacts
-  present: process-step
-  absent: skip-step
-```
-
-**Agent Loop Decision** — iterative verify/fix cycles:
+**Agent Decision** — an agent calls `finish({ branch })` to route; a branch pointing at an earlier step is a loop (bounded by `max_iterations`):
 ```yaml
 - id: verify-loop
-  type: agent-loop-decision
+  type: agent-decision
   agent: flow-decision
   task: "Check iteration ${{loop.verify-loop.iteration}}/${{loop.verify-loop.max}}"
-  loop_target: fixer
-  exit_target: done
-  max_iterations: 3
+  branches:
+    fix: fixer        # backward target → loops
+    done: done        # forward target → exits
+  max_iterations: 3   # required when a branch points backward
+```
+
+**Code** — run a deterministic TypeScript handler as a node (no LLM):
+```yaml
+- id: validate
+  type: code
+  inputs:
+    invoice: "${{result.extract.canonical}}"
+  outputs:
+    - name: valid
+  blockedBy: [extract]
+```
+
+**Code Decision** — a `code` node that routes on a returned `branch` (≥2 branches):
+```yaml
+- id: route
+  type: code-decision
+  inputs:
+    valid: "${{result.validate.valid}}"
+  branches:
+    approve: finalize
+    reject: notify
 ```
 
 ## Input Wiring
@@ -186,10 +203,10 @@ Steps pass data through `inputs` + template variables:
   blockedBy: [researcher]
   inputs:
     context: "${{result.researcher.summary}}"
-    spec: file://specs/api-spec.md    # injects file content
+    spec_path: specs/api-spec.md    # pass a path; the agent reads it via its `read` tool
 ```
 
-The agent's prompt references inputs as `${{input.context}}`. Typed outputs declared in agent frontmatter (`outputs:`) are accessible as `${{result.step-id.outputName}}`.
+The agent's prompt references inputs as `${{input.context}}`. Typed outputs declared in agent frontmatter (`outputs:`) are accessible as `${{result.step-id.outputName}}` and are delivered to code-node handlers as their real JSON type when wired as a whole-value reference. File-backed data is passed as a path and read at runtime (give the consuming agent the `read` tool) — there is no `file://` content injection.
 
 ## TUI Dashboard
 

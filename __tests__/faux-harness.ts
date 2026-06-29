@@ -248,6 +248,10 @@ export interface RunFauxOptions {
   /** Upper bound on faux turns to queue (covers retries). Default 24. */
   maxTurns?: number;
   signal?: AbortSignal;
+  /** Structured flow-level inputs, validated against `flow.inputs`. */
+  flowInput?: Record<string, unknown>;
+  /** Override the flow task string (default "flow task"). */
+  task?: string;
 }
 
 /**
@@ -278,7 +282,8 @@ export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
 
   const runOptions: FlowRunOptions = {
     flow: options.flow,
-    task: "flow task",
+    task: options.task ?? "flow task",
+    flowInput: options.flowInput,
     cwd: options.cwd ?? process.cwd(),
     modelRegistry: registry,
     pi,
@@ -339,7 +344,8 @@ export async function runFauxFlow(options: RunFauxFlowOptions): Promise<FlowResu
 
   const runOptions: FlowRunOptions = {
     flow: options.flow,
-    task: "flow task",
+    task: options.task ?? "flow task",
+    flowInput: options.flowInput,
     cwd: options.cwd ?? process.cwd(),
     modelRegistry: registry,
     pi,
