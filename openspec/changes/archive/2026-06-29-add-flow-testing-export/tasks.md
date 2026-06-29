@@ -18,7 +18,7 @@
 - [x] 3.4 `npm pack --dry-run` — confirm `extensions/flow-engine/testing.ts` is included and `__tests__/` is NOT.
 
 ## 4. Specs & docs
-- [ ] 4.1 Sync (archive-time step — performed during `openspec archive`) `package-manifest` and `faux-model-testing` delta specs into main specs on archive.
+- [x] 4.1 Sync (archive-time step — performed during `openspec archive`) `package-manifest` and `faux-model-testing` delta specs into main specs on archive.
 - [x] 4.2 (Delegate to a docs subagent) Update `docs/testing.md` — document the `@blackbelt-technology/pi-flows/testing` import path for downstream authors, with a worked in-repo example, and note the npm/pnpm support matrix.
 - [x] 4.3 (Delegate to a docs subagent) Add a "Testing your flow" pointer in `docs/creating-packages.md` linking to the new export.
 - [x] 4.4 Update `README.md` if it enumerates public exports — NO-OP: README does not enumerate exports.
