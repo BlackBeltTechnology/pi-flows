@@ -200,7 +200,7 @@ describe("faux runFlow — multi-step output wiring", () => {
           : scriptFinish({ status: "complete", summary: `received: ${taskText}` }),
     });
 
-    expect(result.results.producer.out).toBe("WIDGET-42");
+    expect(result.results.producer.outputs.out).toBe("WIDGET-42");
     expect(result.results.consumer.summary).toContain("WIDGET-42");
   });
 });
@@ -224,3 +224,83 @@ Pinning an exact iteration count couples the test to engine internals and makes 
 npm test                                   # full Vitest suite
 npx vitest run __tests__/faux-*.test.ts    # just the faux-model tests
 ```
+
+## Using the harness from a downstream package
+
+The harness is **shipped** — it is part of the published package and importable as
+`@blackbelt-technology/pi-flows/testing`. Downstream consumers do not need deep imports
+and do not need to live inside the pi-flows repo.
+
+The harness body lives in [`extensions/flow-engine/testing.ts`](../extensions/flow-engine/testing.ts);
+the in-repo [`__tests__/faux-harness.ts`](../__tests__/faux-harness.ts) is now a thin re-export of it.
+So in-repo suites keep importing from `./faux-harness.js`, while downstream consumers import from
+`@blackbelt-technology/pi-flows/testing`. The public surface intentionally re-exports the faux
+runners (`runFauxFlow`, `spawnFaux`, `runFaux`), the scripting verbs (`scriptFinish`,
+`scriptToolThenFinish`, `scriptError`, `scriptSlowText`), and the helpers (`makeAgent`,
+`lastUserText`, `parseFlowYamlString`) — it does **not** export the engine entrypoints
+`runFlow` / `spawnAgent`, which the faux runners wrap.
+
+```ts
+import { describe, it, expect } from "vitest";
+import {
+  spawnFaux,
+  scriptFinish,
+  parseFlowYamlString,
+  runFaux,
+} from "@blackbelt-technology/pi-flows/testing";
+
+describe("my flow — finish happy path", () => {
+  it("a schema-valid finish yields success", async () => {
+    const { result } = await spawnFaux({
+      responses: [scriptFinish({ status: "complete", summary: "did the thing" })],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.result.status).toBe("complete");
+  });
+
+  it("a two-step flow wires an upstream agent's declared output", async () => {
+    // YAML steps use `type:` (e.g. `type: agent`), not the internal `stepType:`.
+    const flow = parseFlowYamlString(
+      `name: wiring
+description: two-step wiring
+steps:
+  - type: agent
+    id: producer
+    agent: producer
+    task: produce a widget id
+  - type: agent
+    id: consumer
+    agent: consumer
+    blockedBy: [producer]
+    task: consume \${{result.producer.out}}
+`,
+      "<downstream>",
+    );
+
+    const result = await runFaux({
+      flow,
+      agents: [
+        { name: "producer", model: "faux/faux-1", outputs: [{ name: "out" }] },
+        { name: "consumer", model: "faux/faux-1" },
+      ],
+      responder: (taskText) =>
+        /produce/.test(taskText)
+          ? scriptFinish({ status: "complete", summary: "produced", out: "WIDGET-42" })
+          : scriptFinish({ status: "complete", summary: `received: ${taskText}` }),
+    });
+
+    // Typed agent outputs live under `.outputs`.
+    expect(result.results.producer.outputs.out).toBe("WIDGET-42");
+    expect(result.results.consumer.summary).toContain("WIDGET-42");
+  });
+});
+```
+
+**TypeScript-loader constraint.** The subpath entry is a `.ts` file, so the consumer must run
+tests under a TypeScript-aware runner (vitest works). This is the same constraint as the root
+`@blackbelt-technology/pi-flows` export — the `.ts` entry needs a TS-aware loader.
+
+**Install-layout support.** This works under both npm (version-pinned nested layout) and pnpm
+(symlink layout) because the harness anchors faux-provider registration to pi-coding-agent's real
+install location — it follows the dependency edge rather than walking up directories.

@@ -427,3 +427,5 @@ pi.on("tool_call", (event) => {
    ```
 
 4. **Check agent resolution** — ensure all agents referenced in flows exist in the `agents/` directory.
+
+5. **Test flows against the real engine** — drive your flows through the real `runFlow`/`spawnAgent` loop with a scripted, zero-network faux model by importing the shipped harness from `@blackbelt-technology/pi-flows/testing`. See [testing.md](./testing.md) for the harness API and a downstream worked example.

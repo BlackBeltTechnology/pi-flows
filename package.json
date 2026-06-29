@@ -16,7 +16,8 @@
   "type": "module",
   "main": "./extensions/index.ts",
   "exports": {
-    ".": "./extensions/index.ts"
+    ".": "./extensions/index.ts",
+    "./testing": "./extensions/flow-engine/testing.ts"
   },
   "pi": {
     "extensions": [
