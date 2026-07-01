@@ -715,9 +715,13 @@ export class EventEmitObserver implements FlowObserver {
   onFlowComplete(flowName: string, result: FlowResult): void {
     // Persist the completion event first (buffered if the gate is closed)…
     this.emit("flow:complete", result);
-    // …then append the non-empty marker that opens the sticky flush gate, so
-    // the whole buffered flow-event stream is written to disk for /resume.
-    this.persister.emitCompletionMarker(flowName);
+    // …then append the non-empty completion message: it opens the sticky flush
+    // gate (buffered flow-event stream → disk for /resume) AND carries the flow
+    // outcome (status + summary) so a host/automation runner can display it.
+    this.persister.emitCompletionMarker(flowName, {
+      status: result.status,
+      summary: result.lastResult?.result?.summary,
+    });
   }
 
   onError(agentName: string, stepId: string, text: string): void {

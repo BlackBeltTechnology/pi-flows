@@ -83,6 +83,19 @@ describe("flow-event persistence (real SessionManager)", () => {
     expect(flowEvents(sm2).length).toBe(6);
   });
 
+  it("completion marker carries the flow outcome status + summary", () => {
+    const sm = SessionManager.create(process.cwd(), dir);
+    const file = sm.getSessionFile()!;
+    const piShim = { appendEntry: (t: string, d: unknown) => sm.appendCustomEntry(t, d) };
+    const persister = new FlowEventPersister(piShim as any, () => sm);
+    persister.emitCompletionMarker("demo", { status: "success", summary: "processed invoice X" });
+    const sm2 = SessionManager.open(file, dir);
+    const marker = sm2.getEntries().find((e: any) => e.type === "message" && e.message.role === "assistant");
+    const text = (marker as any).message.content[0].text as string;
+    expect(text).toContain("success");
+    expect(text).toContain("processed invoice X");
+  });
+
   it("persister + non-empty completion marker opens the gate so a flow-first run reaches disk and survives cold reload", () => {
     const sm = SessionManager.create(process.cwd(), dir);
     const file = sm.getSessionFile()!;

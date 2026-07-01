@@ -126,7 +126,6 @@ export interface FlowConfig {
   task_required?: boolean; // Prompt user for task if no command args provided
   task_prompt?: string; // Custom prompt text (default: "Describe what you want <name> to do:")
   inputs?: Record<string, FlowInputDecl>; // Optional typed flow-input schema
-  auto_end?: boolean; // Opt in to gracefully ending a non-interactive parent session on successful completion
   steps: FlowStep[];
   source: string; // File path where this flow was discovered
 }

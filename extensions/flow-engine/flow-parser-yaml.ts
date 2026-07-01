@@ -43,7 +43,6 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
   const max_concurrent = doc.max_concurrent !== undefined ? toInt(doc.max_concurrent, source) : undefined;
   const task_required = doc.task_required === true || doc.task_required === "true";
   const task_prompt = doc.task_prompt ? String(doc.task_prompt) : undefined;
-  const auto_end = doc.auto_end === true || doc.auto_end === "true";
   const inputs = parseFlowInputs(doc.inputs, source);
 
   const rawSteps = doc.steps;
@@ -60,7 +59,6 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
     ...(task_required ? { task_required } : {}),
     ...(task_prompt ? { task_prompt } : {}),
     ...(inputs ? { inputs } : {}),
-    ...(auto_end ? { auto_end } : {}),
     steps,
     source,
   };

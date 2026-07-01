@@ -227,9 +227,13 @@ export class FlowEventPersister {
     this.appendMarker(`[flow] ${flowName} started`);
   }
 
-  // Reports completion (gate already open if start fired; harmless if not).
-  emitCompletionMarker(flowName: string): void {
-    this.appendMarker(`[flow] ${flowName} finished`);
+  // Reports completion with outcome metadata (status + summary) so the message
+  // doubles as the flow-completion signal a host/automation runner can read,
+  // AND opens the flush gate (gate already open if start fired; harmless if not).
+  emitCompletionMarker(flowName: string, outcome?: { status?: string; summary?: string }): void {
+    const status = outcome?.status ? ` ${outcome.status}` : " finished";
+    const summary = outcome?.summary ? `: ${outcome.summary}` : "";
+    this.appendMarker(`[flow] ${flowName}${status}${summary}`);
   }
 
   // Seed the seq counter past the max seq found in a resumed session's

@@ -34,8 +34,9 @@ inputs:
 | `max_concurrent` | | Maximum agents running in parallel (default: `4`) |
 | `task_required` | | When `true`, prompts the user for a task if none was provided |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
-| `auto_end` | | When `true`, ends the parent session on success — non-TUI sessions only (see [Auto-End Behavior](#auto-end-behavior)) |
 | `inputs` | | Optional typed input schema (see [Typed Flow Inputs](#typed-flow-inputs)) |
+
+When a flow completes, pi-flows appends one message `[flow] <name> <status>: <summary>` (status is `success`, `error`, or `aborted`) to the parent session. This persists the run for `/resume` and reports the outcome; pi-flows never shuts down or ends the session — that is the host/automation layer's responsibility.
 
 ### Typed Flow Inputs
 
@@ -55,20 +56,6 @@ A run accepts a structured `inputs` object alongside the `task` string across ev
 > |-----------|---------|
 > | `.pi/flows/flows/research.yaml` | `/research` |
 > | `.pi/flows/flows/my-domain/apply.yaml` | `/my-domain:apply` |
-
-### Auto-End Behavior
-
-Setting `auto_end: true` lets a flow gracefully shut down its parent pi session when it completes. This is the missing lifecycle close for headless runs: automation- or dashboard-spawned sessions otherwise linger forever after their flow finishes.
-
-The parent session is ended **only when all three conditions hold**:
-
-1. **Flow opt-in** — the flow declares `auto_end: true`.
-2. **Not a local TUI** — the session runs in any mode other than `tui` (i.e. `mode !== "tui"`). Programmatic/automation runs (`rpc`, `json`, `print` — including dashboard-spawned automation) ARE eligible and will close on success. **A local terminal `tui` session (a human present) is never auto-closed**, regardless of this key.
-3. **Terminal status `success`** — the flow finished successfully. A flow that ends in `aborted` or `error` never triggers the shutdown.
-
-When all three are met, the parent session is gracefully shut down. There is no settings toggle for this behavior — the non-TUI gate is the safety.
-
----
 
 ## Step Types
 
