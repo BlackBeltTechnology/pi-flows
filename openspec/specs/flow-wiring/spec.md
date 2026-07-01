@@ -34,7 +34,7 @@ A flow SHALL fail validation at load time when a template references an unknown 
 - **THEN** validation accepts it regardless of declared outputs
 
 ### Requirement: Referenced results must be ordered before use
-A template reference to `${{result.X...}}` SHALL be valid only when X is guaranteed to have completed before the referencing step — that is, X is a transitive `blockedBy` ancestor of the step, OR X reaches the step through an `on_complete`/`on_error` routing chain. Otherwise flow validation fails. The engine SHALL NOT silently add the implied dependency edge.
+A template reference to `${{result.X...}}` SHALL be valid only when X is guaranteed to have completed before the referencing step — that is, X is a transitive `blockedBy` ancestor of the step, OR X reaches the step through an `on_error` routing chain or a decision/loop branch chain. Otherwise flow validation fails. The engine SHALL NOT silently add the implied dependency edge.
 
 #### Scenario: Reference without ordering is rejected
 - **WHEN** step `B` references `${{result.A.summary}}` but `A` is neither a transitive `blockedBy` ancestor of `B` nor routes into `B`
@@ -44,8 +44,8 @@ A template reference to `${{result.X...}}` SHALL be valid only when X is guarant
 - **WHEN** step `B` references `${{result.A.summary}}` and declares `blockedBy: [A]`
 - **THEN** validation accepts the reference
 
-#### Scenario: Reference satisfied by routing passes
-- **WHEN** step `A` declares `on_complete: B` and `B` references `${{result.A.summary}}`
+#### Scenario: Reference satisfied by on_error routing passes
+- **WHEN** step `A` declares `on_error: B` and `B` references `${{result.A.summary}}`
 - **THEN** validation accepts the reference even without `blockedBy`
 
 ### Requirement: Loop iteration counter is 1-based and consistent

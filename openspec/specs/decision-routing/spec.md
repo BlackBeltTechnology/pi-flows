@@ -73,5 +73,16 @@ Flow validation SHALL report: (a) a branch target that does not name an existing
 
 #### Scenario: Decision with a single branch
 - **WHEN** a `code-decision` declares only one branch
-- **THEN** validation SHALL report an error advising use of a plain `code` node with `on_complete`
+- **THEN** validation SHALL report an error advising a plain `code` node ordered with `blockedBy` instead
+
+### Requirement: `on_complete` is rejected
+The `on_complete` step field has been removed. Flow validation SHALL report an error when any step declares `on_complete`, with an actionable message directing the author to order steps with `blockedBy` or select a forward path with a `fork`/`code-decision` node. Success routing no longer exists; a node that succeeds falls through to the next step in file order.
+
+#### Scenario: Declaring on_complete is an error
+- **WHEN** a step declares `on_complete: X`
+- **THEN** flow validation SHALL report an error naming the removed field and the migration path (`blockedBy` / decision node)
+
+#### Scenario: on_error is unaffected
+- **WHEN** a step declares `on_error: X` and no `on_complete`
+- **THEN** validation accepts the step and soft-failure routing to `X` is unchanged
 

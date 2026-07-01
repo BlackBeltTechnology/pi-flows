@@ -4,11 +4,11 @@
 TBD - created by archiving change node-failure-model. Update Purpose after archive.
 ## Requirements
 ### Requirement: Node failure outcomes
-Every node execution SHALL resolve to exactly one outcome: `success`, `soft` failure, or `hard` failure. `success` routes to the node's `on_complete`. A `soft` failure is recoverable and routes to the node's `on_error`. A `hard` failure is unrecoverable and stops the entire flow.
+Every node execution SHALL resolve to exactly one outcome: `success`, `soft` failure, or `hard` failure. On `success` the node performs no routing — control falls through to the next step in file order. A `soft` failure is recoverable and routes to the node's `on_error`. A `hard` failure is unrecoverable and stops the entire flow.
 
-#### Scenario: Success routes on_complete
-- **WHEN** a node completes successfully and declares `on_complete: next`
-- **THEN** the flow routes to `next`
+#### Scenario: Success falls through to the next step
+- **WHEN** a node completes successfully
+- **THEN** control proceeds to the next step in file order (no success-routing edge)
 
 #### Scenario: Outcome is one of three
 - **WHEN** any node finishes executing
