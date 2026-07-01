@@ -44,7 +44,7 @@ Understand the runtime before authoring — the YAML you write is a **DAG of ste
 - **Segments & parallelism.** The engine splits steps into segments. A contiguous run of plain `agent` steps executes as a **parallel DAG**: on each wave it dispatches every step whose `blockedBy` is satisfied, up to `max_concurrent` (default 4). Every non-agent node (`fork`, `agent-decision`, `code`, `code-decision`) runs as a **sequential** step between those DAG segments. So independent agents run concurrently; decisions and code nodes are serialization points.
 - **Agent isolation.** Each agent runs in its own session with only its declared `tools` + `finish`, its `access` globs, and its own resolved model. It cannot see other agents' state. It **must** call `finish(...)` to return a structured result; the engine retries a couple of times if it forgets, then records a soft failure.
 - **Forward-only data flow.** There is no shared mutable state. A step reads upstream results through wired `inputs:` and `${{result.STEP.field}}` templates. A producer must run *before* a consumer (via `blockedBy` or routing) — the validator enforces this ordering.
-- **Routing on outcome.** Every node resolves to `success` → fall through to the next step in file order, `soft` → `on_error`, or `hard` → halt the whole flow. Decision nodes additionally pick a `branch`. A branch target that points at an **earlier** step is a loop (bounded by `max_iterations`). There is no success-routing field — order steps with `blockedBy`, select forward paths with a `fork`/`code-decision`.
+- **Routing on outcome.** Every node resolves to `success` → fall through to the next step in file order, `soft` → `on_error`, or `hard` → halt the whole flow. Decision nodes additionally pick a `branch`; a branch target pointing at an **earlier** step is a loop (bounded by `max_iterations`). Order steps with `blockedBy`; select forward paths with a `fork`/`code-decision`.
 - **Determinism boundary.** `agent` nodes are non-deterministic (an LLM decides); `code`/`code-decision` nodes are deterministic TypeScript. Put judgment in agents, mechanics in code.
 
 ## Editing an existing flow vs creating a new one
@@ -206,7 +206,7 @@ steps:
     task: Review ${{task}}
 ```
 
-`name` is the frontmatter name; the command name comes from the on-disk location (`namespace`/`name` you pass to `flow_write`). Every step needs a unique `id` **and an explicit `type:`** — the parser does not infer type and rejects any step that omits it. Steps run as a DAG: order is driven by `blockedBy` plus decision/`on_error` routing (success falls through to the next step; there is no `on_complete`).
+`name` is the frontmatter name; the command name comes from the on-disk location (`namespace`/`name` you pass to `flow_write`). Every step needs a unique `id` **and an explicit `type:`** — the parser does not infer type and rejects any step that omits it. Steps run as a DAG: order is driven by `blockedBy` plus decision/`on_error` routing; on success a step falls through to the next step in file order.
 
 ### Step types
 
@@ -284,7 +284,7 @@ Expanded in `task`, `inputs` values, and `question`. Not validated — a typo si
 
 - `${{task}}` — the user task.
 - `${{input.NAME}}` — input wired into this step.
-- `${{result.STEP_ID.status|summary|fullOutput|OUTPUTNAME}}` — `STEP_ID` is the step `id`, not the agent name. (The standard fields are `status`, `summary`, `fullOutput`; everything else is a declared output. There are no `artifacts`/`files` fields.)
+- `${{result.STEP_ID.status|summary|fullOutput|OUTPUTNAME}}` — `STEP_ID` is the step `id`, not the agent name. Standard fields: `status`, `summary`, `fullOutput`; everything else is a declared output.
 - `${{flow.input.NAME}}` — a typed flow-level input (see **Typed data** below).
 - `${{loop.STEP_ID.iteration|max}}` — loop counters (1-based iteration; `max` = the node's `max_iterations`).
 
@@ -294,8 +294,7 @@ Wire data between steps via `inputs:` (producer declares `outputs`; the consumin
 
 - **Outputs are stored as real JSON types** (string/number/boolean/object/array/null) — not stringified.
 - **Whole-value reference → typed delivery.** When a code-node input value is *exactly* `${{result.X.NAME}}` or `${{flow.input.NAME}}` (no surrounding text), the handler receives that value **unchanged** (object/array/etc.). Embedded in other text, it is interpolated as **compact JSON** (JIT serialization); the same JIT rule applies inside agent prompts/tasks. Strings pass through verbatim.
-- **Typed flow inputs.** A flow may declare `inputs:` in its frontmatter — a map of `NAME: { type: string|number|boolean|object|array, required?: true }`. A run started with a structured inputs object is validated against it (missing `required` / wrong type fails the run); values are referenceable as `${{flow.input.NAME}}`. The single-`task` start path is unchanged.
-- **Flow completion signal.** On completion the flow appends one message `[flow] <name> <status>: <summary>` (status = `success` | `error` | `aborted`) that both persists the run for `/resume` and reports the outcome. Flows do **not** shut down their session (there is no `auto_end` key); ending an automation run is the host/automation layer's job.
+- **Typed flow inputs.** A flow may declare `inputs:` in its frontmatter — a map of `NAME: { type: string|number|boolean|object|array, required?: true }`. A run started with a structured inputs object is validated against it (missing `required` / wrong type fails the run); values are referenceable as `${{flow.input.NAME}}`.
 - **File-backed data is passed as a path, not injected.** There is no `file://` injection. Pass a path (typically a `*_path` output) and have the consumer read it: an agent via its `read` tool (give it `read` + an `access.read` glob — a `*_path` input wired into an agent without `read` is a validation **warning**), a code node via the filesystem.
 
 ## Code handlers
@@ -374,8 +373,7 @@ Both writing tools validate before writing. On failure they return `{ written: f
 - **Missing required field** (`name`, `description`, `model`, `tools` for agents; `name`, `description` for flows) → add it.
 - **"Agent not in catalog"** → the flow references an agent that does not exist. Create it with `flow_agents` `op: write`, then retry `flow_write`.
 - **Unwired declared input** → add the missing key to the step's `inputs:` block.
-- **Bad reference / routing target** → every `blockedBy`, `branches` target, and `on_error` must point at an existing step `id`; fix the typo. Declaring `on_complete` is now a validation error (removed).
-- **`on_complete` used** → removed. Delete it (success falls through to the next step); to skip forward, use a `fork`/`code-decision`; to prove a `${{result.X}}` ordering, add `blockedBy: [X]`.
+- **Bad reference / routing target** → every `blockedBy`, `branches` target, and `on_error` must point at an existing step `id`; fix the typo.
 - **Decision node with <2 branches**, or a backward branch with no `max_iterations` → add the missing branch / `max_iterations`.
 - **Reserved output `branch`** declared as a data output on a `code-decision` → remove it from `outputs` (it is the routing key).
 - **Unknown tool in `tools:`** → use a valid tool name (see the standard list above) or an extension-registered tool name.
