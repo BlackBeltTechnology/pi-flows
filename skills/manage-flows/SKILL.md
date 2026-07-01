@@ -31,7 +31,6 @@ Produce a **valid, robust, minimal** flow (plus any agents it needs) that the en
 
 ## DON'T
 
-- **DON'T** use removed step types — there is **no `flow-ref`, `conditional`, or `agent-loop-decision`**. Use `code`/`code-decision`/`agent-decision` (see Step types).
 - **DON'T** leave a fallible step without `on_error` unless halting the flow is genuinely intended.
 - **DON'T** trust a single pass — always add a verify step.
 - **DON'T** repurpose infrastructure agents (`flow-decision`, `project-context-reader`) for unrelated work.
@@ -212,7 +211,7 @@ steps:
 
 ### Step types
 
-There are five: **agent · fork · agent-decision · code · code-decision**. (There is no `flow-ref`, `conditional`, or `agent-loop-decision` — presence checks and loops are expressed with the decision nodes below.)
+There are five: **agent · fork · agent-decision · code · code-decision**. Presence checks and loops are expressed with the decision nodes below.
 
 1. **agent** — dispatch an agent.
    ```yaml
