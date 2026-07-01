@@ -36,6 +36,17 @@ The system SHALL end the parent session only when the completed flow's `auto_end
 - **WHEN** a flow without `auto_end` completes successfully in a non-interactive session
 - **THEN** the parent session remains open
 
+### Requirement: Flow result reports success status
+On successful completion the flow result SHALL carry `status: "success"`, and on user cancellation it SHALL carry `status: "aborted"`. This is the precondition the terminal-status gate depends on; success MUST NOT be represented only by the absence of a status.
+
+#### Scenario: Successful flow sets status success
+- **WHEN** a flow completes with all steps succeeding
+- **THEN** the returned flow result has `status: "success"`
+
+#### Scenario: Cancelled flow sets status aborted
+- **WHEN** a flow is cancelled by the user
+- **THEN** the returned flow result has `status: "aborted"`
+
 ### Requirement: Terminal-status filter (success only)
 When the flow and non-interactive conditions are satisfied, the system SHALL trigger shutdown only for a flow whose terminal `status` is `success`. A `status` of `aborted` MUST NOT trigger shutdown. A `status` of `error` MUST NOT trigger shutdown by default.
 

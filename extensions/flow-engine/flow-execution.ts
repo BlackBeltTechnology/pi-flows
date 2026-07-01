@@ -273,6 +273,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
       flowName: flow.name,
       stepCount: Object.keys(ctx.results).length,
       totalDuration: Date.now() - startTime,
+      status: "aborted",
     };
   }
 
@@ -304,6 +305,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     flowName: flow.name,
     stepCount: Object.keys(ctx.results).length,
     totalDuration: Date.now() - startTime,
+    status: "success",
   };
 }
 
