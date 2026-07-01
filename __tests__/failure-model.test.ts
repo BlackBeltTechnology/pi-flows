@@ -109,7 +109,7 @@ function mk(partial: Partial<AgentResult>): AgentResult {
 }
 
 describe("resolveRouteOutcome", () => {
-  it("success routes on_complete (outcome=success)", () => {
+  it("success falls through (outcome=success)", () => {
     expect(resolveRouteOutcome(mk({ success: true, outcome: "success" }), "park")).toBe("success");
   });
 

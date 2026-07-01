@@ -112,7 +112,6 @@ function buildFlowPreviewLines(flow: FlowConfig, width: number, theme: any): str
             lines.push(`     ${fg("dim", `input: ${key} ← ${truncate(val, inner - 15)}`)}`);
           }
         }
-        if (s.on_complete) lines.push(`     ${fg("dim", `→ on_complete: ${s.on_complete}`)}`);
         if (s.on_error) lines.push(`     ${fg("dim", `→ on_error: ${s.on_error}`)}`);
         break;
       }

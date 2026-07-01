@@ -27,7 +27,6 @@ steps:
     expect(step.inputs).toBeUndefined();
     expect(step.outputs).toBeUndefined();
     expect(step.blockedBy).toBeUndefined();
-    expect(step.on_complete).toBeUndefined();
     expect(step.on_error).toBeUndefined();
     expect(step.timeout).toBeUndefined();
   });
@@ -47,7 +46,6 @@ steps:
       - name: valid
       - name: nav_record
     blockedBy: [extract, validate]
-    on_complete: approve
     on_error: park
     timeout: 30000
 `;
@@ -62,7 +60,6 @@ steps:
     });
     expect(step.outputs).toEqual([{ name: "valid" }, { name: "nav_record" }]);
     expect(step.blockedBy).toEqual(["extract", "validate"]);
-    expect(step.on_complete).toBe("approve");
     expect(step.on_error).toBe("park");
     expect(step.timeout).toBe(30000);
   });

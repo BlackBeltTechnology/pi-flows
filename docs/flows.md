@@ -89,7 +89,6 @@ steps:
     blockedBy: [step-a, step-b]
     inputs:
       input_name: "${{result.step-a.summary}}"
-    on_complete: next-step
     on_error: error-handler
 ```
 
@@ -103,8 +102,9 @@ steps:
 | `task` | Task override (template string). If omitted, uses the flow's task |
 | `blockedBy` | Array of step IDs that must complete before this step starts |
 | `inputs` | Named inputs wired from template expressions |
-| `on_complete` | Step ID to route to on success |
 | `on_error` | Step ID to route to on error |
+
+> On success a step **falls through** to the next step in file order — there is no success-routing field. To order a later step after this one use `blockedBy`; to select a forward path (including skipping steps) use a `fork` or `code-decision` node.
 
 **Example — parallel research with fan-in:**
 
@@ -239,7 +239,7 @@ export default async function (
 
 | Condition | Outcome |
 |-----------|---------|
-| Fewer than 2 `branches` | Validation error — use a plain `code` step with `on_complete` instead. |
+| Fewer than 2 `branches` | Validation error — use a plain `code` step instead. |
 | `branch` declared in `outputs:` | Validation error — `branch` is reserved. |
 | Handler return omits `branch` | Soft failure naming the reserved `branch` output. |
 | Returned `branch` not in `branches:` | **Hard** failure — halts the flow (consistent with `agent-decision`). |
@@ -351,7 +351,6 @@ Execute a TypeScript handler function in-process. Code steps run deterministic, 
       - name: valid
       - name: nav_record
     blockedBy: [extract]
-    on_complete: approve
     on_error: park
 ```
 
@@ -365,7 +364,6 @@ Execute a TypeScript handler function in-process. Code steps run deterministic, 
 | `outputs` | | List of `{ name }` objects declaring which keys the handler must return. Names must be valid JS identifiers and unique within the step. |
 | `target` | | Override the handler file path. When set, the step imports that file directly and no `.ts.default` scaffold is generated. |
 | `blockedBy` | | Array of step IDs that must complete before this step runs. |
-| `on_complete` | | Step ID to route to on success. |
 | `on_error` | | Step ID to route to on recoverable failure. |
 | `timeout` | | Soft deadline in milliseconds. On expiry the engine aborts `ctx.signal` and the step soft-fails. |
 
@@ -416,14 +414,14 @@ Every node in a flow resolves to exactly **one** of three outcomes. The outcome 
 
 | Outcome | Meaning | Routing |
 |---------|---------|---------|
-| `success` | The node completed its work | Routes to the node's `on_complete` |
+| `success` | The node completed its work | Falls through to the next step in file order |
 | `soft` | A recoverable failure — the node ran but reported a logical problem | Routes to the node's `on_error` |
 | `hard` | An unrecoverable failure | Aborts in-flight parallel steps, skips all pending steps, and ends the flow with status `error`, surfacing the failure message |
 
 ```mermaid
 flowchart TD
   N[Node runs] --> O{Outcome?}
-  O -->|success| C[on_complete]
+  O -->|success| C[Fall through to next step]
   O -->|soft| E{on_error declared?}
   E -->|yes| H[on_error]
   E -->|no| HF[Hard-fail the flow]
@@ -436,6 +434,11 @@ flowchart TD
 A soft-eligible failure routes to `on_error` **when the node declares one**. A soft-eligible failure on a node with **no `on_error` hard-fails the flow**. This is fail-fast by default: if you do not handle a recoverable failure, the flow stops rather than silently continuing.
 
 > **⚠️ Breaking behavioral change.** Previously, a failure on a node with no `on_error` silently continued. It now **hard-fails the flow**. Flows that relied on silent continuation must add an explicit `on_error` target to the affected node.
+
+> **⚠️ Breaking change — `on_complete` removed.** The `on_complete` field no longer exists on `agent` or `code` steps; declaring it is now a **validation error**. Success falls through to the next step in file order. Migrate:
+> - `on_complete: X` where `X` is simply the next step → **delete the line** (fall-through is identical).
+> - `on_complete: X` that skips past intervening steps → replace with a `code-decision` or `fork` node that selects the forward path.
+> - A `${{result.X}}` reference that relied on an `on_complete` chain for ordering → add `blockedBy: [X]`.
 
 ### How agent failures are classified
 
@@ -507,7 +510,7 @@ Three rules are enforced:
 
 A `.field` that is neither a declared output nor a standard field is an error.
 
-**3. The referenced step must be ordered before the referencing step.** `${{result.X}}` is only valid if `X` is **guaranteed to complete first**. That guarantee holds when `X` is a transitive `blockedBy` ancestor of the referencing step, **or** when `X` routes into the referencing step through an `on_complete` / `on_error` / branch / loop edge chain. If neither path exists, it is an error.
+**3. The referenced step must be ordered before the referencing step.** `${{result.X}}` is only valid if `X` is **guaranteed to complete first**. That guarantee holds when `X` is a transitive `blockedBy` ancestor of the referencing step, **or** when `X` routes into the referencing step through an `on_error` / branch / loop edge chain. If neither path exists, it is an error.
 
 > **The engine does not auto-add the dependency.** When ordering fails, you must add `blockedBy: [X]` (or a routing edge) yourself. pi-flows reports the missing ordering as an error; it never silently wires it for you.
 

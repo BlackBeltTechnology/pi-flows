@@ -3,7 +3,7 @@
 //
 // One failure model for every node type. A node resolves to exactly one of
 // success | soft | hard:
-//   - success : routes on_complete
+//   - success : falls through to the next step in file order
 //   - soft    : routes on_error, or hard-fails the flow when on_error is unset
 //   - hard    : aborts in-flight siblings, skips pending steps, ends the flow
 //               with status `error`

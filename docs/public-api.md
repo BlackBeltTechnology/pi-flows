@@ -123,7 +123,6 @@ interface AgentStep {
   reads?:      string[];
   inputs?:     Record<string, string>;   // key → template expression
   blockedBy?:  string[];
-  on_complete?: string;
   on_error?:   string;
 }
 
@@ -155,7 +154,6 @@ interface CodeStep {
   outputs?:    Array<{ name: string }>;  // declared output names
   target?:     string;                    // overrides handler file path
   blockedBy?:  string[];
-  on_complete?: string;
   on_error?:   string;
   timeout?:    number;                    // soft deadline — milliseconds
 }
@@ -220,7 +218,7 @@ The three terminal outcomes a node can resolve to.
 type FailureOutcome = "success" | "soft" | "hard";
 ```
 
-- `success` — routes to the node's `on_complete`.
+- `success` — falls through to the next step in file order.
 - `soft` — recoverable; routes to `on_error`, or hard-fails the flow if no `on_error` is declared.
 - `hard` — unrecoverable; aborts in-flight steps, skips pending steps, and ends the flow with status `error`.
 

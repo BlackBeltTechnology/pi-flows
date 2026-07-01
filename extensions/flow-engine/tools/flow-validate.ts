@@ -305,8 +305,8 @@ export function validateFlowContent(
   // Covers both `code` and `code-decision` (which shares the handler shape).
   for (const step of flow.steps) {
     if (step.stepType !== "code" && step.stepType !== "code-decision") continue;
-    // Both share the handler shape (id/inputs/outputs/blockedBy). on_complete/
-    // on_error only exist on `code`; reading them on a code-decision is undefined.
+    // Both share the handler shape (id/inputs/outputs/blockedBy). on_error
+    // only exists on `code`; reading it on a code-decision is undefined.
     const s = step as CodeStep;
 
     // code-decision: the reserved `branch` routing key must not be a data output.
@@ -382,16 +382,6 @@ export function validateFlowContent(
       }
     }
 
-    // on_complete reference
-    if (s.on_complete && !stepIds.has(s.on_complete)) {
-      diagnostics.push({
-        line: stepPropLine(idx, s.id, "on_complete"),
-        severity: "error",
-        message: `on_complete references unknown step ID "${s.on_complete}"`,
-        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
-      });
-    }
-
     // on_error reference
     if (s.on_error && !stepIds.has(s.on_error)) {
       diagnostics.push({
@@ -418,6 +408,19 @@ export function validateFlowContent(
         });
       }
     }
+  }
+
+  // 4c-2. `on_complete` was removed: declaring it on any step is a migration
+  // error. The parser drops the key, so detect it from the raw YAML line index.
+  for (const step of flow.steps) {
+    const ocLine = idx.steps.get(step.id)?.props["on_complete"];
+    if (!ocLine) continue;
+    diagnostics.push({
+      line: ocLine,
+      severity: "error",
+      message: `"on_complete" was removed. Success no longer routes — a node that succeeds falls through to the next step in file order.`,
+      suggestion: `Order steps with "blockedBy", or use a fork/code-decision node to select a forward path.`,
+    });
   }
 
   // 4d. DAG cycle detection
@@ -575,7 +578,7 @@ export function validateFlowContent(
         line: stepPropLine(idx, s.id, "branches") || stepLine(idx, s.id),
         severity: "error",
         message: `${label} "${s.id}" declares ${branchEntries.length} branch(es); a decision needs at least 2`,
-        suggestion: "Add more branches, or use a plain code/agent node with on_complete for a single forward edge",
+        suggestion: "Add more branches, or use a plain code/agent node ordered with blockedBy for a single forward edge",
       });
     }
 
@@ -760,7 +763,7 @@ export function validateFlowContent(
 /**
  * Compute, for each step, the set of step IDs guaranteed to complete before it
  * ("happens-before"). Edges come from `blockedBy` (dep → step) AND routing
- * (`on_complete`/`on_error`/fork+decision branches/loop targets: source → target).
+ * (`on_error`/fork+decision branches/loop targets: source → target).
  * A reference `${{result.X}}` in step S is valid only when X is in orderedBefore[S].
  */
 function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
@@ -776,8 +779,6 @@ function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
     const blockedBy = (step as { blockedBy?: string[] }).blockedBy;
     if (blockedBy) for (const dep of blockedBy) addEdge(dep, step.id);
 
-    const onComplete = (step as { on_complete?: string }).on_complete;
-    if (onComplete) addEdge(step.id, onComplete);
     const onError = (step as { on_error?: string }).on_error;
     if (onError) addEdge(step.id, onError);
 

@@ -579,6 +579,11 @@ export class EventEmitObserver implements FlowObserver {
       // (the agent-loop-decision type is removed); decision branches are sent so
       // consumers can detect loops topologically.
       branches: (step as any).branches,
+      // Error routing target so external graph renderers can draw `route` edges
+      // for flows wired via on_error rather than blockedBy (e.g. a step declared
+      // before any decision node would otherwise appear orphaned).
+      // See change: fix-flow-ui-graph-zoom-summary.
+      onError: (step as any).on_error,
     }));
     this.emit("flow:flow-started", {
       flowName,

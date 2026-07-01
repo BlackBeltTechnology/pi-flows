@@ -163,14 +163,14 @@ steps:
     expect(errs(yaml, catalog(agent("my-agent")))).toHaveLength(0);
   });
 
-  it("accepts a reference satisfied by on_complete routing without blockedBy", () => {
+  it("accepts a reference satisfied by on_error routing without blockedBy", () => {
     const yaml = `name: f
 description: d
 steps:
   - id: a
     type: agent
     agent: my-agent
-    on_complete: b
+    on_error: b
   - id: b
     type: agent
     agent: my-agent

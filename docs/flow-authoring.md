@@ -384,7 +384,7 @@ steps: [A, B, C, fork, D, E, agent-decision, F]
 
 - **DAG segments** — consecutive `agent` steps. Executed as a parallel wave, respecting `blockedBy` dependencies. All steps in a wave that have no unsatisfied `blockedBy` entries fire concurrently, up to `max_concurrent`.
 - **Separator steps** — `fork`, `agent-decision`, `code-decision`. Execute one at a time and control routing.
-- **Cross-segment routing** — `on_complete` and `on_error` on agent steps can jump to any step ID, including steps in different segments.
+- **Cross-segment routing** — `on_error` on agent steps can jump to any step ID, including steps in different segments. On success a step falls through to the next step in file order; forward path selection (including skipping steps) is expressed with a `fork` or `code-decision` node.
 
 ---
 
@@ -420,7 +420,6 @@ The primary step type. Dispatches a named agent with an optional task and inputs
   blockedBy: [project-context]
   inputs:
     project_context: ${{result.project-context.summary}}
-  on_complete: reviewer   # optional — route to step on success
   on_error: error-handler  # optional — route to step on error
   output: research.md      # optional — output file hint
 ```
@@ -432,9 +431,12 @@ The primary step type. Dispatches a named agent with an optional task and inputs
 | `task` | No | Task override. Template string. If omitted, agent uses its default system prompt with `${{task}}` expanded. |
 | `blockedBy` | No | Array of step IDs that must complete before this step runs. Enforces DAG ordering. |
 | `inputs` | No | Named inputs wired from template expressions. Each key becomes `${{input.KEY}}` in the agent's prompt. |
-| `on_complete` | No | Step ID to route to on success. Causes a cross-segment jump. |
 | `on_error` | No | Step ID to route to on error. |
 | `output` | No | Output file path hint. |
+
+> On success a step **falls through** to the next step in file order — there is no success-routing field. Order a later step after this one with `blockedBy`; select a forward path (including skipping steps) with a `fork` or `code-decision` node.
+
+> **⚠️ Breaking change — `on_complete` removed.** `on_complete` no longer exists on `agent` or `code` steps; declaring it is a **validation error**. Migrate: `on_complete: X` where `X` is simply the next step → **delete the line**; `on_complete: X` that skips past intervening steps → use a `code-decision`/`fork` node to select the forward path; a `${{result.X}}` reference that relied on an `on_complete` chain for ordering → add `blockedBy: [X]`.
 
 **Same agent, multiple steps:** Give each step a unique `id`. The agent name can repeat.
 
@@ -546,7 +548,7 @@ export default async function (
 
 | Condition | Outcome |
 |-----------|---------|
-| Fewer than 2 `branches` | Validation error — use a plain `code` step with `on_complete`. |
+| Fewer than 2 `branches` | Validation error — use a plain `code` step. |
 | `branch` declared in `outputs:` | Validation error — `branch` is reserved. |
 | Handler return omits `branch` | Soft failure naming the reserved `branch` output. |
 | Returned `branch` not in `branches:` | **Hard** failure — halts the flow (consistent with `agent-decision`). |
@@ -622,7 +624,8 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
   task: Fix the failing tests identified by the verifier.
   inputs:
     test_output: ${{result.verify.summary}}
-  on_complete: verify    # jump back to verify after fix
+  # the loop's backward edge is driven by the `should-fix` decision branch,
+  # not by success routing — success falls through to the next step in file order
 
 - id: done
   agent: summarizer
@@ -650,7 +653,6 @@ Run a TypeScript handler function in-process. Use for deterministic logic that d
     - name: valid
     - name: nav_record
   blockedBy: [extract]
-  on_complete: approve
   on_error: park
   timeout: 5000          # optional soft deadline in ms
 ```
@@ -663,7 +665,6 @@ Run a TypeScript handler function in-process. Use for deterministic logic that d
 | `outputs` | No | List of `{ name }` objects. Each name must be a valid JS identifier, unique within the step. The handler return object must contain exactly these keys. |
 | `target` | No | Override the handler file path. Skips scaffold generation; the author owns the file. |
 | `blockedBy` | No | Step IDs that must complete before this step runs. |
-| `on_complete` | No | Step ID to route to on success. |
 | `on_error` | No | Step ID to route to on soft failure. |
 | `timeout` | No | Soft deadline in milliseconds. When exceeded the engine aborts `ctx.signal` and the step soft-fails. |
 

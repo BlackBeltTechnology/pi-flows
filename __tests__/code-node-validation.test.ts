@@ -23,7 +23,6 @@ steps:
       - name: valid
       - name: nav_record
     blockedBy: [extract]
-    on_complete: approve
     on_error: park
   - id: extract
     type: agent
@@ -242,22 +241,18 @@ steps:
     expect(refErrors.length).toBeGreaterThan(0);
   });
 
-  // ─── on_error and on_complete reference validation ──────────────────
+  // ─── on_error reference validation; on_complete removal ─────────────
 
-  it("accepts on_error and on_complete references to existing steps", () => {
+  it("accepts on_error references to existing steps", () => {
     const yaml = `name: test-flow
 description: Test flow
 steps:
   - id: code-step
     type: code
     on_error: error-handler
-    on_complete: next-step
   - id: error-handler
     type: agent
     agent: handler-agent
-  - id: next-step
-    type: agent
-    agent: next-agent
 `;
     const result = validateFlowContent(yaml);
     const codeErrors = result.diagnostics.filter(d => d.severity === "error");
@@ -277,16 +272,18 @@ steps:
     expect(refErrors.length).toBeGreaterThan(0);
   });
 
-  it("rejects on_complete reference to non-existent step", () => {
+  it("rejects any step declaring on_complete (removed field)", () => {
     const yaml = `name: test-flow
 description: Test flow
 steps:
   - id: code-step
     type: code
-    on_complete: nonexistent
+    on_complete: next-step
+  - id: next-step
+    type: code
 `;
     const result = validateFlowContent(yaml);
-    const refErrors = result.diagnostics.filter(d => d.message.includes("on_complete") && d.message.includes("unknown"));
-    expect(refErrors.length).toBeGreaterThan(0);
+    const removed = result.diagnostics.filter(d => d.message.includes("on_complete") && /remov/i.test(d.message));
+    expect(removed.length).toBeGreaterThan(0);
   });
 });

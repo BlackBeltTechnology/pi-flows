@@ -170,7 +170,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
         // A node hard-failed (or soft-failed with no on_error): halt the flow.
         if (ctx.hardFail) break;
 
-        // Handle routing from on_complete / on_error within the DAG
+        // Handle routing from on_error within the DAG (success falls through)
         if (dagResult.routeToStepId) {
           const targetIdx = findSegmentIndex(segments, dagResult.routeToStepId);
           if (targetIdx >= 0) {
@@ -495,8 +495,8 @@ async function runDagSegment(
         lastResult = result;
         storeResult(ctx, step.id, result);
 
-        // Outcome-aware routing (node-failure-model): success -> on_complete,
-        // soft -> on_error, hard / soft-without-on_error -> halt the flow.
+        // Outcome-aware routing (node-failure-model): success -> fall through
+        // (no routing), soft -> on_error, hard / soft-without-on_error -> halt.
         const outcome = resolveRouteOutcome(result, step.on_error);
         if (outcome === "hard") {
           ctx.hardFail = result.failureInfo
@@ -504,7 +504,7 @@ async function runDagSegment(
           ctx.requestHalt?.();
           return { lastResult };
         }
-        const routeTarget = outcome === "success" ? step.on_complete : step.on_error;
+        const routeTarget = outcome === "soft" ? step.on_error : undefined;
         if (routeTarget) {
           const targetInSegment = steps.some(s => s.id === routeTarget);
           if (targetInSegment) {
@@ -606,17 +606,17 @@ async function executeAgentStepWithRouting(step: AgentStep, ctx: FlowContext, op
   const result = await executeAgentStep(step, ctx, options);
   if (!result) return {};
 
-  // Outcome-aware routing: success -> on_complete, soft -> on_error.
+  // Outcome-aware routing: success -> fall through (no routing), soft -> on_error.
   // hard (or soft-without-on_error) leaves nextStepId undefined; the main loop
   // detects result.outcome === "hard" and halts the flow.
   const outcome = resolveRouteOutcome(result, step.on_error);
-  const nextStepId = outcome === "success" ? step.on_complete : outcome === "soft" ? step.on_error : undefined;
+  const nextStepId = outcome === "soft" ? step.on_error : undefined;
   return { agentResult: result, nextStepId };
 }
 
 async function executeCodeStepWithRouting(step: CodeStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   const result = await executeCodeStep(step, ctx, options, options.flow.name, options.flow.source);
-  // Outcome-aware routing: success -> on_complete, soft -> on_error.
+  // Outcome-aware routing: success -> fall through (no routing), soft -> on_error.
   // A `hard` outcome (FlowHardError) or a soft failure with no on_error escalates
   // to a flow halt. Code nodes run as separator steps, so the runFlow separator
   // branch halts on `agentResult.outcome === "hard"`: stamp that here on escalation.
@@ -630,7 +630,7 @@ async function executeCodeStepWithRouting(step: CodeStep, ctx: FlowContext, opti
     };
     return { agentResult: result, nextStepId: undefined };
   }
-  const nextStepId = outcome === "success" ? step.on_complete : step.on_error;
+  const nextStepId = outcome === "soft" ? step.on_error : undefined;
   return { agentResult: result, nextStepId };
 }
 

@@ -45,7 +45,7 @@ Understand the runtime before authoring — the YAML you write is a **DAG of ste
 - **Segments & parallelism.** The engine splits steps into segments. A contiguous run of plain `agent` steps executes as a **parallel DAG**: on each wave it dispatches every step whose `blockedBy` is satisfied, up to `max_concurrent` (default 4). Every non-agent node (`fork`, `agent-decision`, `code`, `code-decision`) runs as a **sequential** step between those DAG segments. So independent agents run concurrently; decisions and code nodes are serialization points.
 - **Agent isolation.** Each agent runs in its own session with only its declared `tools` + `finish`, its `access` globs, and its own resolved model. It cannot see other agents' state. It **must** call `finish(...)` to return a structured result; the engine retries a couple of times if it forgets, then records a soft failure.
 - **Forward-only data flow.** There is no shared mutable state. A step reads upstream results through wired `inputs:` and `${{result.STEP.field}}` templates. A producer must run *before* a consumer (via `blockedBy` or routing) — the validator enforces this ordering.
-- **Routing on outcome.** Every node resolves to `success` → `on_complete`, `soft` → `on_error`, or `hard` → halt the whole flow. Decision nodes additionally pick a `branch`. A branch target that points at an **earlier** step is a loop (bounded by `max_iterations`).
+- **Routing on outcome.** Every node resolves to `success` → fall through to the next step in file order, `soft` → `on_error`, or `hard` → halt the whole flow. Decision nodes additionally pick a `branch`. A branch target that points at an **earlier** step is a loop (bounded by `max_iterations`). There is no success-routing field — order steps with `blockedBy`, select forward paths with a `fork`/`code-decision`.
 - **Determinism boundary.** `agent` nodes are non-deterministic (an LLM decides); `code`/`code-decision` nodes are deterministic TypeScript. Put judgment in agents, mechanics in code.
 
 ## Editing an existing flow vs creating a new one
@@ -208,7 +208,7 @@ steps:
     task: Review ${{task}}
 ```
 
-`name` is the frontmatter name; the command name comes from the on-disk location (`namespace`/`name` you pass to `flow_write`). Every step needs a unique `id` **and an explicit `type:`** — the parser does not infer type and rejects any step that omits it. Steps run as a DAG: order is driven by `blockedBy` plus decision/`on_complete`/`on_error` routing.
+`name` is the frontmatter name; the command name comes from the on-disk location (`namespace`/`name` you pass to `flow_write`). Every step needs a unique `id` **and an explicit `type:`** — the parser does not infer type and rejects any step that omits it. Steps run as a DAG: order is driven by `blockedBy` plus decision/`on_error` routing (success falls through to the next step; there is no `on_complete`).
 
 ### Step types
 
@@ -222,8 +222,7 @@ There are five: **agent · fork · agent-decision · code · code-decision**. (T
      blockedBy: [research]
      inputs:
        ctx: ${{result.research.summary}}
-     on_complete: verify     # optional cross-segment jump
-     on_error: handler        # optional
+     on_error: handler        # optional — soft-failure routing
    ```
 2. **fork** — user (or `agent:` in autonomous mode) picks a branch.
    ```yaml
@@ -245,7 +244,7 @@ There are five: **agent · fork · agent-decision · code · code-decision**. (T
      task: "Iter ${{loop.should-fix.iteration}}/${{loop.should-fix.max}}. ${{result.verify.summary}}"
      branches:
        fix: fixer            # backward target (an earlier step) → loops
-       done: finalize         # forward target → exits
+       done: finalize         # forward target → selects the exit path
      max_iterations: 3        # REQUIRED when any branch points backward
    ```
    A branch whose target is an **earlier** step re-enters that step (a loop) and MUST declare `max_iterations`; the engine forces exit at the cap.
@@ -260,8 +259,7 @@ There are five: **agent · fork · agent-decision · code · code-decision**. (T
        - name: nav_record
      timeout: 30000          # optional soft deadline (ms)
      blockedBy: [extract]
-     on_complete: report
-     on_error: handler
+     on_error: handler        # optional — soft-failure routing
      # target: path/to/handler.ts   # optional; default path is convention-based
    ```
    See **Code handlers**.
@@ -280,7 +278,7 @@ There are five: **agent · fork · agent-decision · code · code-decision**. (T
 
 ### Failure model (all nodes)
 
-Every node resolves to `success`, `soft`, or `hard`. `success` routes `on_complete`; `soft` routes `on_error`; `hard` aborts in-flight steps, skips pending ones, and ends the flow with status `error`. For agents this is classified structurally: `finish(complete)` → success, `finish(error|blocked)` → soft, no-finish with a terminal API error → hard. For code: a plain `throw` (or contract/coercion/missing-handler/timeout failure) is **soft**; `throw new FlowHardError(msg)` is **hard**.
+Every node resolves to `success`, `soft`, or `hard`. `success` falls through to the next step in file order; `soft` routes `on_error`; `hard` aborts in-flight steps, skips pending ones, and ends the flow with status `error`. For agents this is classified structurally: `finish(complete)` → success, `finish(error|blocked)` → soft, no-finish with a terminal API error → hard. For code: a plain `throw` (or contract/coercion/missing-handler/timeout failure) is **soft**; `throw new FlowHardError(msg)` is **hard**.
 
 ### Template variables
 
@@ -378,7 +376,8 @@ Both writing tools validate before writing. On failure they return `{ written: f
 - **Missing required field** (`name`, `description`, `model`, `tools` for agents; `name`, `description` for flows) → add it.
 - **"Agent not in catalog"** → the flow references an agent that does not exist. Create it with `flow_agents` `op: write`, then retry `flow_write`.
 - **Unwired declared input** → add the missing key to the step's `inputs:` block.
-- **Bad reference / routing target** → every `blockedBy`, `branches` target, `on_complete`, and `on_error` must point at an existing step `id`; fix the typo.
+- **Bad reference / routing target** → every `blockedBy`, `branches` target, and `on_error` must point at an existing step `id`; fix the typo. Declaring `on_complete` is now a validation error (removed).
+- **`on_complete` used** → removed. Delete it (success falls through to the next step); to skip forward, use a `fork`/`code-decision`; to prove a `${{result.X}}` ordering, add `blockedBy: [X]`.
 - **Decision node with <2 branches**, or a backward branch with no `max_iterations` → add the missing branch / `max_iterations`.
 - **Reserved output `branch`** declared as a data output on a `code-decision` → remove it from `outputs` (it is the routing key).
 - **Unknown tool in `tools:`** → use a valid tool name (see the standard list above) or an extension-registered tool name.

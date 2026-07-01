@@ -9,7 +9,7 @@
 /**
  * The outcome of a single node execution.
  *
- * - `success` — node completed; routes to its `on_complete`.
+ * - `success` — node completed; falls through to the next step in file order.
  * - `soft`    — recoverable failure; routes to its `on_error`, or hard-fails
  *               the flow when no `on_error` is declared.
  * - `hard`    — unrecoverable failure; aborts in-flight parallel steps, skips
@@ -161,8 +161,7 @@ export interface AgentStep {
   output?: string; // Output file
   inputs?: Record<string, string>; // Named inputs wired from template expressions
   blockedBy?: string[]; // Step IDs that must complete before this step runs
-  on_complete?: string; // Route to step ID on success
-  on_error?: string; // Route to step ID on error
+  on_error?: string; // Route to step ID on error (soft failure)
 }
 
 export interface ForkStep {
@@ -193,8 +192,7 @@ export interface CodeStep {
   inputs?: Record<string, string>; // Named inputs wired from template expressions
   outputs?: Array<{ name: string }>; // Declared output names (strings only)
   blockedBy?: string[]; // Step IDs that must complete before this step runs
-  on_complete?: string; // Route to step ID on success
-  on_error?: string; // Route to step ID on error
+  on_error?: string; // Route to step ID on error (soft failure)
   timeout?: number; // Optional soft timeout in milliseconds
 }
 

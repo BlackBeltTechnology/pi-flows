@@ -112,11 +112,11 @@ describe("missing handler routes on_error, implemented handler succeeds (7.2)", 
     expect(resolveRouteOutcome(result, missingStep.on_error)).toBe("soft");
   });
 
-  it("implemented handler -> success routes on_complete", async () => {
+  it("implemented handler -> success (falls through)", async () => {
     const handlerPath = tempHandler(`
 export default async function handler(input, ctx) { return { valid: "true" }; }
 `);
-    const step: CodeStep = { stepType: "code", id: "validate", target: handlerPath, outputs: [{ name: "valid" }], on_error: "park", on_complete: "approve" };
+    const step: CodeStep = { stepType: "code", id: "validate", target: handlerPath, outputs: [{ name: "valid" }], on_error: "park" };
     const result = await executeCodeStep(step, makeCtx(), { cwd: tmpdir() }, "research", "");
     expect(result.success).toBe(true);
     expect(result.outcome).toBe("success");
