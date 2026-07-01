@@ -103,9 +103,32 @@ export function registerFlowAgentsTool(
           });
         }
 
+        // Structured, flat, display-friendly catalog for consumers that
+        // line-truncate the text payload (e.g. dashboard tool cards). Rides
+        // the non-truncated `details` channel; `content[0].text` is unchanged
+        // (model channel). See change: flow-agents-list-details.
+        const detailsAgents = catalog.map((a) => {
+          const tools = a.tools as string[] | undefined;
+          const inputs = a.inputs as string[] | undefined;
+          const outputs = a.outputs as Array<{ name?: string }> | undefined;
+          const architect = a.architect as { use_when?: string } | undefined;
+          return {
+            name: a.name,
+            description: a.description,
+            source_type: a.source_type,
+            ...(a.source_path ? { source_path: a.source_path } : {}),
+            ...(tools && tools.length > 0 ? { tools } : {}),
+            ...(inputs && inputs.length > 0 ? { inputs } : {}),
+            ...(outputs && outputs.length > 0
+              ? { outputs: outputs.map((o) => o?.name).filter((n): n is string => typeof n === "string") }
+              : {}),
+            use_when: architect?.use_when ?? (a.description as string),
+          };
+        });
+
         return {
           content: [{ type: "text" as const, text: JSON.stringify(catalog, null, 2) }],
-          details: {},
+          details: { count: detailsAgents.length, agents: detailsAgents },
         };
       }
 

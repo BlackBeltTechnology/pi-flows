@@ -24,29 +24,24 @@ pi-flows SHALL ship a native pi skill at `skills/edit-flow/SKILL.md`, and `skill
 
 pi-flows SHALL expose exactly two authoring tools on the main session: `flow_agents` and `flow_write`. The former `agent_catalog`, `agent_write`, and the raw-path form of `flow_write` SHALL NOT be exposed as separate main-session tools. Both tools SHALL derive their write locations from the discovery convention and SHALL NOT accept a raw filesystem `path` parameter.
 
-#### Scenario: `flow_agents` lists and writes agents
+`flow_agents op:"list"` SHALL return the agent catalog in `content[0].text` (pretty-printed JSON, unchanged) AND SHALL populate the tool result `details` with a structured, non-truncated catalog: `{ count: <number>, agents: Array<{ name, description, source_type, source_path?, tools?, inputs?, outputs?, use_when }> }`. `count` SHALL equal the number of discovered agents. Each entry's `use_when` SHALL be `architect.use_when` when present, else the agent's `description`. `source_path` SHALL be present only for non-built-in agents. Absent optional fields SHALL be omitted from the entry.
 
+#### Scenario: `flow_agents` lists and writes agents
 - **WHEN** `flow_agents` is called with `op: "list"`
 - **THEN** it SHALL return the agent catalog (the data formerly returned by `agent_catalog`)
 - **WHEN** `flow_agents` is called with `op: "write"` and a valid agent definition
-- **THEN** it SHALL validate the content via `agent-validate.ts`
-- **AND** on success SHALL write to the discovered location `.pi/flows/agents/<name>.md`
-- **AND** SHALL NOT accept a raw `path` argument
+- **THEN** it SHALL write the agent to the discovery-derived location and trigger re-discovery
 
-#### Scenario: `flow_write` writes to a namespace-derived location
+#### Scenario: `op:"list"` populates a structured details catalog
+- **WHEN** `flow_agents` is called with `op: "list"` and N agents are discovered
+- **THEN** the tool result `details` SHALL be `{ count: N, agents: [...] }` with `agents.length === N`
+- **AND** each entry SHALL carry `name`, `description`, and `source_type`
+- **AND** the `content[0].text` JSON payload SHALL be unchanged from the prior behavior
 
-- **WHEN** `flow_write` is called with `namespace`, `name`, and `content`
-- **THEN** it SHALL validate the content via `flow-validate.ts`
-- **AND** on success SHALL write to `.pi/flows/flows/<namespace>/<name>/flow.yaml` (creating the flow directory)
-- **AND** the written flow SHALL auto-register as the `/<namespace>:<name>` command
-- **AND** when `namespace` is omitted it SHALL default to `custom`
-- **AND** writing to an existing `<namespace>/<name>/flow.yaml` SHALL overwrite it (edit), with no separate edit tool
-
-#### Scenario: Validation failure does not write
-
-- **WHEN** `flow_write` or `flow_agents` (op `write`) is called with content that fails validation
-- **THEN** no file SHALL be written
-- **AND** the tool SHALL return the validation diagnostics so the caller can self-correct
+#### Scenario: details entry flattens use_when and omits absent fields
+- **WHEN** an agent has no `architect` block
+- **THEN** its `details.agents` entry `use_when` SHALL equal the agent's `description`
+- **AND** a built-in agent's entry SHALL NOT include `source_path`
 
 ### Requirement: Authoring tools are gated by the `flows.editFlow` setting
 

@@ -50,6 +50,10 @@ async function call(tool: CapturedTool, params: unknown): Promise<any> {
   return JSON.parse(result.content[0].text);
 }
 
+async function callRaw(tool: CapturedTool, params: unknown): Promise<any> {
+  return await tool.execute("tc-1", params, undefined, undefined, {});
+}
+
 const VALID_AGENT = `---
 name: my-agent
 description: A test agent
@@ -93,6 +97,46 @@ describe("flow_agents — op: list", () => {
     expect(Array.isArray(out)).toBe(true);
     expect(out[0].name).toBe("alpha");
     expect(out[0].source_type).toBe("built-in");
+  });
+
+  it("populates a structured details catalog (count + agents)", async () => {
+    const { pi, tools } = mkPi();
+    const agents = new Map<string, AgentConfig>([
+      ["alpha", { name: "alpha", description: "A", model: "@coding", tools: ["read"] } as AgentConfig],
+      ["beta", { name: "beta", description: "B", model: "@coding", tools: ["read", "grep"], inputs: ["focus"] } as AgentConfig],
+    ]);
+    registerFlowAgentsTool(pi, () => agents, tmp, "/pkg", () => []);
+    const raw = await callRaw(tools.get("flow_agents")!, { op: "list" });
+    expect(raw.details.count).toBe(2);
+    expect(raw.details.agents).toHaveLength(2);
+    for (const e of raw.details.agents) {
+      expect(typeof e.name).toBe("string");
+      expect(typeof e.description).toBe("string");
+      expect(typeof e.source_type).toBe("string");
+    }
+  });
+
+  it("details entry flattens use_when and omits source_path for built-ins", async () => {
+    const { pi, tools } = mkPi();
+    const agents = new Map<string, AgentConfig>([
+      ["alpha", { name: "alpha", description: "desc-A", model: "@coding", tools: ["read"] } as AgentConfig],
+    ]);
+    registerFlowAgentsTool(pi, () => agents, tmp, "/pkg", () => []);
+    const raw = await callRaw(tools.get("flow_agents")!, { op: "list" });
+    const e = raw.details.agents[0];
+    expect(e.use_when).toBe("desc-A"); // no architect → falls back to description
+    expect(e.source_path).toBeUndefined(); // built-in → no source_path
+  });
+
+  it("text payload still parses to the catalog array (unchanged)", async () => {
+    const { pi, tools } = mkPi();
+    const agents = new Map<string, AgentConfig>([
+      ["alpha", { name: "alpha", description: "A", model: "@coding", tools: ["read"] } as AgentConfig],
+    ]);
+    registerFlowAgentsTool(pi, () => agents, tmp, "/pkg", () => []);
+    const out = await call(tools.get("flow_agents")!, { op: "list" });
+    expect(Array.isArray(out)).toBe(true);
+    expect(out[0].name).toBe("alpha");
   });
 });
 
