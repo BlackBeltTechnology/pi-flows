@@ -315,6 +315,7 @@ description: What this flow does # REQUIRED — shown in listings
 max_concurrent: 3                # optional — parallel agent cap (default: 4)
 task_required: true              # optional — prompt user for task if no args given
 task_prompt: "Enter your task:"  # optional — custom prompt text
+auto_end: true                   # optional — end non-interactive parent session on success (default: false)
 inputs:                          # optional — typed input schema (see below)
   ref:   { type: string, required: true }
   count: { type: number }
@@ -331,6 +332,7 @@ steps:
 | `max_concurrent` | No | `4` | Maximum number of agent steps running in parallel within a DAG segment. |
 | `task_required` | No | `false` | When `true`, prompts the user for a task description if the slash-command is invoked with no arguments. The answer becomes `${{task}}`. |
 | `task_prompt` | No | `"Describe what you want <name> to do:"` | Custom prompt text shown when `task_required` triggers. |
+| `auto_end` | No | `false` | When `true`, gracefully ends the parent pi session once the flow finishes with `success` — but only for non-interactive (headless) sessions. Interactive human sessions are never closed. See [Auto-end behavior](flows.md#auto-end-behavior) in `flows.md`. |
 | `inputs` | No | — | Optional typed input schema (see [Typed flow inputs](#typed-flow-inputs)). |
 
 ---

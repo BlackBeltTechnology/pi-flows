@@ -25,6 +25,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { FlowManager } from "./flow-manager.js";
+import { registerAutoEndListener } from "./auto-end.js";
 import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
 import { emitPromptAndAwait } from "./flow-prompt.js";
 import { TuiFlowObserver, EventEmitObserver, setupFlowTui, getIsOverlayOpen } from "./flow-tui.js";
@@ -128,6 +129,9 @@ export function activate(pi: ExtensionAPI) {
   // Captured on session_start; used by EventEmitObserver to append the
   // flow-completion marker that opens pi's persistence flush gate.
   let sessionManager: any = undefined;
+  // Auto-end wiring: interactivity + graceful shutdown captured on session_start.
+  let isInteractiveSession = false;
+  let sessionShutdown: (() => void) | undefined;
 
   // ── Helpers for FlowManager config ──
 
@@ -157,6 +161,14 @@ export function activate(pi: ExtensionAPI) {
   // ── Create FlowManager with headless adapter (upgraded on session_start if hasUI) ──
 
   const eventEmitObserver = new EventEmitObserver(pi, () => sessionManager);
+
+  // Auto-end: gracefully end a non-interactive session when an opted-in flow
+  // (auto_end: true) completes successfully. See auto-end.ts for the gate.
+  registerAutoEndListener(pi, {
+    getFlow: (name) => flows.get(name),
+    isInteractive: () => isInteractiveSession,
+    shutdown: () => sessionShutdown?.(),
+  });
 
   // Drive a flow run that was interrupted by parent-session close (or for which
   // abort arrives with no live flow) to a terminal state, so a replayed
@@ -205,6 +217,8 @@ export function activate(pi: ExtensionAPI) {
       // now (before any new flow can launch) so the replayed card clears.
       reconcileOrphanedFlow("session-close");
     }
+    isInteractiveSession = !!ctx.hasUI;
+    if (typeof ctx.shutdown === "function") sessionShutdown = () => ctx.shutdown();
     if (ctx.hasUI) {
       // Upgrade to TUI adapter
       flowManager.setIOAdapter(new TuiFlowIOAdapter(ctx.ui, getIsOverlayOpen, pi));
