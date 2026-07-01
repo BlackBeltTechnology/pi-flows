@@ -34,7 +34,7 @@ inputs:
 | `max_concurrent` | | Maximum agents running in parallel (default: `4`) |
 | `task_required` | | When `true`, prompts the user for a task if none was provided |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
-| `auto_end` | | When `true`, ends the parent session on success — non-interactive sessions only (see [Auto-End Behavior](#auto-end-behavior)) |
+| `auto_end` | | When `true`, ends the parent session on success — non-TUI sessions only (see [Auto-End Behavior](#auto-end-behavior)) |
 | `inputs` | | Optional typed input schema (see [Typed Flow Inputs](#typed-flow-inputs)) |
 
 ### Typed Flow Inputs
@@ -63,10 +63,10 @@ Setting `auto_end: true` lets a flow gracefully shut down its parent pi session 
 The parent session is ended **only when all three conditions hold**:
 
 1. **Flow opt-in** — the flow declares `auto_end: true`.
-2. **Non-interactive session** — the session is headless (no TUI), e.g. an automation-spawned session started via the `flow:run` event. **Interactive human sessions are never closed**, regardless of this key.
+2. **Not a local TUI** — the session runs in any mode other than `tui` (i.e. `mode !== "tui"`). Programmatic/automation runs (`rpc`, `json`, `print` — including dashboard-spawned automation) ARE eligible and will close on success. **A local terminal `tui` session (a human present) is never auto-closed**, regardless of this key.
 3. **Terminal status `success`** — the flow finished successfully. A flow that ends in `aborted` or `error` never triggers the shutdown.
 
-When all three are met, the parent session is gracefully shut down. There is no settings toggle for this behavior — the non-interactive gate is the safety.
+When all three are met, the parent session is gracefully shut down. There is no settings toggle for this behavior — the non-TUI gate is the safety.
 
 ---
 

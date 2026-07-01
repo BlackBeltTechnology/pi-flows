@@ -4,8 +4,10 @@
 //
 // Gate (all must hold):
 //   1. the flow opted in via top-level `auto_end: true` in flow.yaml
-//   2. the session is non-interactive (no TUI) — an interactive human is
-//      never closed out from under them
+//   2. the session is NOT a local TUI (`mode !== "tui"`) — rpc/print/json are
+//      programmatic (dashboard automation, headless), so no local human is
+//      present to be closed out from under. Note: `hasUI` is true in BOTH tui
+//      AND rpc, so it is the WRONG signal here — use `mode`.
 //   3. the flow reached terminal status "success" (never on abort or error)
 //
 // shutdown() is only ever reachable through the flow:complete listener, so a
@@ -18,19 +20,19 @@ import type { FlowConfig, FlowResult } from "./types.js";
 export interface AutoEndDecisionInput {
   autoEnd: boolean | undefined; // flow.auto_end
   status: string | undefined; // FlowResult.status
-  isInteractive: boolean; // ctx.hasUI captured at session_start
+  mode: string | undefined; // ctx.mode (ExtensionMode: tui | rpc | json | print)
 }
 
-/** Pure gate: flow opted in AND non-interactive session AND status === "success". */
+/** Pure gate: flow opted in AND non-TUI mode AND status === "success". */
 export function shouldAutoEnd(input: AutoEndDecisionInput): boolean {
-  return input.autoEnd === true && !input.isInteractive && input.status === "success";
+  return input.autoEnd === true && input.mode !== "tui" && input.status === "success";
 }
 
 export interface AutoEndDeps {
   /** Resolve the completed flow's config to read its `auto_end` opt-in. */
   getFlow: (flowName: string) => FlowConfig | undefined;
-  /** Whether the current session has a UI (interactive). */
-  isInteractive: () => boolean;
+  /** The current session's run mode (ctx.mode). "tui" means a local human. */
+  getMode: () => string | undefined;
   /** Graceful session shutdown (ctx.shutdown), or a no-op when unavailable. */
   shutdown: () => void;
 }
@@ -49,7 +51,7 @@ export function registerAutoEndListener(pi: ExtensionAPI, deps: AutoEndDeps): vo
       shouldAutoEnd({
         autoEnd: flow?.auto_end,
         status: result.status,
-        isInteractive: deps.isInteractive(),
+        mode: deps.getMode(),
       })
     ) {
       deps.shutdown();

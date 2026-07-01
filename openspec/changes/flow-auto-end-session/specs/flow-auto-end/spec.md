@@ -12,24 +12,29 @@ A flow SHALL declare whether it may end its parent session by setting a top-leve
 - **THEN** the parsed flow configuration exposes `auto_end` as `false` or undefined
 - **AND** completion of that flow never triggers a session shutdown
 
-### Requirement: Non-interactive gate
-The system SHALL honor auto-end only in a non-interactive (headless) session, determined from the `hasUI` signal captured at session start. In an interactive session the parent session MUST NOT be shut down, regardless of the flow's `auto_end` value.
+### Requirement: Non-TUI gate
+The system SHALL honor auto-end only when the session's run mode (`ctx.mode`) is NOT `"tui"`. Modes `rpc`, `json`, and `print` are programmatic (dashboard automation, headless) and are eligible; only a local terminal `tui` session, where a human is present, MUST NOT be shut down. The gate MUST use `mode`, not `hasUI` — `hasUI` is true in both `tui` AND `rpc`, so it would wrongly exclude dashboard automation runs.
 
-#### Scenario: Interactive session is never closed
+#### Scenario: TUI session is never closed
 - **WHEN** a flow with `auto_end: true` completes successfully
-- **AND** the session is interactive (`hasUI` is true)
+- **AND** the session mode is `"tui"`
 - **THEN** the parent session remains open
 
-#### Scenario: Non-interactive session is eligible
+#### Scenario: RPC automation session is eligible
 - **WHEN** a flow with `auto_end: true` completes successfully
-- **AND** the session is non-interactive (`hasUI` is false)
+- **AND** the session mode is `"rpc"` (e.g. a dashboard automation run)
+- **THEN** the parent session is gracefully shut down
+
+#### Scenario: Headless print/json session is eligible
+- **WHEN** a flow with `auto_end: true` completes successfully
+- **AND** the session mode is `"print"` or `"json"`
 - **THEN** the parent session is gracefully shut down
 
 ### Requirement: Combined gate
-The system SHALL end the parent session only when the completed flow's `auto_end` is `true` AND the session is non-interactive AND the terminal status passes the status filter. If any condition fails, the session MUST NOT be shut down.
+The system SHALL end the parent session only when the completed flow's `auto_end` is `true` AND the session mode is not `"tui"` AND the terminal status passes the status filter. If any condition fails, the session MUST NOT be shut down.
 
 #### Scenario: All conditions satisfied
-- **WHEN** a flow with `auto_end: true` completes with `status: "success"` in a non-interactive session
+- **WHEN** a flow with `auto_end: true` completes with `status: "success"` in a non-`tui` session
 - **THEN** the parent session is gracefully shut down
 
 #### Scenario: Flow does not opt in

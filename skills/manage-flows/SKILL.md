@@ -200,7 +200,7 @@ description: What it does   # REQUIRED
 max_concurrent: 3          # optional (default 4)
 task_required: true        # optional — prompt for task if invoked with no args
 task_prompt: "Task:"       # optional
-auto_end: true             # optional — end a non-interactive session on success (default: false)
+auto_end: true             # optional — end a non-TUI (rpc/headless) session on success (default: false)
 
 steps:
   - id: research
@@ -297,7 +297,7 @@ Wire data between steps via `inputs:` (producer declares `outputs`; the consumin
 - **Outputs are stored as real JSON types** (string/number/boolean/object/array/null) — not stringified.
 - **Whole-value reference → typed delivery.** When a code-node input value is *exactly* `${{result.X.NAME}}` or `${{flow.input.NAME}}` (no surrounding text), the handler receives that value **unchanged** (object/array/etc.). Embedded in other text, it is interpolated as **compact JSON** (JIT serialization); the same JIT rule applies inside agent prompts/tasks. Strings pass through verbatim.
 - **Typed flow inputs.** A flow may declare `inputs:` in its frontmatter — a map of `NAME: { type: string|number|boolean|object|array, required?: true }`. A run started with a structured inputs object is validated against it (missing `required` / wrong type fails the run); values are referenceable as `${{flow.input.NAME}}`. The single-`task` start path is unchanged.
-- **Auto-end (self-terminating runs).** Set top-level `auto_end: true` to have the flow gracefully shut down its parent pi session when it finishes. Guarded by three conditions, ALL required: (1) the flow declared `auto_end: true`, (2) the session is **non-interactive** (headless — e.g. an automation- or dashboard-spawned run; interactive human sessions are **never** closed), and (3) the terminal status is `success` (never on `aborted` or `error`). Use it for automation flows that should free their session once done; omit it (default `false`) for anything a human runs interactively. There is no settings toggle — the non-interactive gate is the safety boundary.
+- **Auto-end (self-terminating runs).** Set top-level `auto_end: true` to have the flow gracefully shut down its parent pi session when it finishes. Guarded by three conditions, ALL required: (1) the flow declared `auto_end: true`, (2) the session is **not a local TUI** (`mode !== "tui"` — so `rpc`/`json`/`print` runs, including dashboard automation, are eligible; a local terminal session with a human present is **never** closed), and (3) the terminal status is `success` (never on `aborted` or `error`). Use it for automation flows that should free their session once done; omit it (default `false`) for anything a human runs in a terminal. There is no settings toggle — the non-TUI gate is the safety boundary.
 - **File-backed data is passed as a path, not injected.** There is no `file://` injection. Pass a path (typically a `*_path` output) and have the consumer read it: an agent via its `read` tool (give it `read` + an `access.read` glob — a `*_path` input wired into an agent without `read` is a validation **warning**), a code node via the filesystem.
 
 ## Code handlers

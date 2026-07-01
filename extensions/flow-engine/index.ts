@@ -129,8 +129,10 @@ export function activate(pi: ExtensionAPI) {
   // Captured on session_start; used by EventEmitObserver to append the
   // flow-completion marker that opens pi's persistence flush gate.
   let sessionManager: any = undefined;
-  // Auto-end wiring: interactivity + graceful shutdown captured on session_start.
-  let isInteractiveSession = false;
+  // Auto-end wiring: run mode + graceful shutdown captured on session_start.
+  // NB: use ctx.mode (tui|rpc|json|print), NOT hasUI — hasUI is true for RPC
+  // too, so dashboard automation runs (rpc) would be misread as interactive.
+  let sessionMode: string | undefined;
   let sessionShutdown: (() => void) | undefined;
 
   // ── Helpers for FlowManager config ──
@@ -166,7 +168,7 @@ export function activate(pi: ExtensionAPI) {
   // (auto_end: true) completes successfully. See auto-end.ts for the gate.
   registerAutoEndListener(pi, {
     getFlow: (name) => flows.get(name),
-    isInteractive: () => isInteractiveSession,
+    getMode: () => sessionMode,
     shutdown: () => sessionShutdown?.(),
   });
 
@@ -217,7 +219,7 @@ export function activate(pi: ExtensionAPI) {
       // now (before any new flow can launch) so the replayed card clears.
       reconcileOrphanedFlow("session-close");
     }
-    isInteractiveSession = !!ctx.hasUI;
+    sessionMode = ctx.mode;
     if (typeof ctx.shutdown === "function") sessionShutdown = () => ctx.shutdown();
     if (ctx.hasUI) {
       // Upgrade to TUI adapter

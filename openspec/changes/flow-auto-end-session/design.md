@@ -40,8 +40,8 @@ The gate passes only for `status === "complete"`. `status === "aborted"` MUST ne
 ### D3 — Listener lives in the flow-engine extension
 The `flow:complete` handler is registered in `extensions/flow-engine/index.ts` alongside the existing `flow:abort`/`flow:run` handlers. It looks up the completed flow's config (from the `flows` map) to read `auto_end`, checks the session is non-interactive, checks status, then calls `pi.shutdown()`.
 
-### D4 — Non-interactive detection via `hasUI`
-The non-interactive condition is derived from the `ctx.hasUI` value captured at `session_start` (the same signal already used to swap the headless adapter for the TUI adapter). The listener consults a cached `isInteractive` flag rather than re-deriving it. Because auto-end never fires interactively, the fact that `flow:complete` arrives *after* the summary widget mounts is moot — there is no visible summary in a headless session, so no grace period is needed for v1.
+### D4 — Non-TUI detection via `ctx.mode` (NOT `hasUI`)
+The eligibility condition is `ctx.mode !== "tui"`, captured at `session_start`. **`hasUI` is the wrong signal**: it is documented as "true in TUI *and RPC* modes," and the dashboard automation spawns its runs in **RPC** mode — so a `!hasUI` gate misclassifies every dashboard automation run as interactive and never fires, defeating the feature's primary use case. `ctx.mode` distinguishes a local terminal (`tui`, human present → do not close) from programmatic runs (`rpc`/`json`/`print` → eligible). The listener consults a cached `sessionMode`. Because auto-end never fires in `tui`, the fact that `flow:complete` arrives after the summary widget mounts is moot — non-TUI sessions have no visible summary, so no grace period is needed for v1.
 
 ## Risks / Trade-offs
 
