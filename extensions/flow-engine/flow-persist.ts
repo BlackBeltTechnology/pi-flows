@@ -201,9 +201,30 @@ export class FlowEventPersister {
   // pi-ai's Usage type incl. `cost`) makes calculateContextTokens return 0
   // (so shouldCompact is false, no spurious compaction) AND keeps the
   // unconditional `usage.cost.total` read in getSessionStats safe.
+  // Ordering guard: only append a marker when the session has NO user message.
+  // A user message means the session is interactive/managed — a real assistant
+  // turn already opened the flush gate, so the marker is redundant AND unsafe:
+  // if the flow was launched from inside a tool call, the launching assistant
+  // `tool_use` is still unresolved, and appending an assistant marker here splices
+  // it between the `tool_use` and its `tool_result`, which the Anthropic API
+  // rejects (`unexpected tool_use_id ... must have a corresponding tool_use block
+  // in the previous message`). Headless flow-only sessions have no user message,
+  // so the marker still fires there (start opens the gate; the start marker adds
+  // an assistant, not a user, message, so completion still fires too).
+  // See change: fix-flow-marker-tool-result-ordering.
+  private sessionHasUserMessage(sm: any): boolean {
+    try {
+      const entries = typeof sm.getEntries === "function" ? sm.getEntries() : [];
+      return entries.some((e: any) => e?.type === "message" && e.message?.role === "user");
+    } catch {
+      return false;
+    }
+  }
+
   private appendMarker(text: string): void {
     const sm = this.getSessionManager?.();
     if (!sm || typeof sm.appendMessage !== "function") return;
+    if (this.sessionHasUserMessage(sm)) return;
     try {
       sm.appendMessage({
         role: "assistant",

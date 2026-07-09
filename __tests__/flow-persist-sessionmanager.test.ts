@@ -30,6 +30,22 @@ function flowEvents(sm: any): any[] {
   return sm.getEntries().filter((e: any) => e.type === "custom" && e.customType === "flow-event");
 }
 
+// Assistant message carrying an unresolved tool_use (its tool_result not yet appended).
+function toolUseMsg(id: string): any {
+  return { role: "assistant", content: [{ type: "toolCall", id, name: "ib_rules", input: {} }] };
+}
+
+// Tool result message answering a prior tool_use.
+function toolResultMsg(id: string): any {
+  return { role: "toolResult", toolCallId: id, toolName: "ib_rules", content: [{ type: "text", text: "ok" }] };
+}
+
+function assistantMarkers(sm: any): any[] {
+  return sm
+    .getEntries()
+    .filter((e: any) => e.type === "message" && e.message.role === "assistant" && String(e.message.content?.[0]?.text || "").startsWith("[flow]"));
+}
+
 describe("flow-event persistence (real SessionManager)", () => {
   let dir: string;
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "flow-persist-")); });
@@ -155,5 +171,72 @@ describe("flow-event persistence (real SessionManager)", () => {
       (m: any) => m.role === "assistant" && JSON.stringify(m.content).includes('"text":""'),
     );
     expect(hasEmptyAssistant).toBe(true);
+  });
+});
+
+// See change: fix-flow-marker-tool-result-ordering (flow-session-persistence spec).
+// The marker must not splice between an assistant tool_use and its tool_result. It is
+// gated on "session has no user message": headless flow-only sessions (no user msg) still
+// get both markers; interactive/tool-launched sessions (user msg present) skip the marker.
+describe("flow marker ordering guard (no-user-message gate)", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "flow-marker-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  const persisterFor = (sm: any) => new FlowEventPersister({ appendEntry: (t: string, d: unknown) => sm.appendCustomEntry(t, d) } as any, () => sm);
+
+  it("skips the start marker when a flow launches from inside a tool call (session has a user message)", () => {
+    const sm = SessionManager.create(process.cwd(), dir);
+    sm.appendMessage(msg("user", "add a rule"));
+    sm.appendMessage(toolUseMsg("toolu_1")); // launching tool_use, result not yet appended
+    persisterFor(sm).emitStartMarker("invoicebot:add-rule");
+    expect(assistantMarkers(sm).length).toBe(0);
+  });
+
+  it("skips both markers in any session that has a user message", () => {
+    const sm = SessionManager.create(process.cwd(), dir);
+    sm.appendMessage(msg("user", "run it"));
+    sm.appendMessage(msg("assistant", "working"));
+    const p = persisterFor(sm);
+    p.emitStartMarker("demo");
+    p.emitCompletionMarker("demo", { status: "success" });
+    expect(assistantMarkers(sm).length).toBe(0);
+  });
+
+  it("headless flow-only session (no user message) still gets BOTH markers and opens the gate", () => {
+    const sm = SessionManager.create(process.cwd(), dir);
+    const file = sm.getSessionFile()!;
+    const p = persisterFor(sm);
+    p.persist("flow:flow-started", { flowName: "demo" });
+    expect(diskLines(file).length).toBe(0); // buffered
+    p.emitStartMarker("demo");
+    expect(diskLines(file).length).toBeGreaterThan(0); // gate opened
+    p.persist("flow:complete", { ok: true });
+    p.emitCompletionMarker("demo");
+    expect(assistantMarkers(sm).length).toBe(2); // started + finished
+  });
+
+  it("regression: marker never interleaves between an assistant tool_use and its tool_result", () => {
+    const sm = SessionManager.create(process.cwd(), dir);
+    sm.appendMessage(msg("user", "add a rule"));
+    sm.appendMessage(toolUseMsg("toolu_1")); // tool_use launches the flow
+    const p = persisterFor(sm);
+    // flow runs while the tool is unresolved: events buffer, start marker attempted
+    p.persist("flow:flow-started", { flowName: "f" });
+    p.emitStartMarker("f");
+    p.persist("flow:complete", { ok: true });
+    p.emitCompletionMarker("f");
+    // tool finally returns → result appended
+    sm.appendMessage(toolResultMsg("toolu_1"));
+    sm.appendMessage(msg("user", "thanks"));
+
+    const seq = sm.buildSessionContext().messages;
+    for (let i = 0; i < seq.length; i++) {
+      const m: any = seq[i];
+      if (m.role === "assistant" && Array.isArray(m.content) && m.content.some((c: any) => c.type === "toolCall" || c.type === "tool_use")) {
+        const next: any = seq[i + 1];
+        expect(next?.role).toBe("toolResult");
+      }
+    }
   });
 });
