@@ -1,6 +1,6 @@
 {
   "name": "@blackbelt-technology/pi-flows",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Flow engine, dashboard, and orchestration extensions for pi",
   "license": "MIT",
   "publishConfig": {
