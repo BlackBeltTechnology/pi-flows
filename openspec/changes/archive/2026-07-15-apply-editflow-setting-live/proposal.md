@@ -26,10 +26,15 @@ effect on the next turn anyway, so re-checking at turn start loses nothing.
 - Reconcile **only when the resolved value changed** since the last observed
   value (a cached `lastEnabled`), so an unchanged setting does not rebuild the
   system prompt on every turn.
-- No change to the trust gate, the `/flows:edit-mode` command path, the
-  `flow:set-edit-mode` event path, or skill-visibility semantics. Skill
-  visibility remains coupled to `session_start`/reload as today; only the
-  **tools** are reconciled live per turn (which is the observed gap).
+- **Remove the project-trust gate on `flows.editFlow`.** The project
+  `.pi/settings.json` value is now honored regardless of project trust (it still
+  overrides the global value; global is still always honored). `isEditFlowEnabled`
+  drops its `projectTrusted` parameter and the `session_start`/`before_agent_start`
+  handlers stop resolving `ctx.isProjectTrusted()`.
+- No change to the `/flows:edit-mode` command path, the `flow:set-edit-mode`
+  event path, or skill-visibility semantics. Skill visibility remains coupled to
+  `session_start`/reload as today; only the **tools** are reconciled live per
+  turn (which is the observed gap).
 - No file watcher, no `SettingsManager` coupling, no changes outside pi-flows.
 
 ## Capabilities
@@ -38,6 +43,9 @@ effect on the next turn anyway, so re-checking at turn start loses nothing.
 - `edit-mode`: the `flows.editFlow` setting is re-read and the authoring tools
   reconciled at each turn start, so an out-of-band setting change applies to a
   running session on its next turn without a restart.
+- `flow-authoring`: the `flows.editFlow` gating requirement drops the
+  trusted-projects-only condition — the project setting is honored regardless of
+  trust (still overriding global).
 
 ## Impact
 
@@ -46,7 +54,8 @@ effect on the next turn anyway, so re-checking at turn start loses nothing.
   and `reconcileEditFlowTools`; a module-scoped `lastEnabled` cache to gate the
   reconcile. No new files, no new dependencies.
 - **Behaviour:** flipping `flows.editFlow` on disk mid-session now takes effect
-  on the next agent turn (tools activate/deactivate). Skill prompt-visibility is
-  unchanged (still applies on the next session start / reload).
-- **Out of scope:** removing or altering the trust gate; making skill visibility
-  live; watching the settings file for instant (idle, no-turn) application.
+  on the next agent turn (tools activate/deactivate). The project value is
+  honored even in untrusted projects. Skill prompt-visibility is unchanged (still
+  applies on the next session start / reload).
+- **Out of scope:** making skill visibility live; watching the settings file for
+  instant (idle, no-turn) application.

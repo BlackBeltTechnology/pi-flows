@@ -21,6 +21,7 @@ import { anthropicMessagesAgentFactory } from "./anthropic-messages-adapter.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { isEditFlowEnabled, setEditFlowFlag, parseEditModeArg } from "./edit-flow-config.js";
 import { syncEditFlowSkill } from "./edit-flow-skill.js";
+import { makeEditFlowToolReconciler } from "./edit-flow-reconcile.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -330,11 +331,15 @@ export function activate(pi: ExtensionAPI) {
   registerFlowWriteTool(pi, () => agents, projectRoot);
 
   // Activate/deactivate the authoring tools to match the requested edit-mode.
-  const reconcileEditFlowTools = (enabled: boolean): void => {
-    const active = pi.getActiveTools().filter((n) => !EDIT_FLOW_TOOLS.includes(n));
-    if (enabled) active.push(...EDIT_FLOW_TOOLS);
-    pi.setActiveTools(active);
-  };
+  // Change-gated (see edit-flow-reconcile.ts): applies only when the resolved
+  // value changed, so re-checking every turn does not rebuild the system prompt
+  // needlessly. One shared instance (and one cache) across session_start,
+  // before_agent_start, and the command/event applyEditMode calls — no staleness.
+  const reconcileEditFlowTools = makeEditFlowToolReconciler({
+    getActiveTools: () => pi.getActiveTools(),
+    setActiveTools: (names) => pi.setActiveTools(names),
+    editFlowTools: EDIT_FLOW_TOOLS,
+  });
 
   // Shared edit-mode toggle: persist the setting, sync the project-local skill's
   // model-visibility, reconcile the authoring tools, and (when a reload-capable
@@ -362,13 +367,19 @@ export function activate(pi: ExtensionAPI) {
   // Reconcile edit-flow tools AND materialize/sync the project-local skill at
   // each session start (idempotent) so the skill is discoverable by default with
   // frontmatter reflecting the current setting.
-  pi.on("session_start", (_ev: any, ctx: any) => {
-    const trusted = (() => {
-      try { return ctx?.isProjectTrusted?.() ?? false; } catch { return false; }
-    })();
-    const enabled = isEditFlowEnabled(projectRoot, { projectTrusted: trusted });
+  pi.on("session_start", (_ev: any, _ctx: any) => {
+    const enabled = isEditFlowEnabled(projectRoot);
     reconcileEditFlowTools(enabled);
     try { syncEditFlowSkill(projectRoot, pkgRoot, enabled); } catch { /* non-fatal */ }
+  });
+
+  // Re-read `flows.editFlow` at each turn start so an out-of-band settings
+  // change (e.g. a direct edit of .pi/settings.json while the session runs) is
+  // picked up on the next agent turn without a restart. Change-gated, so
+  // unchanged turns are no-ops. Tools only — skill prompt-visibility stays
+  // coupled to session_start/reload (turn/event contexts have no reload()).
+  pi.on("before_agent_start", (_ev: any, _ctx: any) => {
+    reconcileEditFlowTools(isEditFlowEnabled(projectRoot));
   });
 
   // `/flows:edit-mode <on|off>` — command path has ctx.reload() for live effect.

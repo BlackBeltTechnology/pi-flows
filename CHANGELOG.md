@@ -5,6 +5,12 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`flows.editFlow` applies to a running session per turn** (`edit-mode` + `flow-authoring` capabilities). The setting is now re-read and the `flow_agents`/`flow_write` authoring tools reconciled at the start of each agent turn (`before_agent_start`), so an out-of-band change — e.g. hand-editing `.pi/settings.json` while a session is running — flips the tools on the session's **next agent turn without a restart**. The re-check is change-gated (a small extracted `makeEditFlowToolReconciler` in `extensions/flow-engine/edit-flow-reconcile.ts`), so unchanged turns do not rebuild the system prompt. Scope is **tools only**: the `manage-flows` skill's prompt-visibility still applies on the next session start / reload, because turn/event hooks receive the base `ExtensionContext`, which has no `reload()` (the skill stays reachable throughout via `/skill:manage-flows`). **The project-trust gate on `flows.editFlow` is removed** — the project `.pi/settings.json` value is now honored regardless of project trust (still overriding global; global still always honored). OpenSpec: apply-editflow-setting-live.
+
 ## [v0.3.2] - 2026-07-01
 
 ### Removed

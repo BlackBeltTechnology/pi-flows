@@ -2,8 +2,9 @@
  * Tests for the `flows.editFlow` setting that gates the edit-flow tools
  * (change: remove-flow-architect-main-session-authoring).
  *
- * Resolution: project `.pi/settings.json` (trusted only) overrides global
- * `~/<.pi>/agent/settings.json`; default disabled.
+ * Resolution: project `.pi/settings.json` overrides global
+ * `~/<.pi>/agent/settings.json`; default disabled. No trust gate — the project
+ * setting is honored regardless of project trust (change: apply-editflow-setting-live).
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -48,22 +49,22 @@ describe("isEditFlowEnabled", () => {
   });
 
   it("defaults to false when nothing set", () => {
-    expect(isEditFlowEnabled(project, { projectTrusted: true, home })).toBe(false);
+    expect(isEditFlowEnabled(project, { home })).toBe(false);
   });
 
   it("honors the global setting", () => {
     writeSettings(home, [".pi", "agent"], { flows: { editFlow: true } });
-    expect(isEditFlowEnabled(project, { projectTrusted: false, home })).toBe(true);
+    expect(isEditFlowEnabled(project, { home })).toBe(true);
   });
 
-  it("honors a trusted project setting and lets it override global", () => {
+  it("lets the project setting override global", () => {
     writeSettings(home, [".pi", "agent"], { flows: { editFlow: true } });
     writeSettings(project, [".pi"], { flows: { editFlow: false } });
-    expect(isEditFlowEnabled(project, { projectTrusted: true, home })).toBe(false);
+    expect(isEditFlowEnabled(project, { home })).toBe(false);
   });
 
-  it("ignores the project setting when the project is untrusted", () => {
+  it("honors the project setting regardless of trust (no gate)", () => {
     writeSettings(project, [".pi"], { flows: { editFlow: true } });
-    expect(isEditFlowEnabled(project, { projectTrusted: false, home })).toBe(false);
+    expect(isEditFlowEnabled(project, { home })).toBe(true);
   });
 });

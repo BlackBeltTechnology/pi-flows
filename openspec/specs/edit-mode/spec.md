@@ -51,3 +51,46 @@ After persisting the setting and skill frontmatter, the system SHALL trigger a l
 - **WHEN** the `flow:set-edit-mode` event handler completes its writes
 - **THEN** it triggers a reload via a command-capable context; if no reload-capable context is available, it notifies the user that the change applies on the next session start
 
+### Requirement: Setting changes apply to a running session per turn
+The system SHALL re-read `flows.editFlow` and reconcile the `flow_agents`/`flow_write`
+authoring tools at each agent turn start, so that an out-of-band change to the
+setting (e.g. a direct edit of `.pi/settings.json` while a session is running)
+takes effect on the session's next agent turn without requiring a restart. The
+flag SHALL be resolved the same way as at session start: the project
+`.pi/settings.json` value overrides the global `~/.pi/agent/settings.json` value,
+both honored regardless of project trust (there is no trust gate on this flag).
+This applies to the authoring **tools** only; skill prompt-visibility remains
+coupled to session start / reload.
+
+Note (keep an eye on): this creates an intentional asymmetry when the setting is
+flipped mid-run via an out-of-band edit — the **tools** reconcile on the next
+turn, but the `manage-flows` skill's prompt-visibility does NOT change until a
+reload (next session start, or the `/flows:edit-mode` command's `ctx.reload()`).
+The reason is structural: turn/event handlers receive the base `ExtensionContext`,
+which has no `reload()` (only the command context does), so a turn hook cannot
+re-discover or re-parse skills. This is not a defect — the skill stays reachable
+throughout via the explicit `/skill:manage-flows` command; only its silent
+presence in the prompt lags. Worth watching if an upstream pi-coding-agent
+release later exposes a reload-capable primitive on turn/event contexts, at which
+point skill-visibility could also be made live.
+
+#### Scenario: On-disk enable is picked up on the next turn
+- **WHEN** `flows.editFlow` is `false`/unset and, while the session is running, it is changed to `true` on disk
+- **THEN** on the next agent turn the `flow_agents`/`flow_write` tools become active without a session restart
+
+#### Scenario: On-disk disable is picked up on the next turn
+- **WHEN** edit-mode is active and, while the session is running, `flows.editFlow` is changed to `false` on disk
+- **THEN** on the next agent turn the authoring tools are deactivated without a session restart
+
+#### Scenario: Unchanged setting does not rebuild the tool set
+- **WHEN** consecutive turns occur and the resolved `flows.editFlow` value has not changed
+- **THEN** the tools are not reconciled again (no redundant system-prompt rebuild)
+
+#### Scenario: Skill prompt-visibility is not changed by a per-turn re-read
+- **WHEN** `flows.editFlow` is flipped on disk mid-run and the next agent turn reconciles the tools
+- **THEN** the `manage-flows` skill's prompt-visibility is unchanged until a reload (next session start or the `/flows:edit-mode` command), and the skill remains reachable via the explicit `/skill:manage-flows` command
+
+#### Scenario: No trust gate on the per-turn re-read
+- **WHEN** the per-turn re-read resolves the flag in an untrusted project
+- **THEN** the project `.pi/settings.json` value is honored exactly as at session start (no trust gate), overriding the global value
+

@@ -6,8 +6,9 @@
 // boolean (a top-level `flowsEditFlow` boolean is also accepted).
 //
 // Sources (project overrides global):
-//   - global:  ~/<CONFIG_DIR>/agent/settings.json   (always honored)
-//   - project: <projectRoot>/<CONFIG_DIR>/settings.json  (trusted projects only)
+//   - global:  ~/<CONFIG_DIR>/agent/settings.json
+//   - project: <projectRoot>/<CONFIG_DIR>/settings.json
+// Both are always honored; there is no project-trust gate on this flag.
 // ---------------------------------------------------------------------------
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -40,18 +41,17 @@ function readSettingsFile(path: string): unknown {
 /**
  * Whether flow/agent edit-flow tools should be active for this session.
  *
- * Resolution: project setting (when trusted) overrides global setting; default
- * is `false` when neither sets the flag.
+ * Resolution: project setting overrides global setting; default is `false`
+ * when neither sets the flag. The project setting is honored regardless of
+ * project trust (there is no trust gate on this flag).
  */
 export function isEditFlowEnabled(
   projectRoot: string,
-  opts: { projectTrusted: boolean; home?: string } = { projectTrusted: false },
+  opts: { home?: string } = {},
 ): boolean {
   const home = opts.home ?? homedir();
   const globalFlag = readEditFlowFlag(readSettingsFile(join(home, CONFIG_DIR, "agent", "settings.json")));
-  const projectFlag = opts.projectTrusted
-    ? readEditFlowFlag(readSettingsFile(join(projectRoot, CONFIG_DIR, "settings.json")))
-    : undefined;
+  const projectFlag = readEditFlowFlag(readSettingsFile(join(projectRoot, CONFIG_DIR, "settings.json")));
 
   if (projectFlag !== undefined) return projectFlag;
   if (globalFlag !== undefined) return globalFlag;
