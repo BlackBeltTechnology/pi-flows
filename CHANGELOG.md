@@ -5,6 +5,16 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`flow:run` declines are observable, and every run carries an identity** (`flow-run-dispatch` + `dashboard-event-emission` + `flow-session-persistence` capabilities). A `flow:run` that does **not** start a flow (unknown flow / already-running / gate-blocked / a lost check-to-assign race) now emits a **terminal `flow:complete`** carrying `status: "rejected"`, a top-level `reason` (byte-identical to the slash-command messages, produced by a shared builder so parity holds by construction), `flowName`, and the same reason mirrored into `lastResult.result.summary`. This is renderable by a consumer that never saw `flow_started`, and it finalizes an event-dispatched automation run in seconds (via the existing `flow_complete` completion) instead of leaving it wedged until a stale-run reaper fires. `results` is omitted (so no spurious post-flow summary is written for a run that never started); a rejection carries no `runId`. Previously every decline returned silently.
+
+  The single-run guard is now **atomic**. The duplicate `isRunning` guard on the `flow:run` handler is removed; `FlowManager.start()` marks the run active **before its first `await`** (a synchronous-prologue IIFE closes the check-to-assign window); and the now-reachable "already running" throw is surfaced as the same terminal rejection rather than an unhandled promise rejection — so two dispatches racing into one long-lived session can no longer start two concurrent runs in one process.
+
+  Every run now carries an **identity on the live event stream**. `FlowManager.start()` mints the run id (exposed as `activeRunId`) and threads it to `onFlowStarted`; `EventEmitObserver` stamps it on every core lifecycle `flow:*` payload and onto `FlowResult.runId` — present in headless/RPC sessions, not only under a TUI. `FlowEventPersister` now records the **supplied** id instead of self-minting on `flow:flow-started`, so the persisted `flowRunId` equals the id on the live payloads; the orphan-reconciliation `persistTerminal(orphanId, …)` injection is preserved. `FlowResult` gains `runId?` and `reason?`, and its `status` union gains `"rejected"`; `FlowObserver.onFlowStarted` gains `runId` as its first parameter. OpenSpec: report-flow-run-rejection-and-run-identity.
+
 ## [v0.3.4] - 2026-07-15
 
 ### Added

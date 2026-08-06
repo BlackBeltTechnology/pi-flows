@@ -28,9 +28,9 @@
 - [x] 4.1 `npm run typecheck` clean; `npm run lint` 0 errors; `npm test` green (343).
 - [x] 4.2 `openspec validate report-flow-run-rejection-and-run-identity --strict`.
 
-## 5. Docs (DEFERRED — every `docs/` write must be delegated to a general-purpose subagent per AGENTS.md; not done in the implementation commit)
+## 5. Docs (docs/ written via general-purpose subagent per AGENTS.md; condensed agent-docs/ mirrors synced; CHANGELOG.md edited directly)
 
-- [ ] 5.1 `docs/events-api.md`: `flow:run` terminal-rejection contract (`status:"rejected"` + `reason`) and run id on core-11 payloads.
-- [ ] 5.2 `docs/public-api.md`: `FlowResult` gains `runId?` / `reason?` / status `"rejected"`.
-- [ ] 5.3 `docs/architecture.md`: mint site moves to `FlowManager.start`; persister records the supplied id; reconcile carve-out preserved.
-- [ ] 5.4 `CHANGELOG.md`: dispatch terminal rejection + atomic single-run guard + run identity on the live stream.
+- [x] 5.1 `docs/events-api.md` (+ `agent-docs/`): `flow:run` terminal-rejection contract (`status:"rejected"` + `reason`) and run id on core-11 payloads.
+- [x] 5.2 `docs/public-api.md` (+ `agent-docs/`): `FlowResult` gains `runId?` / `reason?` / status `"rejected"`; `FlowObserver.onFlowStarted` gains `runId` first param.
+- [x] 5.3 `docs/architecture.md` (+ `agent-docs/`): mint site moves to `FlowManager.start`; persister records the supplied id; reconcile carve-out preserved.
+- [x] 5.4 `CHANGELOG.md`: `[Unreleased]` entry — dispatch terminal rejection + atomic single-run guard + run identity on the live stream.

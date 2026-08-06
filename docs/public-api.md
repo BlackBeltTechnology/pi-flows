@@ -252,11 +252,17 @@ interface FlowResult {
   flowName:      string;
   stepCount:     number;
   totalDuration: number;    // wall-clock milliseconds
-  status?:       "success" | "error" | "aborted";
+  status?:       "success" | "error" | "aborted" | "rejected";
+  runId?:        string;    // engine-minted run identity
+  reason?:       string;    // human-readable cause; set when status is "rejected"
 }
 ```
 
 On a **hard** failure, `status` is `"error"` and the reason is carried in `lastResult` (its `failureInfo.message`).
+
+`runId` is the identity minted once per run by `FlowManager.start()` and carried on every live `flow:*` event of that run. It is absent on legacy results and on dispatch rejections.
+
+`status: "rejected"` marks a **dispatch that never started a flow** — distinct from `"error"`, which means a run started and failed. On a rejection, `reason` carries the human-readable cause, `results` is omitted, and there is no `runId`. See [events-api.md → `flow:run`](events-api.md#flowrun).
 
 ```typescript
 
@@ -403,7 +409,7 @@ interface FlowIOAdapter {
 }
 
 interface FlowObserver {
-  onFlowStarted?(flowName: string, flow: FlowConfig, task: string): void;
+  onFlowStarted?(runId: string, flowName: string, flow: FlowConfig, task: string): void;
   onAgentStarted?(agentName: string, stepId: string, resolvedModel?: string): void;
   onAgentComplete?(agentName: string, stepId: string, result: AgentResult): void;
   onAssistantText?(agentName: string, stepId: string, text: string): void;

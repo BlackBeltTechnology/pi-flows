@@ -212,6 +212,14 @@ Durable trace = persisted `flow-event` stream. `FlowEventPersister` writes one e
 
 Old behavior: resume replays non-terminal stream. Flow card hangs on "running" forever. Abort button no-op — `flow:abort` handler gated by `if (flowManager.isRunning)`, false on resumed session.
 
+### Run identity
+
+Run id minted ONCE per run by `FlowManager.start()`, before its first `await`, co-located with atomic single-run guard — claim on session + identity of claiming run established together. Exposed as `flowManager.activeRunId`. Handed to every observer as first parameter of `onFlowStarted(runId, flowName, flow, task)`. `EventEmitObserver` stamps it onto every live `flow:*` payload — hence `runId` present in headless/RPC sessions, not only TUI.
+
+`FlowEventPersister` no longer self-mints `flowRunId` on `flow:flow-started`. Records SUPPLIED id carried on payload. Persisted `flowRunId` = same string as `runId` on live events — durable stream and live stream correlatable.
+
+Orphan-reconciliation path = one deliberate exception, PRESERVED unchanged. Runs when no live run exists, so injects explicit id via `persistTerminal(orphanId, …)` instead of reading live handle.
+
 ### Resume-time reconciliation
 
 `session_start` scans persisted `flow-event` entries via `findOrphanedRun()`.

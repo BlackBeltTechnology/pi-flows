@@ -284,12 +284,21 @@ pi.events.emit("flow:register-footer-segment", {
 
 Listen to these events to observe a running flow.
 
+#### Run identity (`runId`)
+
+Every core lifecycle payload below carries a `runId: string` — an engine-minted identifier that is stable for the duration of one run and distinct across runs. It is minted once by `FlowManager.start()` and stamped onto every live payload, so it is present in **headless/RPC sessions too**, not only under the TUI.
+
+The core set carrying `runId`: `flow:flow-started`, `flow:agent-started`, `flow:agent-complete`, `flow:assistant-text`, `flow:thinking-text`, `flow:subagent-tool-call`, `flow:subagent-tool-result`, `flow:auto-decision`, `flow:loop-iteration`, `flow:agent-error`, `flow:complete`. On `flow:complete` the payload is a `FlowResult`, which carries it as `FlowResult.runId`.
+
+Use `runId` to correlate interleaved events when a host multiplexes several sessions, and to discard stale events from a previous run.
+
 ### `flow:flow-started`
 
 Emitted when a flow begins execution.
 
 ```typescript
 pi.events.on("flow:flow-started", (data: {
+  runId:    string;    // stable for this run
   flowName: string;
   flow: FlowConfig;
   task: string;
@@ -304,6 +313,7 @@ Emitted when an individual flow node begins.
 
 ```typescript
 pi.events.on("flow:agent-started", (data: {
+  runId:         string;
   agentName:     string;
   stepId:        string;
   resolvedModel: string;   // actual model ID after role resolution
@@ -322,6 +332,7 @@ Emitted when a flow node finishes (success or error).
 
 ```typescript
 pi.events.on("flow:agent-complete", (data: {
+  runId:     string;
   agentName: string;
   stepId:    string;
   result:    AgentResult;
@@ -337,6 +348,7 @@ Streaming assistant text chunk from a running agent.
 
 ```typescript
 pi.events.on("flow:assistant-text", (data: {
+  runId:     string;
   agentName: string;
   stepId:    string;
   text:      string;
@@ -351,6 +363,7 @@ Streaming thinking/reasoning text chunk from a running agent.
 
 ```typescript
 pi.events.on("flow:thinking-text", (data: {
+  runId:     string;
   agentName: string;
   stepId:    string;
   text:      string;
@@ -365,6 +378,7 @@ An agent called a tool.
 
 ```typescript
 pi.events.on("flow:subagent-tool-call", (data: {
+  runId:     string;
   agentName: string;
   stepId:    string;
   toolName:  string;
@@ -380,6 +394,7 @@ A tool call returned a result.
 
 ```typescript
 pi.events.on("flow:subagent-tool-result", (data: {
+  runId:     string;
   agentName: string;
   stepId:    string;
   toolName:  string;
@@ -396,6 +411,7 @@ An agent made an autonomous decision at a fork step (autonomous mode).
 
 ```typescript
 pi.events.on("flow:auto-decision", (data: {
+  runId:        string;
   forkId:       string;
   agentName:    string;
   chosenBranch: string;
@@ -411,6 +427,7 @@ A loop decision step started a new iteration.
 
 ```typescript
 pi.events.on("flow:loop-iteration", (data: {
+  runId:         string;
   stepId:        string;
   iteration:     number;
   maxIterations: number;
@@ -431,7 +448,9 @@ pi.events.on("flow:complete", (data: FlowResult) => {
 });
 ```
 
-`FlowResult` shape — see [public-api.md](public-api.md#flowresult).
+`FlowResult` shape — see [public-api.md](public-api.md#flowresult). For a real run the payload carries `runId`; for a *dispatch rejection* (see [`flow:run`](#flowrun)) it does not, because no run existed.
+
+`flow:complete` is therefore the **single terminal channel**: whether a run finished, failed, aborted, or was never started at all, exactly one `flow:complete` arrives.
 
 ---
 
@@ -559,7 +578,7 @@ Two-way synchronous query events and programmatic control signals.
 
 ### `flow:run`
 
-Programmatically trigger a flow by name.
+Programmatically trigger a flow by name. This is the single programmatic entry point a host uses to start a flow.
 
 ```typescript
 pi.events.emit("flow:run", { flowName: "my-flow" });
@@ -567,7 +586,43 @@ pi.events.emit("flow:run", { flowName: "my-flow" });
 
 **Payload:** `{ flowName: string }`
 
-Ignored if a flow is already running.
+#### Dispatch is always observable
+
+A `flow:run` that does **not** start a flow is never dropped silently. The engine emits a terminal `flow:complete` — the same channel a real run finalizes on — carrying a rejection:
+
+```typescript
+pi.events.on("flow:complete", (data: FlowResult) => {
+  if (data.status === "rejected") {
+    // dispatch declined — no run ever started
+    console.error(`${data.flowName}: ${data.reason}`);
+    return;
+  }
+  // ...normal terminal handling
+});
+```
+
+The rejection payload guarantees these stable top-level paths:
+
+| Path | Value |
+|---|---|
+| `status` | `"rejected"` — machine-readable, distinct from a run that started and failed (`"error"`) |
+| `reason` | human-readable cause, byte-identical to the message the slash-command path sends on `flow:notify` |
+| `flowName` | the requested flow name |
+| `lastResult.result.summary` | the same `reason` string, mirrored |
+
+It **omits `results`** — so a host's post-flow summary is not generated for a run that never started — and carries **no `runId`**, because no run was ever minted.
+
+**The three decline reasons:**
+
+| Cause | `reason` |
+|---|---|
+| Unknown flow | `Flow "<name>" no longer exists — it may have been deleted` |
+| A flow is already running | `A flow is already running (<activeFlowName>)` |
+| Blocked by a gate | the gate's own message |
+
+A consumer that never observed `flow_started` can render the outcome from `status === "rejected"` plus `reason` alone — no correlation with an earlier event is required.
+
+**Single-run guard is atomic.** Two `flow:run` events racing into one session cannot start two concurrent runs: the check and the claim happen together, and the loser is declined with the "already running" reason (so it, too, gets a terminal `flow:complete`).
 
 ---
 

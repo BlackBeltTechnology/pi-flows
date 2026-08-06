@@ -231,6 +231,14 @@ A flow runs entirely in-process inside the parent pi session: `FlowManager` hold
 
 The only durable trace is the persisted `flow-event` stream. `FlowEventPersister` writes one entry per lifecycle event as `{ seq, eventType, data, flowRunId }`. The terminal `flow_complete` record is written only when the in-process promise settles, so a hard kill leaves a stream with **no terminal record**. Replaying such a stream on resume previously left the flow card hung on "running" forever, and the Abort button was a no-op (its `flow:abort` handler was gated by `if (flowManager.isRunning)`, which is `false` on a resumed session).
 
+### Run identity
+
+The run id is minted **once per run** by `FlowManager.start()`, before its first `await` and co-located with the atomic single-run guard — so the claim on the session and the identity of the run that claimed it are established together. It is exposed as `flowManager.activeRunId` and handed to every observer as the first parameter of `onFlowStarted(runId, flowName, flow, task)`. `EventEmitObserver` stamps it onto every live `flow:*` payload, which is why `runId` is present in headless/RPC sessions and not only under the TUI.
+
+`FlowEventPersister` no longer self-mints a `flowRunId` when it sees `flow:flow-started`; it records the **supplied** id carried on the payload. The persisted `flowRunId` is therefore the same string as the `runId` on the live events, making the durable stream and the live stream correlatable.
+
+The orphan-reconciliation path is the one deliberate exception and is **preserved unchanged**: it runs when there is no live run, so it injects an explicit id via `persistTerminal(orphanId, …)` rather than reading a live handle.
+
 ### Resume-time reconciliation
 
 On `session_start`, pi-flows scans persisted `flow-event` entries via `findOrphanedRun()`:
