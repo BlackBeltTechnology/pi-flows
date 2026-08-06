@@ -400,6 +400,7 @@ export class TuiFlowObserver implements FlowObserver {
   }
 
   async onFlowStarted(
+    _runId: string,
     flowName: string,
     flow: FlowConfig,
     _task: string,
@@ -555,19 +556,25 @@ export class TuiFlowObserver implements FlowObserver {
 
 export class EventEmitObserver implements FlowObserver {
   private persister: FlowEventPersister;
+  // The run's identity, minted by FlowManager and delivered via onFlowStarted.
+  // Stamped onto every payload this observer emits so live consumers can
+  // attribute each event to its run (and the persister records the supplied id).
+  private currentRunId = "";
 
   constructor(private pi: ExtensionAPI, getSessionManager?: () => any) {
     this.persister = new FlowEventPersister(pi, getSessionManager);
   }
 
   // Emit the event live AND durably record it (best-effort) so the run
-  // survives /resume and dashboard reload. See flow-persist.ts.
+  // survives /resume and dashboard reload. Every payload carries `runId`. See flow-persist.ts.
   private emit(channel: string, data: any): void {
-    this.pi.events.emit(channel, data);
-    this.persister.persist(channel, data);
+    const stamped = { ...data, runId: this.currentRunId };
+    this.pi.events.emit(channel, stamped);
+    this.persister.persist(channel, stamped);
   }
 
-  onFlowStarted(flowName: string, flow: FlowConfig, task: string): void {
+  onFlowStarted(runId: string, flowName: string, flow: FlowConfig, task: string): void {
+    this.currentRunId = runId;
     // Serialize minimal step metadata for external consumers (dashboards, etc.)
     // Avoids sending full AgentConfig.systemPrompt (can be very large)
     const steps = flow.steps.map((step) => ({
@@ -758,6 +765,7 @@ export class EventEmitObserver implements FlowObserver {
       stepCount: 0,
       totalDuration: 0,
       status: "aborted",
+      runId: orphan.flowRunId,
     };
     this.pi.events.emit("flow:complete", result);
     this.persister.persistTerminal(orphan.flowRunId, result);

@@ -24,7 +24,7 @@ describe("flow:flow-started routing fields", () => {
         { id: "resume-gate", stepType: "code-decision", branches: { new: "intake" } },
       ],
     } as any;
-    obs.onFlowStarted("f", flow, "t");
+    obs.onFlowStarted("run-x", "f", flow, "t");
     const ev = emitted.find(e => e.ch === "flow:flow-started");
     expect(ev).toBeTruthy();
     const steps = ev!.data.steps as any[];

@@ -11,7 +11,6 @@
 // openspec/changes/persist-flow-runs/design.md.
 // ---------------------------------------------------------------------------
 
-import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { FlowEventRecord } from "./types.js";
 
@@ -283,12 +282,16 @@ export class FlowEventPersister {
   }
 
   // Persist one event if its channel is a mapped flow-run event. A
-  // `flow:flow-started` channel rotates a fresh flowRunId so all subsequent
-  // events of the run share it.
+  // The run id is minted once per run by the engine (FlowManager.start) and
+  // stamped onto every live payload by EventEmitObserver, so it arrives here on
+  // `data.runId`. The persister records the SUPPLIED id (it no longer self-mints
+  // on `flow:flow-started`), guaranteeing the persisted `flowRunId` equals the
+  // id carried on the run's live `flow:*` payloads.
   persist(channel: string, data: unknown): void {
     const eventType = FLOW_EVENT_NAME_MAP[channel];
     if (!eventType) return;
-    if (channel === "flow:flow-started") this.flowRunId = randomUUID();
+    const supplied = (data as { runId?: unknown } | undefined)?.runId;
+    if (typeof supplied === "string" && supplied) this.flowRunId = supplied;
     const record: FlowEventRecord = {
       seq: this.seq++,
       eventType,

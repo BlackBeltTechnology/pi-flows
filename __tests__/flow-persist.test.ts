@@ -47,30 +47,29 @@ describe("FlowEventPersister", () => {
     expect(recs[1].data).toEqual({ toolName: "read", input: { path: "x" } });
   });
 
-  it("assigns a flowRunId at flow-started and shares it across the run (4.1)", () => {
+  it("records the engine-supplied runId and shares it across the run", () => {
     const pi = fakePi();
     const p = new FlowEventPersister(pi as any);
 
-    p.persist("flow:flow-started", {});
-    p.persist("flow:agent-started", { agentName: "a" });
-    p.persist("flow:complete", {});
+    // The engine mints the run id (FlowManager.start) and EventEmitObserver
+    // stamps it on every payload; the persister records the SUPPLIED id and no
+    // longer self-mints on flow:flow-started.
+    p.persist("flow:flow-started", { runId: "R1" });
+    p.persist("flow:agent-started", { runId: "R1", agentName: "a" });
+    p.persist("flow:complete", { runId: "R1" });
 
-    const ids = pi.entries.map((e) => e.data.flowRunId);
-    expect(ids[0]).toBeTruthy();
-    expect(ids[1]).toBe(ids[0]);
-    expect(ids[2]).toBe(ids[0]);
+    expect(pi.entries.map((e) => e.data.flowRunId)).toEqual(["R1", "R1", "R1"]);
   });
 
-  it("rotates flowRunId on each new flow-started", () => {
+  it("records a distinct runId when the engine supplies a new one", () => {
     const pi = fakePi();
     const p = new FlowEventPersister(pi as any);
 
-    p.persist("flow:flow-started", {});
-    const first = pi.entries[0].data.flowRunId;
-    p.persist("flow:flow-started", {});
-    const second = pi.entries[1].data.flowRunId;
+    p.persist("flow:flow-started", { runId: "R1" });
+    p.persist("flow:flow-started", { runId: "R2" });
 
-    expect(second).not.toBe(first);
+    expect(pi.entries[0].data.flowRunId).toBe("R1");
+    expect(pi.entries[1].data.flowRunId).toBe("R2");
   });
 
   it("produces strictly increasing seq across many events (4.2)", () => {

@@ -113,6 +113,49 @@ function checkGate(flowName: string): string | null {
   return null;
 }
 
+// ---- Dispatch rejection contract (shared by the command + flow:run paths) ---
+
+// The two rejection messages are defined ONCE so the slash-command path
+// (flow:notify) and the programmatic flow:run path (terminal flow:complete)
+// carry byte-identical text by construction, not by hand-copy. The gate message
+// is already shared via checkGate().
+export const flowNotFoundMessage = (name: string): string =>
+  `Flow "${name}" no longer exists — it may have been deleted`;
+export const flowAlreadyRunningMessage = (active: string | null): string =>
+  `A flow is already running (${active})`;
+
+// Build the TERMINAL flow:complete payload for a flow:run that does not start a
+// flow. Stable, documented contract keyed by the invoice UI and the automation
+// runner alike (a consumer that never saw flow_started renders off
+// `status === "rejected"` + `reason`):
+//   status: "rejected"                    machine-readable (≠ a run "error")
+//   reason: <text>                        human-readable cause
+//   flowName: <ns:name>
+//   lastResult.result.summary = reason    so the automation summarizeFlowResult
+//                                          renders `flow <name> rejected: <reason>`
+// `results` is OMITTED so the post-flow summary guard (`!fr.results`) skips it
+// (no spurious `.pi/flows/results/<name>.md`); no runId (no run existed).
+export function buildDispatchRejection(flowName: string, reason: string): Record<string, unknown> {
+  return {
+    lastResult: {
+      success: false,
+      output: "",
+      stderr: "",
+      exitCode: null,
+      result: { status: "error", files: [], summary: reason, artifacts: "" },
+      toolCalls: [],
+      duration: 0,
+      tokens: { input: 0, output: 0 },
+    },
+    forks: {},
+    flowName: flowName ?? "",
+    stepCount: 0,
+    totalDuration: 0,
+    status: "rejected",
+    reason,
+  };
+}
+
 // ---- Extension activation --------------------------------------------------
 
 export function activate(pi: ExtensionAPI) {
@@ -418,12 +461,12 @@ export function activate(pi: ExtensionAPI) {
       handler: async (args) => {
         const flow = flows.get(name);
         if (!flow) {
-          pi.events.emit("flow:notify", { message: `Flow "${name}" no longer exists — it may have been deleted`, level: "error" });
+          pi.events.emit("flow:notify", { message: flowNotFoundMessage(name), level: "error" });
           return;
         }
 
         if (flowManager.isRunning) {
-          pi.events.emit("flow:notify", { message: `A flow is already running (${flowManager.activeFlowName})`, level: "error" });
+          pi.events.emit("flow:notify", { message: flowAlreadyRunningMessage(flowManager.activeFlowName), level: "error" });
           return;
         }
 
@@ -456,17 +499,57 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Programmatic flow execution ──
 
-  async function runFlowByName(flowName: string, opts?: { task?: string; flowInput?: Record<string, unknown> }) {
-    if (flowManager.isRunning) return;
-    const flowConfig = flows.get(flowName);
-    if (!flowConfig) return;
-    const gateMsg = checkGate(flowName);
-    if (gateMsg) return;
-    await flowManager.start({ flow: flowConfig, flowName, task: opts?.task ?? "", flowInput: opts?.flowInput });
+  // Emit a TERMINAL `flow:complete` for a dispatch that does not start a flow, so
+  // the outcome is observable on the SAME channel a real run finalizes on.
+  //
+  // Contract (stable, documented — keyed by the invoice UI and the automation
+  // runner alike):
+  //   status: "rejected"     — machine-readable; distinct from a run "error"
+  //   reason: <text>         — human-readable cause, byte-identical to the
+  //                            slash-command path's flow:notify strings
+  //   flowName: <ns:name>
+  //   lastResult.result.summary = reason  — so the automation runner's
+  //     summarizeFlowResult renders `flow <name> rejected: <reason>` unchanged,
+  //     finalizing an event-dispatched run in seconds instead of wedging until a
+  //     stale-run reaper fires.
+  //
+  // Emit the terminal rejection payload (buildDispatchRejection) directly on
+  // flow:complete — the SAME channel a real run finalizes on — so the outcome is
+  // observable (invoice UI) and finalizes an event-dispatched automation run in
+  // seconds instead of wedging until a stale-run reaper fires.
+  function emitDispatchRejection(flowName: string, reason: string): void {
+    pi.events.emit("flow:complete", buildDispatchRejection(flowName, reason));
   }
 
+  async function runFlowByName(flowName: string, opts?: { task?: string; flowInput?: Record<string, unknown> }) {
+    const flowConfig = flows.get(flowName);
+    if (!flowConfig) {
+      emitDispatchRejection(flowName, flowNotFoundMessage(flowName));
+      return;
+    }
+    if (flowManager.isRunning) {
+      emitDispatchRejection(flowName, flowAlreadyRunningMessage(flowManager.activeFlowName));
+      return;
+    }
+    const gateMsg = checkGate(flowName);
+    if (gateMsg) {
+      emitDispatchRejection(flowName, gateMsg);
+      return;
+    }
+    try {
+      await flowManager.start({ flow: flowConfig, flowName, task: opts?.task ?? "", flowInput: opts?.flowInput });
+    } catch (err) {
+      // The atomic single-run guard in FlowManager.start() can throw "already
+      // running" when a second dispatch races the first before assignment. Convert
+      // it to the same observable rejection instead of an unhandled promise rejection.
+      emitDispatchRejection(flowName, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // Single choke point: the duplicate `isRunning` guard that used to live here has
+  // been removed so every non-start outcome flows through runFlowByName's
+  // observable rejection path (and the atomic guard in start()).
   pi.events?.on("flow:run", async (data: any) => {
-    if (flowManager.isRunning) return;
     await runFlowByName(data?.flowName, { task: data?.task, flowInput: data?.inputs });
   });
 

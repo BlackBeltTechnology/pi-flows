@@ -176,6 +176,10 @@ describe("FlowManager forwards nodeKind through the fan-out", () => {
     };
     const fm = new FlowManager(makeConfig(), ioAdapter, [observer]);
     await fm.start({ flow: { name: "f", steps: [], source: "" } as any, flowName: "f", task: "t" });
+    // start() marks the run active synchronously then runs the flow in a
+    // fire-and-forget promise (the atomic check-to-assign restructure); let that
+    // promise reach the mocked runFlow before inspecting the captured options.
+    await new Promise((r) => setTimeout(r, 0));
 
     expect(capturedOptions).toBeTruthy();
     capturedOptions.onAgentStarted("agent-x", "s1", "model", { nodeKind: "agent" });

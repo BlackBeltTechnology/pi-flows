@@ -289,7 +289,12 @@ export interface FlowResult {
   flowName: string;
   stepCount: number;
   totalDuration: number; // wall-clock ms for entire flow
-  status?: "success" | "error" | "aborted"; // outcome — absent on legacy results
+  // outcome — absent on legacy results. "rejected" is a DISPATCH rejection
+  // (flow:run declined before a run started: unknown flow / already-running /
+  // gate-blocked), distinct from "error" (a run that started and failed).
+  status?: "success" | "error" | "aborted" | "rejected";
+  runId?: string; // engine-minted run identity — absent on legacy results / dispatch rejections
+  reason?: string; // human-readable cause — set on "rejected" (byte-identical to the command-path text)
 }
 
 // ---- Template context for variable expansion ------------------------------

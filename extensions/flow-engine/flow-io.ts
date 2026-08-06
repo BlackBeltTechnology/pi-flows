@@ -68,7 +68,7 @@ export interface FlowIOAdapter {
  * TUI dashboard, web bridge, disk persistence, tests — all are observers.
  */
 export interface FlowObserver {
-  onFlowStarted?(flowName: string, flow: FlowConfig, task: string): void;
+  onFlowStarted?(runId: string, flowName: string, flow: FlowConfig, task: string): void;
   onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }): void;
   onAgentComplete?(agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }): void;
   onToolCall?(agentName: string, stepId: string, toolName: string, input: any): void;

@@ -5,6 +5,7 @@
 // interaction and FlowObserver[] for lifecycle event dispatch.
 // ---------------------------------------------------------------------------
 
+import { randomUUID } from "node:crypto";
 import type { AgentConfig, FlowConfig, FlowResult, NodeKind } from "./types.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -33,6 +34,7 @@ export class FlowManager {
     promise: Promise<FlowResult>;
     abortController: AbortController;
     flowName: string;
+    runId: string;
   } | null = null;
 
   constructor(
@@ -47,6 +49,11 @@ export class FlowManager {
 
   get activeFlowName(): string | null {
     return this._activeFlow?.flowName ?? null;
+  }
+
+  /** Engine-minted identity of the in-flight run, or null when idle. */
+  get activeRunId(): string | null {
+    return this._activeFlow?.runId ?? null;
   }
 
   /** Replace the I/O adapter (e.g., when switching from headless to TUI after session_start). */
@@ -81,18 +88,26 @@ export class FlowManager {
 
     const { flow, flowName, task, flowInput } = options;
     const abortController = new AbortController();
+    const runId = randomUUID();
     const { config, ioAdapter, observers } = this;
 
-    // Notify adapter
-    ioAdapter.onFlowStart?.();
+    // Build the run promise via a synchronous-prologue async IIFE so `_activeFlow`
+    // is assigned BEFORE the first `await` suspends — closing the check-to-assign
+    // race where two `flow:run` dispatches could both pass the `if (this._activeFlow)`
+    // guard above and start two concurrent runs. The adapter + observer
+    // notifications run in the IIFE's synchronous prologue (same tick as before);
+    // the dynamic import is the first suspension point.
+    const promise = (async (): Promise<FlowResult> => {
+      // Notify adapter
+      ioAdapter.onFlowStart?.();
 
-    // Notify observers
-    for (const obs of observers) obs.onFlowStarted?.(flowName, flow, task);
+      // Notify observers (runId first — the run owns its identity)
+      for (const obs of observers) obs.onFlowStarted?.(runId, flowName, flow, task);
 
-    // Dynamic import to avoid circular deps
-    const { runFlow: runFlowFn } = await import("./flow-execution.js");
+      // Dynamic import to avoid circular deps
+      const { runFlow: runFlowFn } = await import("./flow-execution.js");
 
-    const promise = runFlowFn({
+      return runFlowFn({
       flow,
       task,
       flowInput,
@@ -154,15 +169,17 @@ export class FlowManager {
       onLoopIteration: (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => {
         for (const obs of observers) obs.onLoopIteration?.(stepId, iteration, maxIterations, loopTarget);
       },
-    });
+      });
+    })();
 
-    this._activeFlow = { promise, abortController, flowName };
+    this._activeFlow = { promise, abortController, flowName, runId };
 
     // Fire-and-forget with lifecycle cleanup
     promise
       .then((flowResult: FlowResult) => {
         this._activeFlow = null;
         ioAdapter.onFlowEnd?.();
+        flowResult.runId = runId;
         for (const obs of observers) obs.onFlowComplete?.(flowName, flowResult);
       })
       .catch((err: any) => {
@@ -189,6 +206,7 @@ export class FlowManager {
           stepCount: 0,
           totalDuration: 0,
           status: wasAborted ? "aborted" : "error",
+          runId,
         };
         for (const obs of observers) obs.onFlowComplete?.(flowName, errorResult);
       });
