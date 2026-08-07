@@ -3,9 +3,7 @@
 ## Purpose
 
 pi-flows durably records the flow-run lifecycle event stream into the active pi session via `pi.appendEntry`, opening pi's `hasAssistant` flush gate with a non-empty assistant marker at flow start so the session JSONL exists for the whole run. This lets flow runs survive reload/resume and replay on the dashboard, while persistence remains additive to the existing live event-forwarding path.
-
 ## Requirements
-
 ### Requirement: Flow lifecycle events are durably recorded in the pi session
 
 pi-flows SHALL persist every emitted flow-run lifecycle event — the events raised by the `EventEmitObserver` (`flow:flow-started`, `flow:agent-started`, `flow:agent-complete`, `flow:assistant-text`, `flow:thinking-text`, `flow:subagent-tool-call`, `flow:subagent-tool-result`, `flow:auto-decision`, `flow:loop-iteration`, `flow:agent-error`, `flow:complete`) — into the active pi session by calling `pi.appendEntry` with a stable `customType` of `flow-event`. Persistence SHALL be additive: it MUST NOT replace, delay, or alter the existing live `pi.events.emit` forwarding path. The recorded entry SHALL be derived from the same payload object used for the live emission so the persisted and forwarded data cannot diverge.
@@ -34,6 +32,8 @@ The `data` recorded with each `flow-event` entry SHALL contain:
 - `data`: the exact payload the bridge would have forwarded for that event;
 - `flowRunId`: an identifier for the originating flow run.
 
+The `flowRunId` SHALL be minted **once per run by the engine** (`FlowManager.start`) and supplied to the persister; the persister SHALL record the **supplied** id and SHALL NOT self-mint a run id on the `flow:flow-started` channel. This guarantees the `flowRunId` on every persisted record for a run equals the run id carried on that run's live `flow:*` payloads (a single identity across the live and persisted planes). The orphan/reconciliation terminal-record path SHALL continue to inject an **explicit** `flowRunId` (the orphaned run's id, read from disk) independently of any live run id.
+
 Recording the already-mapped `eventType` SHALL allow a consumer to re-forward `{ eventType, data }` verbatim without a second name-mapping table.
 
 #### Scenario: Record uses the mapped protocol event name
@@ -47,6 +47,17 @@ Recording the already-mapped `eventType` SHALL allow a consumer to re-forward `{
 - **WHEN** multiple agents emit events concurrently during a parallel flow
 - **THEN** each persisted record SHALL carry a `seq` that strictly increases in emit order
 - **AND** a consumer ordering records by `seq` SHALL reproduce the order the live reducer observed
+
+#### Scenario: Persisted id equals the live run id
+
+- **WHEN** a run emits lifecycle events and pi-flows persists them
+- **THEN** the `flowRunId` on every persisted record for that run SHALL equal the engine-minted run id carried on the same run's live `flow:*` payloads
+
+#### Scenario: Persister does not self-mint
+
+- **WHEN** the `flow:flow-started` channel is persisted
+- **THEN** the persister SHALL record the run id supplied by the engine
+- **AND** the persister SHALL NOT generate a new run id of its own
 
 ### Requirement: Full per-agent timeline fidelity is preserved by persistence
 
@@ -178,3 +189,4 @@ The `flow-event` records persisted for `flow_agent_started` / `flow_agent_comple
 
 - **WHEN** a replayed `code` node's `flow_assistant_text` records are re-forwarded after its `flow_agent_started` record carrying `nodeKind: "code"`
 - **THEN** those text entries SHALL render as program logs under the reconstructed code card, distinguishable from an agent's assistant text
+
