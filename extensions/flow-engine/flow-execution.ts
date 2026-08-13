@@ -1,6 +1,6 @@
 import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
 import { resolveRouteOutcome } from "./failure.js";
 import type { FailureInfo } from "./types.js";
@@ -74,7 +74,7 @@ export interface FlowRunOptions {
    *  forwarded into `spawnAgent` so subagents share the same handle. */
   pi: ExtensionAPI;
   getAgent: (name: string) => any;  // AgentConfig lookup
-  getSkillContent?: (name: string) => string | undefined;
+  getSkill?: (name: string) => Skill | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
   onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }) => void;
@@ -704,12 +704,14 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   // Determine user message: step task override or fallback to flow task
   const userTask = step.task ? expandTemplateVariables(step.task, templateCtx) : ctx.task;
 
-  // Get skill contents
-  const skillContents = new Map<string, string>();
+  // Resolve declared skills to pi `Skill` objects (name + description +
+  // location); they are advertised in the prompt so the agent reads them on
+  // demand. Unresolvable names are skipped.
+  const skills: Skill[] = [];
   if (agentConfig.skills) {
-    for (const skill of agentConfig.skills) {
-      const content = options.getSkillContent?.(skill);
-      if (content) skillContents.set(skill, content);
+    for (const name of agentConfig.skills) {
+      const s = options.getSkill?.(name);
+      if (s) skills.push(s);
     }
   }
 
@@ -740,7 +742,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     agent: agentConfig,
     task: userTask,
     templateContext: templateCtx,
-    skillContents,
+    skills,
     preambleSections,
     pi: options.pi,
     cwd: options.cwd,
@@ -1002,11 +1004,11 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   };
 
-  const skillContents = new Map<string, string>();
+  const skills: Skill[] = [];
   if (decisionConfig.skills) {
-    for (const skill of decisionConfig.skills) {
-      const content = options.getSkillContent?.(skill);
-      if (content) skillContents.set(skill, content);
+    for (const name of decisionConfig.skills) {
+      const s = options.getSkill?.(name);
+      if (s) skills.push(s);
     }
   }
   options.onAgentStarted?.(step.agent, step.id, undefined, { nodeKind: "agent-decision" });
@@ -1015,7 +1017,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     agent: decisionConfig,
     task: decisionTask,
     templateContext: templateCtx,
-    skillContents,
+    skills,
     pi: options.pi,
     cwd: options.cwd,
     authStorage: options.authStorage,

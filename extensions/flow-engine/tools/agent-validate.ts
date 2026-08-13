@@ -29,7 +29,6 @@ const BASE_TOOLS = new Set([
   "find",
   "ls",
   "bash",
-  "skill_read",
 ]);
 
 // Well-known model roles. Unknown roles produce a warning (not error) since

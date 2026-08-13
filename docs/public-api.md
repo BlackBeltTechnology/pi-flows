@@ -360,7 +360,7 @@ interface FlowRunOptions {
   extraCustomTools?:   any[];
   getModelRole?:       (role: string) => string | undefined;
   getAgent:            (name: string) => AgentConfig | undefined;
-  getSkillContent?:    (name: string) => string | undefined;
+  getSkill?:           (name: string) => Skill | undefined;
   askUser:             (question: string, type: string, options?: string[], extra?: any)
                          => Promise<{ answer: string; notes?: string }>;
   // Callbacks
@@ -469,7 +469,7 @@ Run a single agent session. Lower-level than `runFlow`.
 async function spawnAgent(options: SpawnOptions): Promise<AgentResult>
 ```
 
-`SpawnOptions` includes: `agent`, `task`, `templateContext`, `skillContents`, `cwd`, `authStorage`, `modelRegistry`, `extraAgentExtensions`, `extraCustomTools`, and streaming callbacks.
+`SpawnOptions` includes: `agent`, `task`, `templateContext`, `skills` (resolved pi `Skill[]` advertised via `formatSkillsForPrompt`), `cwd`, `authStorage`, `modelRegistry`, `extraAgentExtensions`, `extraCustomTools`, and streaming callbacks.
 
 ---
 
@@ -733,7 +733,7 @@ interface FlowManagerConfig {
   getModelRegistry:       () => any;
   getExtraAgentExtensions: () => any[];
   getExtensionTools:      () => any[];
-  getSkillContent:        (name: string) => string | undefined;
+  getSkill:               (name: string) => Skill | undefined;
   isAutonomous:           () => boolean;
 }
 ```

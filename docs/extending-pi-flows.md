@@ -176,14 +176,14 @@ pi.events.emit("flow:register-flows-dir", { dir: join(pkgRoot, "flows") });
 pi.events.emit("flow:register-skills-dir", { dir: join(pkgRoot, "skills") });
 ```
 
-Each subdirectory must contain a `SKILL.md` with a `files:` list. Topic files are read on-demand via the `skill_read` tool.
+Each subdirectory must contain a `SKILL.md`. When an agent declares the skill, it is advertised in the prompt (name/description/location) and the agent reads `SKILL.md` + its topic files on demand with `read` (auto-granted; skill dir whitelisted).
 
 ```
 skills/
   my-docs/
-    SKILL.md            # index (injected into agent prompts)
-    api-reference.md    # topic file (read on-demand)
-    error-codes.md      # topic file (read on-demand)
+    SKILL.md            # index (advertised in agent prompts by location)
+    api-reference.md    # topic file (read on-demand with `read`)
+    error-codes.md      # topic file (read on-demand with `read`)
 ```
 
 `SKILL.md` format:
@@ -198,7 +198,7 @@ files:
 
 # My Domain Documentation
 
-Reference docs for the my-domain framework. Use `skill_read` to access details.
+Reference docs for the my-domain framework. Use `read` to open the files below (paths relative to this `SKILL.md`).
 
 ## Available Reference Files
 - **api-reference.md** — Endpoint signatures and request/response shapes

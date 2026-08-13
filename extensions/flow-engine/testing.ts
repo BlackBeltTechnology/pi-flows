@@ -33,6 +33,7 @@ import {
   type FauxResponseStep,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { registerFauxProvider as RegisterFauxProviderFn } from "@earendil-works/pi-ai/compat";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 
 import { spawnAgent } from "./execution.js";
 import { runFlow, type FlowRunOptions } from "./flow-execution.js";
@@ -219,6 +220,14 @@ export interface SpawnFauxOptions {
   /** Streaming rate; low values make abort-mid-stream deterministic. */
   tokensPerSecond?: number;
   cwd?: string;
+  /**
+   * Resolved skill bundles to advertise in the agent's system prompt (mirrors
+   * what the flow executor builds from `agent.skills` via `getSkill`). They are
+   * rendered with pi's `formatSkillsForPrompt` (name + description + location);
+   * the agent reads SKILL.md / topic files on demand with `read`. Build these
+   * with pi's `loadSkillsFromDir` against a real skill directory.
+   */
+  skills?: Skill[];
 }
 
 export interface SpawnFauxOutcome {
@@ -263,6 +272,7 @@ export async function spawnFaux(options: SpawnFauxOptions): Promise<SpawnFauxOut
       cwd: options.cwd ?? process.cwd(),
       modelRegistry: registry,
       resolvedModelId: `${provider}/${modelId}`,
+      skills: options.skills,
       signal: options.signal,
     });
     return { result, faux, finishToolName };

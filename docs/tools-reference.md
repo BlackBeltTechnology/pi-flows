@@ -9,7 +9,6 @@ pi-flows registers a set of tools that are exposed to agents running inside flow
 | Tool | Context | Registered by |
 |------|---------|--------------|
 | `ask_user` | Main session | `registerAskUserTool` |
-| `skill_read` | Main session | `registerSkillReadTool` |
 | `subagent` | Main session | `registerSubagentTool` |
 | `finish` | Subagent sessions | Guard extension (per-session) |
 | `flow_agents` | Main session (inactive by default) | `registerFlowAgentsTool` |
@@ -56,40 +55,40 @@ For `confirm`, `answer` is `true` or `false`. For `multiSelect`, `answer` is an 
 
 ---
 
-### `skill_read`
+### Skills (read-based, no dedicated tool)
 
-Read a topic file from a registered skill bundle. Skills provide on-demand reference documentation without bloating every agent's system prompt.
+pi-flows has **no `skill_read` tool**. Skills follow pi's own mechanism: when an
+agent declares `skills:`, each declared skill is resolved (via pi's
+`loadSkillsFromDir`) and **advertised** in the agent's system prompt with pi's
+`formatSkillsForPrompt` — `<name>`, `<description>`, and `<location>` (the
+absolute `SKILL.md` path). The agent then loads `SKILL.md` and any topic files it
+references **on demand with the standard `read` tool** (progressive disclosure).
 
-**Available in:** Main session, all subagent sessions.
+Because a flow agent may not declare `read`, and may sandbox it with
+`access.read`, `spawnAgent` makes skills reachable automatically:
 
-**Parameters:**
-```typescript
-{
-  skill: string;  // Skill name (e.g., "my-backend-docs")
-  file:  string;  // Topic file name listed in SKILL.md (e.g., "api-patterns.md")
-}
-```
+1. **Auto-grants `read`** — if the agent declares `skills:` but not `read`,
+   `read` is added to its effective tools.
+2. **Whitelists the skill dirs** — each resolved skill directory is added to the
+   agent's `access.read` globs, so a restrictive read sandbox still permits the
+   advertised skill files (and nothing else outside the sandbox).
 
-**Returns:** Raw file content as text, or an error string if the skill or file is not found.
-
-**How skills are discovered:**
+**Skill discovery order** (used to resolve declared skill names):
 1. Extra skills directories (registered via `flow:register-skills-dir`) — searched first.
 2. pi-flows package `skills/` directory.
 
-A skill directory must contain `SKILL.md` with a `files:` list. `skill_read` validates that `file` appears in that list before reading.
-
-**Usage pattern:**
+**Usage:**
 ```markdown
 ---
 name: my-agent
 skills: my-backend-docs
+tools: grep, find        # `read` is auto-added because `skills:` is set
 ---
-You have access to backend documentation. Use `skill_read` to look up:
-- skill: my-backend-docs
-- file: (see SKILL.md for available files)
+Consult the my-backend-docs skill (see its <location>) before implementing.
 ```
 
-The `SKILL.md` index is automatically injected into the agent's system prompt when `skills:` is declared. Individual topic files are read on-demand.
+> Do **not** list `skill_read` in `tools:` — it does not exist and validation
+> rejects it. Reading skill files is done with `read`.
 
 ---
 
@@ -289,7 +288,6 @@ Submit the agent's final structured result. **Every agent must call `finish` as 
 | Tool | Main session LLM | Flow agent | External package agent |
 |------|:---:|:---:|:---:|
 | `ask_user` | ✓ | ✓ (blocked in autonomous) | ✓ |
-| `skill_read` | ✓ | ✓ | ✓ |
 | `subagent` | ✓ | — | — |
 | `flow_agents` | ✓ (inactive unless `flows.editFlow`) | — | — |
 | `flow_write` | ✓ (inactive unless `flows.editFlow`) | — | — |

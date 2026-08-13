@@ -37,10 +37,10 @@ Overview text explaining when and how to use this skill.
 
 ### Creating Skills for Your Domain
 
-Skills provide domain-specific knowledge to agents without bloating their system prompts. The `SKILL.md` file is injected into the agent's prompt, while topic files are accessed on-demand via the `skill_read` tool.
+Skills provide domain-specific knowledge to agents without bloating their system prompts. Each declared skill is **advertised** in the agent's prompt (name, description, and `SKILL.md` location); the agent then reads `SKILL.md` and its topic files **on demand with the `read` tool** (pi's progressive-disclosure model). Declaring `skills:` auto-grants `read` and whitelists the skill directory, so this works even for agents with a restrictive `access.read`.
 
 **Best practices:**
-- Keep `SKILL.md` concise — it's injected into every agent that declares the skill
+- Keep `SKILL.md` concise — the agent reads it on demand; put bulky detail in topic files
 - Put detailed reference material in topic files
 - One topic per file, under 500 lines
 - Include code examples in fenced blocks with language tags
@@ -74,7 +74,7 @@ files:
 
 # Frontend Documentation
 
-Reference docs for the frontend framework. Use `skill_read` to access detailed guides.
+Reference docs for the frontend framework. Use `read` to open the guides below (paths are relative to this `SKILL.md`).
 
 ## Available Reference Files
 

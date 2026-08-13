@@ -167,6 +167,10 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
     const rules = options.accessRules;
     if (!rules) return;
 
+    // On the FIRST read denial only, spell out the allowed paths so the agent
+    // can self-correct; later denials stay terse to avoid repeating the list.
+    let readDenialReported = false;
+
     // Simple glob match (supports ** and *)
     function matchesPattern(filePath: string, patterns: string[]): boolean {
       for (const pattern of patterns) {
@@ -190,8 +194,14 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
       const params = event.params || event.input || {};
 
       if (toolName === "read" && rules.read) {
-        if (!matchesPattern(params.file_path || "", rules.read)) {
-          return { block: true, reason: `Access denied: read not in allowed paths: ${params.file_path}` };
+        // The read tool's parameter is `path`; accept `file_path` too for safety.
+        const target = params.path || params.file_path || "";
+        if (!matchesPattern(target, rules.read)) {
+          const reason = readDenialReported
+            ? `Access denied: read "${target}" is outside your allowed paths`
+            : `Access denied: read "${target}" is outside your allowed paths. Allowed read paths: ${rules.read.join(", ")}`;
+          readDenialReported = true;
+          return { block: true, reason };
         }
       }
 

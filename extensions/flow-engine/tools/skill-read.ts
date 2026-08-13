@@ -1,14 +1,25 @@
-import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+
+/**
+ * Skill-directory resolution shared by the flow engine.
+ *
+ * Skills are advertised to agents the pi way — name + description + location in
+ * the system prompt (via `formatSkillsForPrompt`) — and agents load `SKILL.md`
+ * and its topic files on demand with the standard `read` tool (auto-granted, and
+ * the skill dirs whitelisted into any `access.read` sandbox, by `spawnAgent`).
+ * There is no bespoke `skill_read` tool; these helpers only locate a skill's
+ * directory so pi's `loadSkillsFromDir` can resolve it.
+ */
 
 const extraSkillsDirs: string[] = [];
 
+/** Register an extra skills root (e.g. contributed by a downstream package). */
 export function registerExtraSkillsDir(dir: string): void {
   if (!extraSkillsDirs.includes(dir)) extraSkillsDirs.push(dir);
 }
 
+/** Locate the directory containing `<skillName>/SKILL.md`, or null if absent. */
 export function findSkillDir(packageRoot: string, skillName: string): string | null {
   // Check extra dirs first (dependent packages like judo)
   for (const dir of extraSkillsDirs) {
@@ -19,42 +30,4 @@ export function findSkillDir(packageRoot: string, skillName: string): string | n
   const candidate = join(packageRoot, "skills", skillName, "SKILL.md");
   if (existsSync(candidate)) return join(packageRoot, "skills", skillName);
   return null;
-}
-
-export function registerSkillReadTool(pi: ExtensionAPI, packageRoot: string): void {
-  pi.registerTool({
-    name: "skill_read",
-    label: "skill_read",
-    description: "Read a detail file from a skill. Skills provide framework documentation. Use to access detailed reference docs listed in a skill's SKILL.md.",
-    parameters: Type.Object({
-      skill: Type.String({ description: "Skill name (e.g., 'judo-backend-docs')" }),
-      file: Type.String({ description: "Detail file name (e.g., 'custom-operations.md')" }),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const skillDir = findSkillDir(packageRoot, params.skill);
-
-      if (!skillDir) {
-        return { content: [{ type: "text", text: `Error: Skill '${params.skill}' not found` }], details: {} };
-      }
-
-      const skillMdPath = join(skillDir, "SKILL.md");
-
-      // Validate file is listed in SKILL.md
-      const skillMd = readFileSync(skillMdPath, "utf-8");
-      if (!skillMd.includes(params.file)) {
-        return { content: [{ type: "text", text: `Error: File '${params.file}' is not listed in ${params.skill}/SKILL.md. Check 'Available Reference Files' section.` }], details: {} };
-      }
-
-      const filePath = join(skillDir, params.file);
-      if (!existsSync(filePath)) {
-        return { content: [{ type: "text", text: `Error: File '${params.file}' listed in SKILL.md but not found at ${filePath}` }], details: {} };
-      }
-
-      const content = readFileSync(filePath, "utf-8");
-      return {
-        content: [{ type: "text", text: content }],
-        details: {},
-      };
-    },
-  });
 }

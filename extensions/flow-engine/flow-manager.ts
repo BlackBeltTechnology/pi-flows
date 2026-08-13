@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentConfig, FlowConfig, FlowResult, NodeKind } from "./types.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 
 
 // ---- Configuration (non-TUI deps) -----------------------------------------
@@ -23,7 +23,7 @@ export interface FlowManagerConfig {
   getSessionManager: () => any;
   getExtraAgentExtensions: () => any[];
   getExtensionTools: () => any[];
-  getSkillContent: (name: string) => string | undefined;
+  getSkill: (name: string) => Skill | undefined;
   isAutonomous: () => boolean;
 }
 
@@ -127,7 +127,7 @@ export class FlowManager {
       },
       pi: config.getPi(),
       getAgent: (agentName) => config.getAgents().get(agentName),
-      getSkillContent: (skillName) => config.getSkillContent(skillName),
+      getSkill: (skillName) => config.getSkill(skillName),
       askUser: async (question, type, askOptions, extra) => {
         const r = await ioAdapter.askUser(question, type as any, askOptions, { ...extra, signal: abortController.signal });
         return {

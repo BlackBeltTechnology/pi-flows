@@ -5,6 +5,18 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.6] - 2026-08-13
+
+### Changed
+
+- **Flow agents now use skills the pi way — advertise + `read`, no `skill_read` tool** (`agent-skills` capability). Previously an agent that declared `skills:` had the whole `SKILL.md` **body** injected into its prompt, while the `skill_read` tool was registered only on the **main session** and never wired into subagents — so a flow agent was told (by the docs and every example) to use `skill_read` but the tool did not exist in its session, and it could not open the topic files a `SKILL.md` references. Now each declared skill is resolved with pi's `loadSkillsFromDir` and **advertised** in the prompt with pi's `formatSkillsForPrompt` (name, description, and `<location>` — the absolute `SKILL.md` path); the agent reads `SKILL.md` and its topic files on demand with the ordinary `read` tool (pi's progressive-disclosure model). Because flow subagents — unlike pi's main session — may omit `read` or sandbox it, `spawnAgent` now **auto-grants `read`** when `skills:` is set and **whitelists each resolved skill directory** into the agent's `access.read` (widening the sandbox only to the skill dirs, nothing else). The shipped faux-testing harness gains an additive `spawnFaux({ skills })` passthrough. See [docs/tools-reference.md](docs/tools-reference.md) and [docs/agents.md](docs/agents.md). OpenSpec: read-skills-via-read-tool.
+
+- **Read-access gating now works and explains itself** (`agent-skills` capability). The guard's `access.read` enforcement compared `params.file_path`, but the `read` tool's parameter is `path` — so any agent with an `access.read` sandbox had **every** read blocked (the gate never saw the real path). The guard now evaluates `path` (with `file_path` as a legacy fallback), and on the **first** read denial in a session the block reason lists the agent's allowed read paths (`Allowed read paths: …`) so it can self-correct; later denials stay terse.
+
+### Removed
+
+- **BREAKING: the `skill_read` tool was removed** (`agent-skills` capability). It is no longer registered on the main session, is not provided to subagents, and is no longer an accepted agent-frontmatter tool — declaring `skill_read` in `tools:` is now a validation **error**. Migrate by removing `skill_read` from any agent's `tools:`; declaring `skills:` auto-grants `read`, which reads `SKILL.md` and its topic files (advertised by location in the prompt). No bundled agents declared `skill_read`.
+
 ## [v0.3.5] - 2026-08-07
 
 ### Added

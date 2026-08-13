@@ -90,7 +90,7 @@ describe("FlowManager run identity + atomic single-run guard", () => {
       getExtraAgentExtensions: () => [],
       getExtensionTools: () => [],
       isAutonomous: () => false,
-      getSkillContent: () => undefined,
+      getSkill: () => undefined,
     } as any;
   }
   const ioAdapter = { askUser: async () => ({ answer: "" }), handleExtensionUIRequest: () => {} } as any;

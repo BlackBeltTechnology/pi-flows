@@ -46,7 +46,7 @@ Supports ${{task}} and ${{input.<name>}} interpolation.
 | `model` | ✓ | string | Model tier: `@coding`, `@planning`, `@research`, `@compact` |
 | `thinking` | | string | Thinking depth override (e.g., `high`) |
 | `tools` | ✓ | string/list | Comma-separated tool allowlist |
-| `skills` | | string/list | Skill bundle names loaded via `skill_read` |
+| `skills` | | string/list | Skill bundle names. Each skill is advertised in the prompt (name/description/location); the agent reads `SKILL.md` + topic files on demand with `read` (auto-granted when `skills:` is set). |
 | `inputs` | | list | Named inputs populated from upstream step results (bare names — no typing or validation) |
 | `outputs` | | list | Named output values extracted from `finish` params (typed outputs, required by default) |
 | `fork_session` | | boolean | When `true`, the spawned agent inherits the operator's (main session's) conversation data. Default `false`. |
@@ -163,7 +163,7 @@ A typical read-only research agent:
 name: backend-researcher
 description: Investigates backend code patterns and conventions
 model: @research
-tools: read, grep, find, ls, skill_read
+tools: read, grep, find, ls
 skills: my-backend-docs
 inputs:
   - prior_context
@@ -208,7 +208,7 @@ A typical code-writing agent:
 name: backend-developer
 description: Implements backend changes based on research findings
 model: @coding
-tools: read, write, edit, grep, find, ls, bash, skill_read
+tools: read, write, edit, grep, find, ls, bash
 skills: my-backend-docs
 inputs:
   - research_output
@@ -255,7 +255,7 @@ A typical verification/build agent:
 name: verifier
 description: Builds the project and verifies acceptance criteria
 model: @planning
-tools: read, grep, find, ls, bash, skill_read
+tools: read, grep, find, ls, bash
 inputs:
   - implementation_output
 outputs:
@@ -335,11 +335,11 @@ These dependencies are expressed through `blockedBy` in flow steps and `inputs` 
 
 | Agent Role | Typical Tools | Notes |
 |------------|---------------|-------|
-| Researcher | `read`, `grep`, `find`, `ls`, `skill_read` | Read-only, no file modification |
-| Developer | `read`, `write`, `edit`, `grep`, `find`, `ls`, `bash`, `skill_read` | Full dev access, sandboxed paths |
-| Tester | `read`, `write`, `edit`, `grep`, `find`, `ls`, `bash`, `skill_read` | Similar to developer, test-focused paths |
-| Verifier | `read`, `grep`, `find`, `ls`, `bash`, `skill_read` | Build access, limited writes |
-| Planner | `read`, `write`, `grep`, `skill_read` | Document generation, no bash |
+| Researcher | `read`, `grep`, `find`, `ls` | Read-only, no file modification |
+| Developer | `read`, `write`, `edit`, `grep`, `find`, `ls`, `bash` | Full dev access, sandboxed paths |
+| Tester | `read`, `write`, `edit`, `grep`, `find`, `ls`, `bash` | Similar to developer, test-focused paths |
+| Verifier | `read`, `grep`, `find`, `ls`, `bash` | Build access, limited writes |
+| Planner | `read`, `write`, `grep` | Document generation, no bash |
 | Summarizer | `read`, `write`, `grep` | Lightweight, document-focused |
 
 > **`finish` is automatic.** Every agent automatically has the `finish` tool — do not declare it. Agents *must* call `finish` as their last action to submit structured results.

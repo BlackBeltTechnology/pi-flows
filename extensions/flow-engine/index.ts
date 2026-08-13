@@ -7,12 +7,12 @@
 // ---------------------------------------------------------------------------
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
 import { isAutonomousMode, setAutonomousMode } from "../autonomous-mode.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
 import {
-  registerSkillReadTool,
   registerExtraSkillsDir,
   findSkillDir,
 } from "./tools/skill-read.js";
@@ -22,8 +22,6 @@ import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { isEditFlowEnabled, setEditFlowFlag, parseEditModeArg } from "./edit-flow-config.js";
 import { syncEditFlowSkill } from "./edit-flow-skill.js";
 import { makeEditFlowToolReconciler } from "./edit-flow-reconcile.js";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { FlowManager } from "./flow-manager.js";
 import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
@@ -224,10 +222,15 @@ export function activate(pi: ExtensionAPI) {
       getSessionManager: () => sessionManager,
       getExtraAgentExtensions: () => [...extraAgentExtensions],
       getExtensionTools: () => [...registeredExtensionTools],
-      getSkillContent: (skillName) => {
+      getSkill: (skillName) => {
         const dir = findSkillDir(pkgRoot, skillName);
         if (!dir) return undefined;
-        try { return readFileSync(join(dir, "SKILL.md"), "utf-8"); } catch { return undefined; }
+        // Reuse pi's own loader so the resolved Skill (name/description/
+        // filePath/baseDir) matches main-session semantics exactly.
+        try {
+          const { skills } = loadSkillsFromDir({ dir, source: "pi-flows" });
+          return skills.find(s => s.name === skillName) ?? skills[0];
+        } catch { return undefined; }
       },
       isAutonomous: () => isAutonomousMode(),
     },
@@ -358,7 +361,6 @@ export function activate(pi: ExtensionAPI) {
   // ── Register tools ──
 
   registerAskUserTool(pi);
-  registerSkillReadTool(pi, pkgRoot);
 
   // Tool name dedup set — used by the flow:register-tool handler.
   const seenToolNames = new Set<string>();

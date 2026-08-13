@@ -5,6 +5,7 @@ import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ResourceLoader
 import {
   createAgentSession,
   SessionManager,
+  formatSkillsForPrompt,
   createReadTool,
   createBashTool,
   createEditTool,
@@ -15,14 +16,14 @@ import {
   createExtensionRuntime,
   createEventBus,
 } from "@earendil-works/pi-coding-agent";
-import type { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { AuthStorage, ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
 import { resolveModel } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
 import { createGuardExtension } from "./guard.js";
 import { prefixToolName } from "./tool-prefix.js";
 import { existsSync, readFileSync } from "node:fs";
-import { resolve as pathResolve } from "node:path";
+import { resolve as pathResolve, join as pathJoin, dirname } from "node:path";
 
 export { prefixToolName } from "./tool-prefix.js";
 
@@ -158,7 +159,13 @@ export interface SpawnOptions {
   agent: AgentConfig;
   task: string;
   templateContext: TemplateContext;
-  skillContents?: Map<string, string>;
+  /**
+   * Resolved skill bundles for this agent (from `agent.skills`). Advertised in
+   * the system prompt via pi's `formatSkillsForPrompt` (name + description +
+   * location) so the agent loads SKILL.md and its topic files on demand with
+   * `read` — mirroring pi's own progressive-disclosure skill mechanism.
+   */
+  skills?: Skill[];
   preambleSections?: string[];
   /** Extension API handle — used by `resolveModel` to emit `model:resolve`
    *  and fall back to `pi.modelRegistry`. */
@@ -280,11 +287,12 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Build system prompt: expand template variables in agent body
   let systemPrompt = expandTemplateVariables(agent.systemPrompt, templateContext);
 
-  // Inject skill contents
-  if (options.skillContents) {
-    for (const [name, content] of options.skillContents) {
-      systemPrompt = `## Skill: ${name}\n\n${content}\n\n` + systemPrompt;
-    }
+  // Advertise skills the pi way: name + description + location only, so the
+  // agent reads SKILL.md (and its topic files) on demand with `read`. This
+  // reuses pi's own formatter, keeping identical semantics to the main session.
+  if (options.skills?.length) {
+    const skillBlock = formatSkillsForPrompt(options.skills);
+    if (skillBlock) systemPrompt = `${skillBlock}\n\n${systemPrompt}`;
   }
 
   // Inject context file contents
@@ -360,7 +368,15 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // capitalization or mcp__ prefixing for Claude-model anthropic-messages
   // sessions happens later in pi-ai or @pi/anthropic-messages — we MUST pass
   // the lowercase pi-internal names here.
-  const builtinToolNames = agent.tools.filter(t => TOOL_FACTORIES[t]);
+  // An agent that declares `skills:` reads the advertised SKILL.md / topic
+  // files with the standard `read` tool (pi's own skill mechanism), so ensure
+  // `read` is available even if the agent did not list it.
+  const hasSkills = !!options.skills?.length;
+  const effectiveTools = hasSkills && !agent.tools.includes("read")
+    ? [...agent.tools, "read"]
+    : agent.tools;
+
+  const builtinToolNames = effectiveTools.filter(t => TOOL_FACTORIES[t]);
 
   // Custom tools (flow_agents, flow_write, finish, ask_user, …)
   // are passed as full ToolDefinition objects via `customTools`. The SDK adds
@@ -371,11 +387,20 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     return prefixed !== t.name ? { ...t, name: prefixed } : t;
   });
 
+  // When the agent sandboxes reads (`access.read`), widen it to include the
+  // resolved skill directories so `read` can reach the advertised SKILL.md and
+  // its topic files. Agents without `access` rules are unrestricted already.
+  let accessRules = agent.access;
+  if (accessRules?.read && options.skills?.length) {
+    const skillGlobs = options.skills.map(s => pathJoin(dirname(s.filePath), "**"));
+    accessRules = { ...accessRules, read: [...accessRules.read, ...skillGlobs] };
+  }
+
   // Build guard options
   const guardOptions: GuardOptions = {
-    allowedTools: [...agent.tools, "finish"],
+    allowedTools: [...effectiveTools, "finish"],
     requireFinish: true,
-    accessRules: agent.access,
+    accessRules,
     decisionBranches: options.decisionBranches,
     agentOutputs: agent.outputs,
     allowAskUser: !!options.onExtensionUIRequest,

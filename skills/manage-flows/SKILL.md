@@ -9,7 +9,7 @@ You are creating and editing **pi-flows** flows and agents directly in this sess
 
 - `flow_agents` — `op: "list"` returns the agent catalog; `op: "write"` validates and writes an agent `.md` to `.pi/flows/agents/<name>.md` (filename derived from the agent's frontmatter `name`).
 - `flow_write` — `namespace` (default `custom`), `name`, `content`. Validates and writes a flow to `.pi/flows/flows/<namespace>/<name>/flow.yaml` (the flow's own directory), which auto-registers as the `/<namespace>:<name>` command.
-- `skill_read` — read a skill's detail files when you need framework reference while authoring.
+- `read` — read a skill's `SKILL.md` and its topic files when you need framework reference while authoring (skills are advertised in the prompt with their location).
 
 These tools derive their write locations from the discovery convention — there is **no raw `path`**. Writing to a name that already exists overwrites it (that is how you edit).
 
@@ -166,7 +166,7 @@ Context: ${{input.research_context}}
 | `name` | Yes | Unique. Filename = `<name>.md`. Referenced as `agent: <name>` in steps. |
 | `description` | Yes | One line. Shown in catalog. |
 | `model` | Yes | See **Model references**. |
-| `tools` | Yes | Comma-separated. Guard blocks anything not listed. Standard: `read, write, edit, grep, find, ls, bash, ask_user, skill_read`. |
+| `tools` | Yes | Comma-separated. Guard blocks anything not listed. Standard: `read, write, edit, grep, find, ls, bash, ask_user`. Declaring `skills:` auto-grants `read`; never list `skill_read` (it does not exist). |
 | `thinking` | No | `off`/`minimal`/`low`/`medium`/`high`/`xhigh`. Overrides any `:level` suffix in `model`. |
 | `skills` | No | Comma-separated skill names injected into the prompt. |
 | `inputs` | No | Names → `${{input.NAME}}` in the prompt. Flow step must wire each one. |

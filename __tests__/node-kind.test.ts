@@ -158,7 +158,7 @@ describe("FlowManager forwards nodeKind through the fan-out", () => {
       getExtraAgentExtensions: () => [],
       getExtensionTools: () => [],
       isAutonomous: () => false,
-      getSkillContent: () => undefined,
+      getSkill: () => undefined,
     } as any;
   }
   const ioAdapter = {

@@ -97,7 +97,7 @@ pi.events.emit("flow:register-skills-dir", { dir: "/abs/path/to/skills" });
 
 **Payload:** `{ dir: string }`
 
-Skills registered here are searchable via the `skill_read` tool. See [flow-authoring.md](flow-authoring.md) for skill directory format.
+Skills registered here are resolvable by name when an agent declares them in `skills:`; they are advertised in the agent's prompt and read on demand with `read`. See [flow-authoring.md](flow-authoring.md) for skill directory format.
 
 ---
 
