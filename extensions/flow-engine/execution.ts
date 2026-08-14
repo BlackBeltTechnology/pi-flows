@@ -1,7 +1,7 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
 import { classifyAgentOutcome } from "./failure.js";
 import { createFinishLatch } from "./finish-latch.js";
-import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ResourceLoader } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ModelRuntime, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
   SessionManager,
@@ -16,7 +16,7 @@ import {
   createExtensionRuntime,
   createEventBus,
 } from "@earendil-works/pi-coding-agent";
-import type { AuthStorage, ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
+import type { ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
 import { resolveModel } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
@@ -171,8 +171,12 @@ export interface SpawnOptions {
    *  and fall back to `pi.modelRegistry`. */
   pi: ExtensionAPI;
   cwd: string;
-  authStorage?: AuthStorage;
+  /** Legacy pass-through, no longer forwarded to the SDK session bootstrap. */
+  authStorage?: unknown;
   modelRegistry?: ModelRegistry;
+  /** Canonical model/auth runtime for the subagent session. When omitted the
+   *  SDK builds its default disk-backed runtime. */
+  modelRuntime?: ModelRuntime;
   /** Operator's live SessionManager. When the agent declares `fork_session`,
    *  its persisted file is forked via SessionManager.forkFrom for context inheritance. */
   mainSessionManager?: SessionManager;
@@ -339,11 +343,6 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     };
   }
 
-  // Resolve authStorage — from explicit option or from modelRegistry
-  const authStorage = options.authStorage
-    ?? (options.modelRegistry as any)?.authStorage
-    ?? undefined;
-
   // Detect Anthropic-messages protocol: any provider using anthropic-messages
   // needs non-core tools registered with mcp__flows__ prefix so Anthropic's
   // endpoint accepts them. This covers direct OAuth, API key, AND proxy
@@ -447,7 +446,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => undefined,
+    // spawnAgent composes the prompt in memory — no on-disk source backs it.
+    getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => capturedSystemPrompt ? [capturedSystemPrompt] : [],
+    getAppendSystemPromptSources: () => [],
     extendResources: () => {},
     reload: async () => {},
   };
@@ -505,8 +507,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       customTools: customTools,
       resourceLoader,
       sessionManager: agentSessionManager,
-      authStorage,
-      modelRegistry: options.modelRegistry,
+      // Model/auth via the SDK's modelRuntime option (replaces the removed
+      // authStorage + modelRegistry bootstrap options). Omitted when absent so
+      // the SDK builds its default disk-backed runtime.
+      ...(options.modelRuntime ? { modelRuntime: options.modelRuntime } : {}),
       cwd,
     });
     session = sess;

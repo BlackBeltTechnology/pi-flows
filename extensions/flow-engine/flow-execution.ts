@@ -65,6 +65,7 @@ export interface FlowRunOptions {
   cwd: string;
   authStorage?: any;
   modelRegistry?: any;
+  modelRuntime?: any;
   /** Operator's live SessionManager — forked into agents declaring `fork_session`. */
   mainSessionManager?: any;
   extraAgentExtensions?: any[];
@@ -748,6 +749,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
+      modelRuntime: options.modelRuntime,
     mainSessionManager: options.mainSessionManager,
     extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
@@ -822,6 +824,7 @@ async function spawnForkDecisionAgent(
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
+      modelRuntime: options.modelRuntime,
     extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
     decisionBranches: branchNames,
@@ -1022,6 +1025,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     cwd: options.cwd,
     authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
+      modelRuntime: options.modelRuntime,
     extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: branchNames,

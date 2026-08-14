@@ -33,6 +33,7 @@ import {
   type FauxResponseStep,
 } from "@earendil-works/pi-ai/providers/faux";
 import type { registerFauxProvider as RegisterFauxProviderFn } from "@earendil-works/pi-ai/compat";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 
 import { spawnAgent } from "./execution.js";
@@ -117,13 +118,86 @@ function resolveNestedCompatPath(): string {
   );
 }
 
-let cachedRegister: typeof RegisterFauxProviderFn | undefined;
-async function getRegisterFauxProvider(): Promise<typeof RegisterFauxProviderFn> {
-  if (cachedRegister) return cachedRegister;
+/**
+ * Structural `CredentialStore` reporting a faux api-key credential for the
+ * given provider ids. The current pi SDK resolves session auth through a
+ * `ModelRuntime`; a scripted, zero-network faux provider still needs auth to
+ * *resolve* (the key is never sent anywhere), so we hand it a canned key.
+ */
+function fauxCredentialStore(providerIds: string[]): any {
+  const cred = { type: "api_key" as const, key: "faux" };
+  const ids = new Set(providerIds);
+  return {
+    read: async (id: string) => (ids.has(id) ? cred : undefined),
+    list: async () => [...ids].map((id) => ({ providerId: id, type: "api_key" as const })),
+    modify: async (id: string, fn: (c: any) => Promise<any>) => fn(ids.has(id) ? cred : undefined),
+    delete: async () => {},
+  };
+}
+
+/**
+ * Load the `fauxProvider` factory from the SAME nested `pi-ai` copy that
+ * pi-coding-agent (hence the session's `ModelRuntime`) resolves against, so the
+ * `Provider` object registered on the runtime is type-compatible.
+ */
+let cachedFauxProvider: ((opts: any) => any) | undefined;
+async function getFauxProviderFactory(): Promise<(opts: any) => any> {
+  if (cachedFauxProvider) return cachedFauxProvider;
   const compatPath = resolveNestedCompatPath();
-  const compat = await import(pathToFileURL(compatPath).href);
-  cachedRegister = compat.registerFauxProvider as typeof RegisterFauxProviderFn;
-  return cachedRegister;
+  const fauxPath = compatPath.replace(/compat\.js$/, join("providers", "faux.js"));
+  const mod = await import(pathToFileURL(fauxPath).href);
+  cachedFauxProvider = mod.fauxProvider as (opts: any) => any;
+  return cachedFauxProvider;
+}
+
+/** A faux provider registered on a session `ModelRuntime`. */
+export interface FauxRuntimeRegistration {
+  /** Response-scriptable faux handle (getModel / models / setResponses / state). */
+  faux: FauxRegistration;
+  /** Runtime to hand to `spawnAgent` / `runFlow` as `modelRuntime`. */
+  runtime: any;
+}
+
+/**
+ * Register a scripted faux provider on a disk-/network-inert `ModelRuntime`.
+ *
+ * The current pi SDK assembles and streams every request THROUGH the session's
+ * `ModelRuntime` (`prepareRequest` -> `provider.streamSimple`), so the faux
+ * provider must live on the runtime — both to resolve auth (its `Provider` auth
+ * yields an empty, no-secret credential) and to serve the scripted responses.
+ * Nothing is ever sent to a network.
+ */
+async function registerFauxOnRuntime(opts: {
+  api: string;
+  provider: string;
+  models: Array<{ id: string }>;
+  tokensPerSecond?: number;
+}): Promise<FauxRuntimeRegistration> {
+  const fauxProvider = await getFauxProviderFactory();
+  const fp = fauxProvider({
+    api: opts.api,
+    provider: opts.provider,
+    models: opts.models,
+    tokensPerSecond: opts.tokensPerSecond,
+  });
+  const runtime: any = await ModelRuntime.create({
+    credentials: fauxCredentialStore([opts.provider]),
+    modelsPath: null,
+    refreshOnCreate: false,
+    allowModelNetwork: false,
+  });
+  runtime.registerNativeProvider(fp.provider);
+  const faux: FauxRegistration = {
+    ...fp,
+    unregister: () => {
+      try {
+        runtime.unregisterProvider(opts.provider);
+      } catch {
+        // best-effort teardown
+      }
+    },
+  };
+  return { faux, runtime };
 }
 
 /** Args accepted by the guard's `finish` tool. */
@@ -250,8 +324,7 @@ export async function spawnFaux(options: SpawnFauxOptions): Promise<SpawnFauxOut
   // drives toolPrefix in spawnAgent ("anthropic-messages" → mcp__flows__).
   const api = options.modelApi ?? "faux";
   const provider = api === "anthropic-messages" ? "anthropic" : "faux";
-  const registerFauxProvider = await getRegisterFauxProvider();
-  const faux = registerFauxProvider({
+  const { faux, runtime } = await registerFauxOnRuntime({
     api,
     provider,
     models: [{ id: modelId }],
@@ -271,6 +344,7 @@ export async function spawnFaux(options: SpawnFauxOptions): Promise<SpawnFauxOut
       pi: {} as any, // unused: resolvedModelId bypasses resolveModel
       cwd: options.cwd ?? process.cwd(),
       modelRegistry: registry,
+      modelRuntime: runtime,
       resolvedModelId: `${provider}/${modelId}`,
       skills: options.skills,
       signal: options.signal,
@@ -324,8 +398,7 @@ export interface RunFauxOptions {
  * deterministic without relying on queue ordering.
  */
 export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
-  const registerFauxProvider = await getRegisterFauxProvider();
-  const faux = registerFauxProvider({ api: "faux", provider: "faux", models: [{ id: "faux-1" }] });
+  const { faux, runtime } = await registerFauxOnRuntime({ api: "faux", provider: "faux", models: [{ id: "faux-1" }] });
 
   // Queue N copies of a content-routing factory. Each stream call shifts one;
   // every copy delegates to the user responder, so order is irrelevant.
@@ -349,6 +422,7 @@ export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
     flowInput: options.flowInput,
     cwd: options.cwd ?? process.cwd(),
     modelRegistry: registry,
+    modelRuntime: runtime,
     pi,
     getAgent: (name: string) => agentMap.get(name),
     askUser: async () => ({ answer: "" }),
@@ -396,8 +470,7 @@ export async function runFauxFlow(options: RunFauxFlowOptions): Promise<FlowResu
     }
   }
 
-  const registerFauxProvider = await getRegisterFauxProvider();
-  const faux = registerFauxProvider({ api: "faux", provider: "faux", models: [{ id: "faux-1" }] });
+  const { faux, runtime } = await registerFauxOnRuntime({ api: "faux", provider: "faux", models: [{ id: "faux-1" }] });
   const factory = (context: any, _o: any, _s: any, model: any): any => options.responder(lastUserText(context), model);
   faux.setResponses(Array.from({ length: options.maxTurns ?? 48 }, () => factory));
 
@@ -411,6 +484,7 @@ export async function runFauxFlow(options: RunFauxFlowOptions): Promise<FlowResu
     flowInput: options.flowInput,
     cwd: options.cwd ?? process.cwd(),
     modelRegistry: registry,
+    modelRuntime: runtime,
     pi,
     getAgent: (name: string) => agentMap.get(name),
     askUser: async (_q, _t, opts) => {

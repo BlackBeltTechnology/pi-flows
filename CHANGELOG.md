@@ -5,6 +5,12 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Aligned the subagent bootstrap to the current pi runtime, and bumped the pinned pi peer floor to `^0.84.1`** (`subagent-spawn` + `dashboard-event-emission` capabilities). The pinned pi peers advanced to a runtime that carries a breaking SDK change on the session-bootstrap path: `createAgentSession` replaced its `authStorage` + `modelRegistry` options with a single `modelRuntime`, the `AuthStorage` type is no longer exported, and a `ResourceLoader` must now implement `getSystemPromptSource()` and `getAppendSystemPromptSources()`. Building against the new runtime regressed the engine (typecheck errors; faux spawns failing to construct their session). `spawnAgent` now supplies a complete `ResourceLoader` (the in-memory-composed prompt reports no on-disk source) and provides model/auth through the `modelRuntime` option, and `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, and `@earendil-works/pi-tui` are pinned to `^0.84.1` in both `peerDependencies` and `devDependencies` (`@sinclair/typebox` unchanged). The faux-testing harness resolves session auth/streaming through a disk-/network-inert `ModelRuntime` carrying the scripted provider, so the zero-network suites stay green. No flow/agent authoring surface changes. OpenSpec: align-pi-runtime-to-0-84.
+
 ## [v0.3.6] - 2026-08-13
 
 ### Changed
