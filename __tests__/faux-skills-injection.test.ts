@@ -8,7 +8,7 @@
  * disclosure), exactly like pi's main session. There is no `skill_read` tool.
  *
  * These tests drive the real `spawnAgent` loop and assert (a) the advertised
- * block reaches `context.systemPrompt` without the body, and (b) the agent can
+ * block reaches the current system prompt without the body, and (b) the agent can
  * actually `read` the advertised SKILL.md — proving `read` is auto-granted and
  * the skill dir is whitelisted even under a restrictive `access.read`.
  */
@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, beforeAll } from "vitest";
 import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai/utils/transcript";
 
 import { spawnFaux, scriptFinish, scriptToolThenFinish, type FauxResponseStep } from "./faux-harness.js";
 
@@ -48,7 +49,10 @@ beforeAll(() => {
 /** A faux factory that records the live system prompt, then finishes. */
 function captureSystemPrompt(sink: { prompt: string }): FauxResponseStep {
   return ((context: any) => {
-    sink.prompt = context?.systemPrompt ?? "";
+    // The faux provider's context is a `TranscriptContext` (`{ messages }`): the
+    // system prompt is the leading system message, not a `.systemPrompt` field.
+    // Reconstruct the rendered prompt text (named sections folded in).
+    sink.prompt = getCurrentSystemPrompt(context?.messages ?? []);
     return scriptFinish({ status: "complete", summary: "done" });
   }) as FauxResponseStep;
 }
