@@ -136,3 +136,39 @@ Place change artifacts at `openspec/changes/<name>/` — never nested under `act
 ## Diagram Style
 
 Mermaid (```mermaid blocks), not ASCII boxes. Applies to design docs, explore output, all artifacts.
+
+## Discipline Skills
+
+During implementation, invoke the matching `eng-disciplines` skill when a task
+signal appears. Skills auto-trigger on natural language, but the implement loop
+may never utter the phrase — this table makes the mapping explicit (signals are
+observable in the diff / `tasks.md`, not vague intent):
+
+| Task signal (in diff / tasks.md) | Skill |
+|---|---|
+| touches auth, untrusted input, secrets, webhooks, PII | `security-hardening` |
+| spec has a latency/throughput budget, or a large-data / high-traffic path | `performance-optimization` |
+| new endpoint, job, external call, or "can't tell what happened in prod" | `observability-instrumentation` |
+| non-trivial/irreversible step (migration, public API, cross-boundary) BEFORE it stands | `doubt-driven-review` |
+| a bug surfaces mid-implementation | `systematic-debugging` |
+| runtime state opaque, `console.log` insufficient | `node-inspect-debugger` |
+| feature works + tests pass but the implementation feels heavy | `code-simplification` |
+
+The end gates (`code-review`, `code-quality`) remain unchanged and run at completion before commit.
+
+When authoring an OpenSpec proposal, add a `## Discipline Skills` line to
+`proposal.md` naming the skills its tasks will trigger; omit only when none apply.
+
+<!-- dox-doctrine -->
+
+## DOX doctrine
+
+Per-turn DOX doctrine — the kb-first READ discipline and the directory `AGENTS.md`
+WRITE discipline — is injected by the `pi-dashboard-kb-extension`. Tune it in
+`.pi/dashboard/knowledge_base.json` under the `doctrine` key (`inject`, `write`).
+
+## Files
+
+Files in this area. Purposes left for the agent to author.
+
+| `eslint.config.js` | ESLint flat config, ESLint 9+: ignores node_modules/research/openspec/agent-docs/docs; @eslint/js recommended + typescript-eslint recommended; no-explicit-any off, no-unused-vars warn. |
