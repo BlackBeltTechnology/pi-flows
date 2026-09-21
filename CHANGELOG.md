@@ -5,6 +5,12 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.0] - 2026-09-20
+
+### Changed
+
+- **Widened the pinned pi peer ranges from `^0.84.1` to `>=0.84.1 <1.0.0`** (`package-manifest` capability). A caret on a `0.x` version narrows to a single minor line (`^0.84.1` == `>=0.84.1 <0.85.0`), which excluded hosts on the current pi 0.85.x/0.86.x lines and caused peer-dependency install failures. The three peers `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` now declare `>=0.84.1 <1.0.0`, keeping 0.84 hosts working while admitting every pre-1.0.0 host (0.85.1+, 0.86.x) and still excluding the 1.0.0 major. The matching `devDependencies` were bumped to `^0.86.1` so the zero-network faux suite and build validate against the newest supported host line (`@sinclair/typebox` unchanged). No flow/agent authoring surface changes. OpenSpec: widen-peer-dep-ranges.
+
 ## [v0.4.0] - 2026-08-14
 
 ### Changed

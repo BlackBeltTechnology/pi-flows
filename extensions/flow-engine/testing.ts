@@ -32,6 +32,7 @@ import {
   fauxText,
   type FauxResponseStep,
 } from "@earendil-works/pi-ai/providers/faux";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import type { registerFauxProvider as RegisterFauxProviderFn } from "@earendil-works/pi-ai/compat";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Skill } from "@earendil-works/pi-coding-agent";
@@ -223,7 +224,7 @@ export function scriptFinish(args: FinishArgs, finishToolName = "finish"): FauxR
 /** A tool call (turn 1) followed by a finish (turn 2). */
 export function scriptToolThenFinish(
   toolName: string,
-  toolArgs: Record<string, unknown>,
+  toolArgs: JsonObject,
   finishArgs: FinishArgs,
   finishToolName = "finish",
 ): FauxResponseStep[] {
