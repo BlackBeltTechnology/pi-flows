@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { AccessRules, AgentOutput } from "./types.js";
 import { prefixToolName } from "./tool-prefix.js";
 

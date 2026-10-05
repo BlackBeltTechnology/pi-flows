@@ -5,6 +5,12 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.0] - 2026-10-05
+
+### Changed
+
+- **pi 1.x support: widened the pi peer ranges from `>=0.84.1 <1.0.0` to `>=0.84.1 <2.0.0`, and switched from `@sinclair/typebox` to `typebox`** (`package-manifest` capability). The `<1.0.0` cap made installs on pi 1.x hosts report an unmet peer dependency, although nothing pi-flows uses changed in pi 1.0.0–1.0.2. Every host the old range admitted is still admitted. pi has shipped TypeBox 1.x as `typebox` since 0.69.0; pi-flows' `@sinclair/typebox` imports only worked through pi's legacy root-only alias. The peer is now `typebox ^1.3.7` (satisfied by 0.84.1's 1.3.7 and 1.0.2's 1.3.27), and all imports (`Type`, and `Value` from `typebox/value` in tests) use `typebox`. `devDependencies` were bumped to `^1.0.2` so the build and the zero-network faux suite validate against the newest host line. No flow/agent authoring surface changes. OpenSpec: pi-1-compat.
+
 ## [v0.5.0] - 2026-09-20
 
 ### Changed

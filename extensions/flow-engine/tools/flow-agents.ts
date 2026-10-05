@@ -9,7 +9,7 @@
 //               filename is derived from the agent's frontmatter `name`.
 // ---------------------------------------------------------------------------
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../types.js";
 import { validateAgentContent } from "./agent-validate.js";

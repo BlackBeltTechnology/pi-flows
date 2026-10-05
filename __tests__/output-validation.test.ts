@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { Value } from "@sinclair/typebox/value";
+import { Value } from "typebox/value";
 import type { AgentOutput } from "../extensions/flow-engine/types.js";
 import { createGuardExtension } from "../extensions/flow-engine/guard.js";
 

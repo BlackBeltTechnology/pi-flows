@@ -8,7 +8,7 @@
 // `path` param — the engine derives the canonical discovered location.
 // ---------------------------------------------------------------------------
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../types.js";
 import { validateFlowContent } from "./flow-validate.js";
