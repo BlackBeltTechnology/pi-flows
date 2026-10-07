@@ -21,13 +21,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 
-type ThinkingLevelString = "minimal" | "low" | "medium" | "high" | "xhigh" | "off";
+type ThinkingLevelString = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "off";
 const VALID_THINKING_LEVELS: readonly ThinkingLevelString[] = [
   "minimal",
   "low",
   "medium",
   "high",
   "xhigh",
+  "max",
   "off",
 ];
 
@@ -66,8 +67,11 @@ interface ModelRegistryShape {
   getAll?: () => Array<Model<any> & { id?: string; provider?: string }>;
 }
 
-function getModelRegistry(pi: ExtensionAPI): ModelRegistryShape | undefined {
-  const reg = (pi as unknown as { modelRegistry?: ModelRegistryShape }).modelRegistry;
+function getModelRegistry(pi: ExtensionAPI, sessionRegistry?: unknown): ModelRegistryShape | undefined {
+  // pi 1.x: the registry lives on the session ctx, not on the ExtensionAPI.
+  // Prefer the session registry; `pi.modelRegistry` is a last resort only.
+  const reg = (sessionRegistry as ModelRegistryShape | undefined)
+    ?? (pi as unknown as { modelRegistry?: ModelRegistryShape }).modelRegistry;
   return reg && (typeof reg.find === "function" || typeof reg.getAll === "function")
     ? reg
     : undefined;
@@ -130,6 +134,8 @@ function formatAvailable(av: ModelResolveProbe["available"]): string {
  *                    (`@role` | `provider/model[:thk]` | bare `model-id[:thk]`).
  * @param thinking    Optional explicit thinking level override. Wins over any
  *                    suffix-parsed value.
+ * @param registry    Session model registry (`ctx.modelRegistry`) for the
+ *                    in-process fallback. Falls back to `pi.modelRegistry`.
  *
  * @returns `{ modelId, thinkingLevel, model? }` on success; throws on failure
  *          (handler-reported error, unknown role with no handler, or
@@ -139,6 +145,7 @@ export function resolveModel(
   pi: ExtensionAPI,
   modelRef: string,
   thinking?: string,
+  registry?: unknown,
 ): { modelId: string; thinking?: string; model?: Model<any> } {
   // Strip surrounding quotes (YAML may preserve them: "@coding" → @coding)
   let ref = modelRef.trim();
@@ -193,10 +200,10 @@ export function resolveModel(
     );
   }
 
-  const registry = getModelRegistry(pi);
-  if (!registry) {
+  const reg = getModelRegistry(pi, registry);
+  if (!reg) {
     throw new Error(
-      `Model registry unavailable on pi.modelRegistry — cannot resolve "${modelRef}".`,
+      `Model registry unavailable (no pi session registry) — cannot resolve "${modelRef}".`,
     );
   }
 
@@ -204,8 +211,8 @@ export function resolveModel(
 
   let model: Model<any> | undefined;
   if (provider) {
-    if (typeof registry.find === "function") {
-      model = registry.find(provider, modelId);
+    if (typeof reg.find === "function") {
+      model = reg.find(provider, modelId);
     }
     if (!model) {
       throw new Error(
@@ -222,7 +229,7 @@ export function resolveModel(
   }
 
   // Bare-id "like" query. First match in registry.getAll() iteration order wins.
-  const all = typeof registry.getAll === "function" ? registry.getAll() : [];
+  const all = typeof reg.getAll === "function" ? reg.getAll() : [];
   model = all.find((m) => m && (m as any).id === modelId);
   if (!model) {
     const hint = all

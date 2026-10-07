@@ -113,7 +113,7 @@ Target file: ${{input.target_file}}
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `thinking` | `string` | — | Extended thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Overrides any thinking suffix in `model`. |
+| `thinking` | `string` | — | Extended thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Overrides any thinking suffix in `model`. |
 | `skills` | `string` | — | Comma-separated skill names. Each skill's `SKILL.md` is injected into the system prompt. Topic files are accessed via `skill_read`. |
 | `inputs` | `string[]` | — | Declared input names. These become available as `${{input.NAME}}` in the system prompt. The flow step must wire them via `inputs:`. |
 | `outputs` | `string[]` or object array | — | Declared output names. Become parameters on `finish` tool. Access as `${{result.STEP.outputName}}` downstream. Required by default — see **Outputs**. Expanded entries accept optional `type`, `pattern`. |

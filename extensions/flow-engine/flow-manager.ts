@@ -18,8 +18,9 @@ export interface FlowManagerConfig {
   getPi: () => ExtensionAPI;
   getProjectRoot: () => string;
   getPkgRoot: () => string;
-  getAuthStorage: () => any;
   getModelRegistry: () => any;
+  /** Parent session's providers/keys runtime (never the model). */
+  getModelRuntime: () => any;
   getSessionManager: () => any;
   getExtraAgentExtensions: () => any[];
   getExtensionTools: () => any[];
@@ -112,8 +113,8 @@ export class FlowManager {
       task,
       flowInput,
       cwd: config.getProjectRoot(),
-      authStorage: config.getAuthStorage(),
       modelRegistry: config.getModelRegistry(),
+      modelRuntime: config.getModelRuntime(),
       mainSessionManager: config.getSessionManager(),
       extraAgentExtensions: config.getExtraAgentExtensions(),
       extraCustomTools: config.getExtensionTools(),

@@ -112,7 +112,7 @@ Target file: ${{input.target_file}}
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `thinking` | `string` | — | Extended thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`. Overrides any thinking suffix in `model`. |
+| `thinking` | `string` | — | Extended thinking level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Overrides any thinking suffix in `model`. |
 | `skills` | `string` | — | Comma-separated skill names. Each skill is advertised in the system prompt (name/description/location); the agent reads `SKILL.md` + topic files on demand with `read` (auto-granted, skill dirs whitelisted). |
 | `inputs` | `string[]` | — | Declared input names. These become available as `${{input.NAME}}` in the system prompt. The flow step must wire them via `inputs:`. |
 | `outputs` | `string[]` or object array | — | Declared output names. These are added as parameters on the `finish` tool and accessible as `${{result.STEP.outputName}}` in downstream steps. Declared outputs are **required by default** — see **Outputs** below. Expanded entries accept optional `type` and `pattern` for validation. |

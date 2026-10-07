@@ -5,6 +5,21 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Flow agents can use providers registered at runtime (e.g. pi-agent-dashboard's `proxy`/`local`, or any `pi.registerProvider()` extension)** (`subagent-spawn` capability). On pi >=0.80.8 `createAgentSession` ignores the old `authStorage`/`modelRegistry` options, and pi-flows never passed `modelRuntime` in production. Every flow agent therefore got a fresh disk-only runtime, and agents on runtime-registered providers resolved correctly but failed on their first request with "No API key found". Flow agents now share the parent session's model runtime (providers + API keys), captured at `session_start` and passed to every agent session (agent steps, autonomous fork decisions, `agent-decision` steps including loops). The model is never inherited: each agent still names its own `model:`, and a missing or wrong model still fails. Without a parent session, pi's default runtime is used as before. OpenSpec: flow-agents-inherit-model-runtime.
+- **Model resolution without the dashboard works on pi 1.x** (`flow-model-resolution` capability). The fallback used when no `model:resolve` handler answers read `pi.modelRegistry`, which the pi 1.x extension API does not have, so every literal `provider/model` or bare id failed with "Model registry unavailable". It now uses the session registry (`ctx.modelRegistry`) captured at `session_start`.
+
+### Added
+
+- **`max` thinking level** for both the `thinking:` frontmatter field and the `:max` model suffix.
+
+### Changed
+
+- **`flow:get-spawn-context`** now carries `modelRuntime`. `authStorage`, which was always `undefined` on pi 1.x, is removed. `FlowManagerConfig.getAuthStorage` is replaced by `getModelRuntime`, and `FlowRunOptions`/`SpawnOptions` drop `authStorage`. `registerFauxOnRuntime` is exported from the `testing` subpath.
+
 ## [v0.6.0] - 2026-10-05
 
 ### Changed

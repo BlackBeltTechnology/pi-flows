@@ -258,19 +258,11 @@ export function makeAgent(partial: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 /**
- * Build a `modelRegistry` stub backed by the faux provider's models, plus a
- * no-op `authStorage`. Shape matches what `spawnAgent` / `createAgentSession`
- * read: `find(provider, id)`, `getAll()`, `authStorage`.
+ * Build a `modelRegistry` stub backed by the faux provider's models. Shape
+ * matches what model resolution reads: `find(provider, id)`, `getAll()`.
  */
 export function makeFauxRegistry(faux: FauxRegistration): any {
-  const authStorage = {
-    // pi-ai faux auth resolves to an empty auth object — no real key needed.
-    load: async () => ({}),
-    save: async () => {},
-    get: async () => ({}),
-  };
   return {
-    authStorage,
     find: (_provider: string, id: string) => faux.getModel(id),
     getAll: () => faux.models,
     getAvailable: () => faux.models,

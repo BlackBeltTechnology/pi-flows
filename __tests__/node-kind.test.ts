@@ -152,7 +152,7 @@ describe("FlowManager forwards nodeKind through the fan-out", () => {
       getPi: () => ({ events: { emit: () => {} } }),
       getProjectRoot: () => tmpdir(),
       getPkgRoot: () => tmpdir(),
-      getAuthStorage: () => undefined,
+      getModelRuntime: () => undefined,
       getModelRegistry: () => undefined,
       getSessionManager: () => undefined,
       getExtraAgentExtensions: () => [],

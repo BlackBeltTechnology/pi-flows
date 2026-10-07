@@ -84,7 +84,7 @@ describe("FlowManager run identity + atomic single-run guard", () => {
       getPi: () => ({ events: { emit: () => {} } }),
       getProjectRoot: () => tmpdir(),
       getPkgRoot: () => tmpdir(),
-      getAuthStorage: () => undefined,
+      getModelRuntime: () => undefined,
       getModelRegistry: () => undefined,
       getSessionManager: () => undefined,
       getExtraAgentExtensions: () => [],

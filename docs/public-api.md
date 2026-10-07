@@ -63,7 +63,7 @@ interface AgentConfig {
   name:         string;
   description:  string;
   model:        string;             // e.g., "@planning", "claude-sonnet-4:high"
-  thinking?:    string;             // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
+  thinking?:    string;             // "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
   tools:        string[];           // e.g., ["read", "grep", "bash"]
   skills?:      string[];           // e.g., ["my-backend-docs"]
   inputs?:      string[];           // declared input names
@@ -354,8 +354,8 @@ interface FlowRunOptions {
   flow:                FlowConfig;
   task:                string;
   cwd:                 string;
-  authStorage?:        any;
   modelRegistry?:      any;
+  modelRuntime?:       any;
   extraAgentExtensions?: any[];
   extraCustomTools?:   any[];
   getModelRole?:       (role: string) => string | undefined;
@@ -469,7 +469,7 @@ Run a single agent session. Lower-level than `runFlow`.
 async function spawnAgent(options: SpawnOptions): Promise<AgentResult>
 ```
 
-`SpawnOptions` includes: `agent`, `task`, `templateContext`, `skills` (resolved pi `Skill[]` advertised via `formatSkillsForPrompt`), `cwd`, `authStorage`, `modelRegistry`, `extraAgentExtensions`, `extraCustomTools`, and streaming callbacks.
+`SpawnOptions` includes: `agent`, `task`, `templateContext`, `skills` (resolved pi `Skill[]` advertised via `formatSkillsForPrompt`), `cwd`, `modelRegistry`, `modelRuntime`, `extraAgentExtensions`, `extraCustomTools`, and streaming callbacks.
 
 ---
 
@@ -729,8 +729,8 @@ interface FlowManagerConfig {
   getModelRole:           () => ((role: string) => string | undefined) | undefined;
   getProjectRoot:         () => string;
   getPkgRoot:             () => string;
-  getAuthStorage:         () => any;
   getModelRegistry:       () => any;
+  getModelRuntime:        () => any;
   getExtraAgentExtensions: () => any[];
   getExtensionTools:      () => any[];
   getSkill:               (name: string) => Skill | undefined;

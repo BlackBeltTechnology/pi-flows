@@ -63,7 +63,7 @@ interface AgentConfig {
   name:         string;
   description:  string;
   model:        string;             // e.g., "@planning", "claude-sonnet-4:high"
-  thinking?:    string;             // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
+  thinking?:    string;             // "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
   tools:        string[];           // e.g., ["read", "grep", "bash"]
   skills?:      string[];           // e.g., ["my-backend-docs"]
   inputs?:      string[];           // declared input names

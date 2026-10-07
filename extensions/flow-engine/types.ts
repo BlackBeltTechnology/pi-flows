@@ -81,7 +81,7 @@ export interface AgentConfig {
   name: string;
   description: string;
   model: string; // e.g., "@planning", "@coding", or explicit model ID
-  thinking?: string; // off, minimal, low, medium, high, xhigh
+  thinking?: string; // off, minimal, low, medium, high, xhigh, max
   tools: string[]; // e.g., ["read", "write", "edit", "grep", "bash"]
   skills?: string[]; // e.g., ["judo-backend-docs"]
   inputs?: string[]; // Declared input names (contract for flow wiring)

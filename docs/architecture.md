@@ -126,6 +126,15 @@ Each agent runs as an in-process isolated session with controlled capabilities:
 └──────────────────────────────────────────────────┘
 ```
 
+### Model runtime inheritance
+
+Flow agent sessions share the parent pi session's model runtime, including its registered providers and API keys.
+They do not inherit the parent's selected model; every agent must still declare a valid `model:`.
+Programmatic `runFlow` calls without a parent session omit the runtime, so pi builds its default disk-backed runtime.
+Without a dashboard `model:resolve` handler, model references resolve through the registry captured from the session context.
+The runtime is exposed only through pi's private `ModelRegistry.runtime` field, read by `getModelRuntime()` in one place.
+If pi renames that field, agents fall back to the default runtime and `__tests__/model-runtime-accessor.test.ts` fails as a canary.
+
 ### Guard Layers
 
 1. **Tool scoping** — `AGENT_ALLOWED_TOOLS` env var parsed into a Set. Only declared tools + `finish` are permitted.

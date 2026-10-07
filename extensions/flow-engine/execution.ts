@@ -167,15 +167,15 @@ export interface SpawnOptions {
    */
   skills?: Skill[];
   preambleSections?: string[];
-  /** Extension API handle — used by `resolveModel` to emit `model:resolve`
-   *  and fall back to `pi.modelRegistry`. */
+  /** Extension API handle — used by `resolveModel` to emit `model:resolve`. */
   pi: ExtensionAPI;
   cwd: string;
-  /** Legacy pass-through, no longer forwarded to the SDK session bootstrap. */
-  authStorage?: unknown;
+  /** Session model registry (`ctx.modelRegistry`) — the model-resolution
+   *  fallback and Model-object lookup. */
   modelRegistry?: ModelRegistry;
-  /** Canonical model/auth runtime for the subagent session. When omitted the
-   *  SDK builds its default disk-backed runtime. */
+  /** Parent session's providers/keys runtime, shared so runtime-registered
+   *  providers work. Never carries the model. When omitted the SDK builds its
+   *  default disk-backed runtime. */
   modelRuntime?: ModelRuntime;
   /** Operator's live SessionManager. When the agent declares `fork_session`,
    *  its persisted file is forked via SessionManager.forkFrom for context inheritance. */
@@ -286,7 +286,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Resolve model (skip if pre-resolved)
   const { modelId, thinking } = options.resolvedModelId
     ? { modelId: options.resolvedModelId, thinking: agent.thinking }
-    : resolveModel(pi, agent.model, agent.thinking);
+    : resolveModel(pi, agent.model, agent.thinking, options.modelRegistry);
 
   // Build system prompt: expand template variables in agent body
   let systemPrompt = expandTemplateVariables(agent.systemPrompt, templateContext);
@@ -507,9 +507,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       customTools: customTools,
       resourceLoader,
       sessionManager: agentSessionManager,
-      // Model/auth via the SDK's modelRuntime option (replaces the removed
-      // authStorage + modelRegistry bootstrap options). Omitted when absent so
-      // the SDK builds its default disk-backed runtime.
+      // Providers/keys via the parent session's runtime (pi >=0.80.8 ignores
+      // the old authStorage/modelRegistry options). Omitted when absent so the
+      // SDK builds its default disk-backed runtime.
       ...(options.modelRuntime ? { modelRuntime: options.modelRuntime } : {}),
       cwd,
     });

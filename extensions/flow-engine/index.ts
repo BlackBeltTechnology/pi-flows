@@ -10,6 +10,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
+import { getModelRuntime } from "./model-runtime.js";
 import { isAutonomousMode, setAutonomousMode } from "../autonomous-mode.js";
 import { registerAskUserTool } from "./tools/ask-user.js";
 import {
@@ -164,9 +165,11 @@ export function activate(pi: ExtensionAPI) {
   // Initial discovery
   init(pkgRoot, projectRoot);
 
-  // Track authStorage and modelRegistry from session context
-  let sessionAuthStorage: any = undefined;
+  // Session model registry + the providers/keys runtime behind it, captured on
+  // session_start. Flow agents share this runtime (never the parent's model) so
+  // runtime-registered providers work; the registry backs model resolution.
   let sessionModelRegistry: any = undefined;
+  let sessionModelRuntime: any = undefined;
   // Captured on session_start; used by EventEmitObserver to append the
   // flow-completion marker that opens pi's persistence flush gate.
   let sessionManager: any = undefined;
@@ -217,8 +220,8 @@ export function activate(pi: ExtensionAPI) {
       getPi: () => pi,
       getProjectRoot: () => projectRoot,
       getPkgRoot: () => pkgRoot,
-      getAuthStorage: () => sessionAuthStorage,
       getModelRegistry: () => sessionModelRegistry,
+      getModelRuntime: () => sessionModelRuntime,
       getSessionManager: () => sessionManager,
       getExtraAgentExtensions: () => [...extraAgentExtensions],
       getExtensionTools: () => [...registeredExtensionTools],
@@ -243,7 +246,7 @@ export function activate(pi: ExtensionAPI) {
   pi.on("session_start", (_event: any, ctx: any) => {
     if (ctx.modelRegistry) {
       sessionModelRegistry = ctx.modelRegistry;
-      sessionAuthStorage = (ctx.modelRegistry as any).authStorage;
+      sessionModelRuntime = getModelRuntime(ctx.modelRegistry);
     }
     if (ctx.sessionManager) {
       sessionManager = ctx.sessionManager;
@@ -613,8 +616,8 @@ export function activate(pi: ExtensionAPI) {
 
   // Provide spawn context for subagent sessions
   pi.events.on("flow:get-spawn-context", (data: any) => {
-    data.authStorage = sessionAuthStorage;
     data.modelRegistry = sessionModelRegistry;
+    data.modelRuntime = sessionModelRuntime;
     data.extraAgentExtensions = [...extraAgentExtensions];
     data.extensionTools = [...registeredExtensionTools];
   });

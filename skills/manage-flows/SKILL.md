@@ -167,7 +167,7 @@ Context: ${{input.research_context}}
 | `description` | Yes | One line. Shown in catalog. |
 | `model` | Yes | See **Model references**. |
 | `tools` | Yes | Comma-separated. Guard blocks anything not listed. Standard: `read, write, edit, grep, find, ls, bash, ask_user`. Declaring `skills:` auto-grants `read`; never list `skill_read` (it does not exist). |
-| `thinking` | No | `off`/`minimal`/`low`/`medium`/`high`/`xhigh`. Overrides any `:level` suffix in `model`. |
+| `thinking` | No | `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Overrides any `:level` suffix in `model`. |
 | `skills` | No | Comma-separated skill names injected into the prompt. |
 | `inputs` | No | Names → `${{input.NAME}}` in the prompt. Flow step must wire each one. |
 | `outputs` | No | Names (or `{name, description, type?, pattern?}`). Become `finish` parameters and `${{result.STEP.NAME}}` downstream. `type: string\|number\|boolean` and `pattern: <regex>` validate the emitted value, which is then **stored as the declared type** (e.g. `92`, not `"92"`); `pattern` wins over `type`. |

@@ -63,8 +63,9 @@ export interface FlowRunOptions {
   /** Structured flow-level inputs, validated against `flow.inputs`. */
   flowInput?: Record<string, unknown>;
   cwd: string;
-  authStorage?: any;
+  /** Session model registry (`ctx.modelRegistry`) — backs model resolution. */
   modelRegistry?: any;
+  /** Parent session's providers/keys runtime, shared with every agent session. */
   modelRuntime?: any;
   /** Operator's live SessionManager — forked into agents declaring `fork_session`. */
   mainSessionManager?: any;
@@ -668,7 +669,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   // Resolve model early so it's available for onAgentStarted observers
   let resolvedModelId: string | undefined;
   try {
-    const { modelId } = resolveModel(options.pi, agentConfig.model, agentConfig.thinking);
+    const { modelId } = resolveModel(options.pi, agentConfig.model, agentConfig.thinking, options.modelRegistry);
     resolvedModelId = modelId;
   } catch {
     // Model resolution failed — will be caught again inside spawnAgent
@@ -747,7 +748,6 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     preambleSections,
     pi: options.pi,
     cwd: options.cwd,
-    authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
       modelRuntime: options.modelRuntime,
     mainSessionManager: options.mainSessionManager,
@@ -822,7 +822,6 @@ async function spawnForkDecisionAgent(
     templateContext: templateCtx,
     pi: options.pi,
     cwd: options.cwd,
-    authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
       modelRuntime: options.modelRuntime,
     extraAgentExtensions: options.extraAgentExtensions,
@@ -1023,7 +1022,6 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     skills,
     pi: options.pi,
     cwd: options.cwd,
-    authStorage: options.authStorage,
     modelRegistry: options.modelRegistry,
       modelRuntime: options.modelRuntime,
     extraAgentExtensions: options.extraAgentExtensions,

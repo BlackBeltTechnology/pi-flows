@@ -42,7 +42,7 @@ Create `__tests__/flow-runtime-inheritance.test.ts`. Write all of these, run the
 - [x] 2b.2 Same with a bare id `m1`. *Expected RED.*
 - [x] 2b.3 Unknown literal still fails with the unknown-model error naming the ref and listing known ids from the session registry. *Expected RED:* fails today with the registry-unavailable error instead.
 - [x] 2b.4 No session started and no registry at all: fails with the actionable "registry unavailable" error, and no agent session is created. *Expected:* passes today. Regression guard.
-- [ ] 2b.5 GREEN: let `resolveModel` take the session registry. Thread it from `index.ts` (session_start) through FlowManager and `runFlow` to `spawnAgent`/`resolveModel`, keeping `pi.modelRegistry` only as the last resort. Verify that group 2b is green and the existing `model-resolution.test.ts` stays green.
+- [x] 2b.5 GREEN: let `resolveModel` take the session registry. Thread it from `index.ts` (session_start) through FlowManager and `runFlow` to `spawnAgent`/`resolveModel`, keeping `pi.modelRegistry` only as the last resort. Verify that group 2b is green and the existing `model-resolution.test.ts` stays green.
 
 ## 3. RED: runtime accessor helper (design decision 1)
 
@@ -67,32 +67,32 @@ Add to `__tests__/model-resolution.test.ts`.
 
 ## 5. GREEN: implementation (minimal, one test group at a time)
 
-- [ ] 5.1 Add `getModelRuntime(registry)` helper (reads the private `runtime`, validates its shape, catches errors, else `undefined`). Verify that 3.1 and 3.2 are green.
-- [ ] 5.2 In `index.ts`, store `sessionModelRuntime = getModelRuntime(ctx.modelRegistry)` at `session_start`, reassigning on every start. Remove `sessionAuthStorage`. Replace `getAuthStorage` with `getModelRuntime` in the FlowManager config. Verify that 2.10 and 3.3 are green.
-- [ ] 5.3 In `flow-manager.ts`, pass `modelRuntime` to `runFlow`. Drop `authStorage`. Verify that 2.1, 2.2, 2.3 and 2.7 are green.
-- [ ] 5.4 In `flow-execution.ts`, keep `modelRuntime` at all three pass-through sites. Remove `authStorage`, and remove `modelRegistry` where nothing reads it. Verify that all 2.4 cases are green and 2.5 stays green.
-- [ ] 5.5 In `execution.ts`, remove the dead `authStorage` option/type. Verify with `npm run typecheck`, and that 2.5 and 2.8 stay green.
-- [ ] 5.6 For `flow:get-spawn-context`, set `modelRuntime` and drop `authStorage`. Verify that 2.9 is green.
-- [ ] 5.7 Add `"max"` to `ThinkingLevelString` and `VALID_THINKING_LEVELS`, plus anywhere the agent parser validates levels. Update the comment in `types.ts`. Verify that group 4 is all green.
-- [ ] 5.8 Update `testing.ts` stubs to remove `authStorage`. Verify that the existing faux suites (`faux-*.test.ts`, `pi-runtime-alignment.test.ts`) are all green.
-- [ ] 5.9 Confirm 2.6 (model never inherited) is still green. If it fails, the implementation leaked model inheritance, so revert and fix.
+- [x] 5.1 Add `getModelRuntime(registry)` helper (reads the private `runtime`, validates its shape, catches errors, else `undefined`). Verify that 3.1 and 3.2 are green.
+- [x] 5.2 In `index.ts`, store `sessionModelRuntime = getModelRuntime(ctx.modelRegistry)` at `session_start`, reassigning on every start. Remove `sessionAuthStorage`. Replace `getAuthStorage` with `getModelRuntime` in the FlowManager config. Verify that 2.10 and 3.3 are green.
+- [x] 5.3 In `flow-manager.ts`, pass `modelRuntime` to `runFlow`. Drop `authStorage`. Verify that 2.1, 2.2, 2.3 and 2.7 are green.
+- [x] 5.4 In `flow-execution.ts`, keep `modelRuntime` at all three pass-through sites. Remove `authStorage`, and remove `modelRegistry` where nothing reads it. Verify that all 2.4 cases are green and 2.5 stays green.
+- [x] 5.5 In `execution.ts`, remove the dead `authStorage` option/type. Verify with `npm run typecheck`, and that 2.5 and 2.8 stay green.
+- [x] 5.6 For `flow:get-spawn-context`, set `modelRuntime` and drop `authStorage`. Verify that 2.9 is green.
+- [x] 5.7 Add `"max"` to `ThinkingLevelString` and `VALID_THINKING_LEVELS`, plus anywhere the agent parser validates levels. Update the comment in `types.ts`. Verify that group 4 is all green.
+- [x] 5.8 Update `testing.ts` stubs to remove `authStorage`. Verify that the existing faux suites (`faux-*.test.ts`, `pi-runtime-alignment.test.ts`) are all green.
+- [x] 5.9 Confirm 2.6 (model never inherited) is still green. If it fails, the implementation leaked model inheritance, so revert and fix.
 
 ## 6. Refactor (tests stay green)
 
-- [ ] 6.1 Remove orphans left by the change (unused imports, the `getAuthStorage` type, dead comments about `authStorage`), and update the misleading comment at `execution.ts` (the `modelRuntime` option block). Verify with `npm run lint` (no new warnings) and a green suite.
-- [ ] 6.2 Run `code-simplification` on the diff if it feels heavy. Verify the suite is unchanged and green.
+- [x] 6.1 Remove orphans left by the change (unused imports, the `getAuthStorage` type, dead comments about `authStorage`), and update the misleading comment at `execution.ts` (the `modelRuntime` option block). Verify with `npm run lint` (no new warnings) and a green suite.
+- [x] 6.2 (Skipped: the diff is small and already minimal.) Run `code-simplification` on the diff if it feels heavy. Verify the suite is unchanged and green.
 
 ## 7. Docs (delegated to a subagent for `docs/`)
 
-- [ ] 7.1 Add `max` to the level lists in `docs/flow-authoring.md` and `docs/agents.md`. Verify with `grep -n xhigh docs/*.md` (every hit also lists `max`).
-- [ ] 7.2 Add `max` in `.pi/skills/manage-flows/SKILL.md`. Verify with grep.
-- [ ] 7.3 Add a note to `docs/architecture.md`: flow agents share the parent session's model runtime (providers + keys, never the model), there's a fallback to the default runtime when no session exists, and the private-field caveat. Verify that the section exists.
-- [ ] 7.4 Update `docs/testing.md`: explain that faux harness tests pass `modelRuntime` explicitly and so cannot catch wiring bugs, and point to the `makeParentSession` fixture. Verify that the section exists.
-- [ ] 7.5 Add a CHANGELOG entry (fix: runtime-registered providers in flow agents on pi ≥0.80.8; feat: `max` thinking level; change: `flow:get-spawn-context` adds `modelRuntime`, drops `authStorage`). Verify that the entry exists.
+- [x] 7.1 Add `max` to the level lists in `docs/flow-authoring.md` and `docs/agents.md`. Verify with `grep -n xhigh docs/*.md` (every hit also lists `max`).
+- [x] 7.2 Add `max` in `.pi/skills/manage-flows/SKILL.md`. Verify with grep.
+- [x] 7.3 Add a note to `docs/architecture.md`: flow agents share the parent session's model runtime (providers + keys, never the model), there's a fallback to the default runtime when no session exists, and the private-field caveat. Verify that the section exists.
+- [x] 7.4 Update `docs/testing.md`: explain that faux harness tests pass `modelRuntime` explicitly and so cannot catch wiring bugs, and point to the `makeParentSession` fixture. Verify that the section exists.
+- [x] 7.5 Add a CHANGELOG entry (fix: runtime-registered providers in flow agents on pi ≥0.80.8; feat: `max` thinking level; change: `flow:get-spawn-context` adds `modelRuntime`, drops `authStorage`). Verify that the entry exists.
 
 ## 8. Verification
 
 - [ ] 8.1 Run `npm run lint && npm run typecheck && npm test`. All must be green, on Node 22 and 24, in CI.
-- [ ] 8.2 **Mutation check:** temporarily revert 5.3 (do not pass `modelRuntime`). 2.1, 2.2, 2.3, 2.4 and 2.7 must go RED. Restore. Then temporarily make the helper return `undefined`: 3.1 must go RED. Restore. Record both results in the PR.
+- [x] 8.2 **Mutation check:** temporarily revert 5.3 (do not pass `modelRuntime`). 2.1, 2.2, 2.3, 2.4 and 2.7 must go RED. Restore. Then temporarily make the helper return `undefined`: 3.1 must go RED. Restore. Record both results in the PR.
 - [ ] 8.3 **Manual TUI check:** run a flow whose agent uses a provider registered via `pi.registerProvider` (dashboard `proxy/...`, and separately a tiny local extension provider with no dashboard). It must fail on the base commit and succeed with the change. Record the results in the PR.
-- [ ] 8.4 Run `openspec validate flow-agents-inherit-model-runtime --strict`. It must pass.
+- [x] 8.4 Run `openspec validate flow-agents-inherit-model-runtime --strict`. It must pass.

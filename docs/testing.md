@@ -54,7 +54,8 @@ All faux-provider knowledge is confined to `faux-harness.ts`. Suites speak only 
 | Helper | Signature | Purpose |
 |---|---|---|
 | `makeAgent` | `(partial: Partial<AgentConfig> = {})` | minimal `AgentConfig` with sensible defaults; override via `partial` |
-| `makeFauxRegistry` | `(faux)` | a `modelRegistry` stub backed by the faux models, plus a no-op `authStorage` |
+| `makeFauxRegistry` | `(faux)` | a `modelRegistry` stub backed by the faux models |
+| `registerFauxOnRuntime` | `(options)` | a real `ModelRuntime` with an in-memory-only faux provider |
 | `lastUserText` | `(context)` | the text of the last user message in a faux stream context (used inside responders) |
 
 ### `FinishArgs`
@@ -117,6 +118,27 @@ Extends `runFaux` for large DAGs that mix agents with code nodes, forks, and loo
 | `forkAnswers` | `Record<forkStepId, string>` | answers for interactive `fork` steps |
 | `onAgentStarted` / `onAgentComplete` | callbacks | observe step lifecycle (e.g. tally loop re-entries) |
 | `responder`, `maxTurns` | inherited | `maxTurns` default here is 48 |
+
+## Testing production wiring
+
+The faux runners (`spawnFaux`, `runFaux`, and `runFauxFlow`) pass `modelRuntime` directly to the engine, so they cannot catch production wiring bugs between `session_start` and spawned sessions. For those tests, use `makeParentSession()`, `fakeExtensionHost()`, `writeFlowFixture()`, and `agentMd()` from [`__tests__/helpers/parent-session.ts`](../__tests__/helpers/parent-session.ts). These fixtures drive the real extension event path with a real `ModelRegistry` around an in-memory-only provider.
+
+```ts
+import { activate } from "../extensions/flow-engine/index.js";
+import { scriptFinish } from "./faux-harness.js";
+import { makeParentSession, fakeExtensionHost, writeFlowFixture, agentMd } from "./helpers/parent-session.js";
+const parent = await makeParentSession();
+parent.faux.setResponses([scriptFinish({ status: "complete", summary: "ok" })]);
+const host = fakeExtensionHost();
+activate(host.pi);
+const dirs = writeFlowFixture({ "demo/one": flowYaml }, { worker: agentMd("worker", "rtprov/m1") });
+await host.emit("flow:register-agents-dir", { dir: dirs.agentsDir });
+await host.emit("flow:register-flows-dir", { dir: dirs.flowsDir });
+await host.fire("session_start", parent.ctx);
+const done = host.next("flow:complete");
+await host.emit("flow:run", { flowName: "demo:one", task: "go" });
+const result = await done;
+```
 
 ## The Responder Pattern
 

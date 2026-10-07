@@ -719,7 +719,7 @@ Get context needed to spawn agent sessions programmatically.
 
 ```typescript
 const q = {} as {
-  authStorage:          any;
+  modelRuntime:         any;
   modelRegistry:        any;
   extraAgentExtensions: any[];
   extensionTools:       any[];
