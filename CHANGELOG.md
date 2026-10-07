@@ -5,6 +5,12 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Agent steps now use the thinking level from the model ref** (`flow-model-resolution` capability). Agent steps resolved the model early (for the `onAgentStarted` display), kept only the model id, and passed the agent file's `thinking:` field alone to the session. Any level carried by the ref was lost: a role's `:level` from `model:resolve` (e.g. `@fast` -> `local/...:low`) or a literal `provider/model:high` suffix. pi then fell back to the `defaultThinkingLevel` setting, so with `defaultThinkingLevel: medium` every such agent ran at `medium`. The resolved level is now passed with the model id, so pi's `defaultThinkingLevel` and per-model levels apply only when neither the agent nor its model ref sets a level. Precedence is unchanged: `thinking:` frontmatter > ref level > pi defaults. `agent-decision` and fork-decision agents were not affected.
+
 ## [v0.7.0] - 2026-10-07
 
 ### Fixed

@@ -191,6 +191,8 @@ export interface SpawnOptions {
   signal?: AbortSignal;
   /** Pre-resolved model ID — when provided, skips resolveModel() call. */
   resolvedModelId?: string;
+  /** Thinking level from the same pre-resolution (frontmatter > ref level). */
+  resolvedThinking?: string;
 }
 
 /**
@@ -285,7 +287,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Resolve model (skip if pre-resolved)
   const { modelId, thinking } = options.resolvedModelId
-    ? { modelId: options.resolvedModelId, thinking: agent.thinking }
+    ? { modelId: options.resolvedModelId, thinking: options.resolvedThinking ?? agent.thinking }
     : resolveModel(pi, agent.model, agent.thinking, options.modelRegistry);
 
   // Build system prompt: expand template variables in agent body

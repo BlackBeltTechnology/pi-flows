@@ -668,9 +668,13 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
 
   // Resolve model early so it's available for onAgentStarted observers
   let resolvedModelId: string | undefined;
+  let resolvedThinking: string | undefined;
   try {
-    const { modelId } = resolveModel(options.pi, agentConfig.model, agentConfig.thinking, options.modelRegistry);
+    // Keep the thinking level too (frontmatter `thinking:` > ref level from
+    // role/suffix) — dropping it lets pi's defaultThinkingLevel take over.
+    const { modelId, thinking } = resolveModel(options.pi, agentConfig.model, agentConfig.thinking, options.modelRegistry);
     resolvedModelId = modelId;
+    resolvedThinking = thinking;
   } catch {
     // Model resolution failed — will be caught again inside spawnAgent
   }
@@ -762,6 +766,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       : undefined,
     signal: options.signal,
     resolvedModelId,
+    resolvedThinking,
   });
 
   options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent" });
