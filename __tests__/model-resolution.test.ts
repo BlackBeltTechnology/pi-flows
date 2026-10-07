@@ -266,3 +266,50 @@ describe("resolveModel — FALLBACK (silent emit, in-process registry)", () => {
     expect(() => resolveModel(pi, "   ")).toThrow(/Empty model reference/);
   });
 });
+
+// ── `max` thinking level (change: flow-agents-inherit-model-runtime, 4.x) ──
+
+describe("resolveModel — thinking levels incl. max (fallback)", () => {
+  const registry = () => {
+    const calls: Array<[string, string]> = [];
+    return {
+      calls,
+      reg: {
+        find: (p: string, id: string) => { calls.push([p, id]); return { id, provider: p }; },
+        getAll: () => [{ id: "claude-opus-4", provider: "anthropic" }],
+      },
+    };
+  };
+
+  it("4.1 provider/model:max strips the suffix and returns thinking max", () => {
+    const { calls, reg } = registry();
+    const out = resolveModel(mkPi({ modelRegistry: reg }), "anthropic/claude-opus-4:max");
+    expect(calls).toEqual([["anthropic", "claude-opus-4"]]);
+    expect(out.modelId).toBe("anthropic/claude-opus-4");
+    expect(out.thinking).toBe("max");
+  });
+
+  it("4.2 bare id:max resolves the bare id with thinking max", () => {
+    const { reg } = registry();
+    const out = resolveModel(mkPi({ modelRegistry: reg }), "claude-opus-4:max");
+    expect(out.modelId).toContain("claude-opus-4");
+    expect(out.modelId).not.toContain(":max");
+    expect(out.thinking).toBe("max");
+  });
+
+  for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+    it(`4.3 suffix :${level} is recognised`, () => {
+      const { calls, reg } = registry();
+      const out = resolveModel(mkPi({ modelRegistry: reg }), `anthropic/claude-opus-4:${level}`);
+      expect(calls[0]).toEqual(["anthropic", "claude-opus-4"]);
+      expect(out.thinking).toBe(level);
+    });
+  }
+
+  it("4.4 an unknown suffix is NOT stripped (stays part of the id)", () => {
+    const calls: Array<[string, string]> = [];
+    const reg = { find: (p: string, id: string) => { calls.push([p, id]); return undefined; }, getAll: () => [] };
+    expect(() => resolveModel(mkPi({ modelRegistry: reg }), "anthropic/claude-opus-4:ultra")).toThrow(/claude-opus-4:ultra/);
+    expect(calls).toEqual([["anthropic", "claude-opus-4:ultra"]]);
+  });
+});

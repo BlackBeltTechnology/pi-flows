@@ -168,7 +168,7 @@ export interface FauxRuntimeRegistration {
  * yields an empty, no-secret credential) and to serve the scripted responses.
  * Nothing is ever sent to a network.
  */
-async function registerFauxOnRuntime(opts: {
+export async function registerFauxOnRuntime(opts: {
   api: string;
   provider: string;
   models: Array<{ id: string }>;
