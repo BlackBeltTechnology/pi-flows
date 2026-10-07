@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
+import { activate } from "../../extensions/flow-engine/index.js";
 import { registerFauxOnRuntime } from "../faux-harness.js";
 
 export interface ParentSession {
@@ -27,7 +28,10 @@ export interface ParentSession {
 }
 
 /** A parent session whose registry holds an in-memory-only provider. */
-export async function makeParentSession(provider = "rtprov", models = [{ id: "m1" }]): Promise<ParentSession> {
+export async function makeParentSession(
+  provider = "rtprov",
+  models: Array<{ id: string; reasoning?: boolean }> = [{ id: "m1" }],
+): Promise<ParentSession> {
   const { faux, runtime } = await registerFauxOnRuntime({ api: `${provider}-api`, provider, models });
   const registry = new ModelRegistry(runtime);
   return { ctx: { modelRegistry: registry, hasUI: false }, runtime, registry, faux, provider };
@@ -93,6 +97,25 @@ export function writeFlowFixture(flows: Record<string, string>, agents: Record<s
   }
   for (const [name, md] of Object.entries(agents)) writeFileSync(join(agentsDir, `${name}.md`), md, "utf8");
   return { flowsDir, agentsDir };
+}
+
+export type Host = ReturnType<typeof fakeExtensionHost>;
+
+/** Boot the real extension against a temp flows/agents fixture. */
+export async function bootExtension(flows: Record<string, string>, agents: Record<string, string>): Promise<Host> {
+  const host = fakeExtensionHost();
+  activate(host.pi);
+  const dirs = writeFlowFixture(flows, agents);
+  await host.emit("flow:register-agents-dir", { dir: dirs.agentsDir });
+  await host.emit("flow:register-flows-dir", { dir: dirs.flowsDir });
+  return host;
+}
+
+/** Dispatch through the real flow:run path and await the terminal payload. */
+export async function runFlowViaEvent(host: Host, flowName: string): Promise<any> {
+  const done = host.next("flow:complete");
+  await host.emit("flow:run", { flowName, task: "go" });
+  return done;
 }
 
 /** Agent markdown with a given model ref (and optional thinking level). */
