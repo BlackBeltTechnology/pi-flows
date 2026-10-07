@@ -5,7 +5,9 @@
 Defines how pi-flows resolves `model:` references found in agent definitions and flow YAML into concrete `Model` objects passed to pi-coding-agent's agent-session constructor.
 
 pi-flows is a **consumer** of the shared `model:resolve` event: it emits a probe and reads the result. The event handler (typically pi-agent-dashboard) owns interpretation of `@role` prefixes, the `:thinking` suffix, and `~/.pi/agent/providers.json#roles`. When no handler answers, pi-flows falls back to in-process `pi.modelRegistry` resolution for the two literal forms (`provider/model[:thinking]` and bare `model-id[:thinking]`) and refuses `@role` with an actionable error.
+
 ## Requirements
+
 ### Requirement: pi-flows SHALL resolve `model:` references via the shared `model:resolve` event
 
 When the flow engine encounters a `model:` field in an agent definition or flow YAML, it SHALL emit `pi.events.emit("model:resolve", probe)` exactly once with a probe object of shape:
@@ -55,7 +57,7 @@ After the emit returns, the flow engine SHALL read `probe.model`, `probe.thinkin
 
 ### Requirement: pi-flows SHALL fall back to in-process `pi.modelRegistry` resolution when no `model:resolve` handler answers
 
-When the `model:resolve` emit returns with both `probe.model` and `probe.error` unset (silent emit — no handler reacted), the flow engine SHALL attempt in-process resolution using `pi.modelRegistry`. The fallback SHALL handle the two literal forms (`provider/model[:thinking]` and bare `model-id[:thinking]`) but SHALL NOT attempt `@role` lookup.
+When the `model:resolve` emit returns with both `probe.model` and `probe.error` unset (silent emit — no handler reacted), the flow engine SHALL attempt in-process resolution using the **session's model registry**: the `ctx.modelRegistry` captured from the most recent `session_start`. (On pi 1.x the extension API object has no `modelRegistry`. A `pi.modelRegistry`, if present, MAY be used only when no session registry has been captured.) When no registry is available at all, resolution SHALL fail with an actionable error. The fallback SHALL handle the two literal forms (`provider/model[:thinking]` and bare `model-id[:thinking]`) but SHALL NOT attempt `@role` lookup.
 
 The fallback SHALL parse the `:thinking` suffix before any registry lookup, then:
 
@@ -69,14 +71,14 @@ On success, the fallback SHALL pass the resolved Model and thinking level to the
 - **GIVEN** an agent definition `model: "anthropic/claude-opus-4"` AND NO `model:resolve` handler is registered
 - **WHEN** the flow engine resolves the model
 - **THEN** the emit SHALL be silent (no listener)
-- **AND** the flow engine SHALL call `pi.modelRegistry.find("anthropic", "claude-opus-4")`
+- **AND** the flow engine SHALL call the session registry's `find("anthropic", "claude-opus-4")`
 - **AND** the resulting Model SHALL be used to instantiate the agent session
 
 #### Scenario: Fallback resolves bare model id without a handler
 
 - **GIVEN** an agent definition `model: "claude-haiku-4-5"` AND NO handler is registered
 - **WHEN** the flow engine resolves the model
-- **THEN** the flow engine SHALL call `pi.modelRegistry.getAll().find(m => m.id === "claude-haiku-4-5")`
+- **THEN** the flow engine SHALL call the session registry's `getAll().find(m => m.id === "claude-haiku-4-5")`
 - **AND** the first matching Model in iteration order SHALL be used
 
 #### Scenario: Fallback refuses @role with actionable error
@@ -95,6 +97,13 @@ On success, the fallback SHALL pass the resolved Model and thinking level to the
 - **THEN** the agent invocation SHALL fail with `isError: true`
 - **AND** the error message SHALL name the unresolved ref
 - **AND** the error message SHALL include up to twenty known model ids from the registry as a hint
+
+#### Scenario: Fallback works on pi 1.x where the extension API has no modelRegistry
+
+- **GIVEN** the extension API object has no `modelRegistry` property AND `session_start` provided `ctx.modelRegistry` containing `prov/m1` AND NO `model:resolve` handler is registered
+- **WHEN** a flow agent with `model: "prov/m1"` is resolved
+- **THEN** resolution SHALL succeed using the session registry
+- **AND** the error "Model registry unavailable" SHALL NOT occur
 
 ### Requirement: `resolveModel` SHALL no longer depend on a `getModelRole` parameter
 
@@ -164,3 +173,24 @@ The `edit-flow` skill (`skills/edit-flow/SKILL.md`) SHALL document the three acc
 - **THEN** the generated `model:` field MAY contain the literal `"anthropic/claude-haiku-4-5:high"`
 - **AND** the resulting file SHALL be valid YAML and SHALL resolve correctly at runtime via the resolveModel implementation
 
+### Requirement: pi-flows SHALL accept the `max` thinking level
+
+The set of thinking levels pi-flows recognises SHALL be `off`, `minimal`, `low`,
+`medium`, `high`, `xhigh`, and `max`. This set SHALL apply both to the `:thinking`
+suffix parsed by the in-process fallback and to an agent's `thinking:` frontmatter
+field. A suffix not in this set SHALL NOT be stripped, and SHALL remain part of the
+model id.
+
+#### Scenario: `:max` suffix is parsed in the fallback
+
+- **GIVEN** an agent definition `model: "anthropic/claude-opus-4:max"` AND NO
+  `model:resolve` handler is registered
+- **WHEN** the flow engine resolves the model
+- **THEN** it SHALL call `pi.modelRegistry.find("anthropic", "claude-opus-4")`
+- **AND** the agent session SHALL receive thinking level `max`.
+
+#### Scenario: `thinking: max` frontmatter is passed through
+
+- **GIVEN** an agent with `thinking: max`
+- **WHEN** the agent session is created
+- **THEN** the session SHALL receive thinking level `max`, overriding any model suffix.
