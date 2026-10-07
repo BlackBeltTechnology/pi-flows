@@ -94,5 +94,14 @@ Add to `__tests__/model-resolution.test.ts`.
 
 - [ ] 8.1 Run `npm run lint && npm run typecheck && npm test`. All must be green, on Node 22 and 24, in CI.
 - [x] 8.2 **Mutation check:** temporarily revert 5.3 (do not pass `modelRuntime`). 2.1, 2.2, 2.3, 2.4 and 2.7 must go RED. Restore. Then temporarily make the helper return `undefined`: 3.1 must go RED. Restore. Record both results in the PR.
-- [ ] 8.3 **Manual TUI check:** run a flow whose agent uses a provider registered via `pi.registerProvider` (dashboard `proxy/...`, and separately a tiny local extension provider with no dashboard). It must fail on the base commit and succeed with the change. Record the results in the PR.
+- [x] 8.3 **Manual TUI check:** run a flow whose agent uses a provider registered via `pi.registerProvider` (dashboard `proxy/...`, and separately a tiny local extension provider with no dashboard). It must fail on the base commit and succeed with the change. Record the results in the PR.
 - [x] 8.4 Run `openspec validate flow-agents-inherit-model-runtime --strict`. It must pass.
+
+### 8.3 results (pi 1.0.3, headless RPC, real model calls, one-agent flow)
+
+| Scenario | Model ref | Base `a0557e1` | Fix |
+|---|---|---|---|
+| A: no dashboard, provider from `pi.registerProvider` | `myprov/ocg/deepseek-v4.1-flash` | error: Model registry unavailable on pi.modelRegistry | success ("pong") |
+| B: dashboard, providers.json provider | `local/ocg/deepseek-v4.1-flash` | error: No API key found for local | success ("pong") |
+| C: dashboard role | `@fast` | error: No API key found for local | success ("pong") |
+| D: no dashboard, built-in provider | `anthropic/claude-haiku-4-5` | (not run) | success ("pong") |
