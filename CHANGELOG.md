@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING: flow agents no longer prefix tool names with `mcp__flows__`** (`subagent-spawn` capability). On `anthropic-messages` models, pi-flows used to register custom tools, extension tools, `finish` and `ask_user` as `mcp__flows__<name>`. pi-anthropic-messages left those names alone on the way back, so the dashboard showed `mcp__flows__rackinspect_zoom_image` where the main chat showed `rackinspect_zoom_image`. Tools now keep their plain pi names on every provider, and wire renaming is left to pi-anthropic-messages, which pi-flows' built-in adapter loads into every flow agent (the dashboard's `flows-anthropic-bridge-plugin` is optional). **Flow agents on Anthropic OAuth now require `@blackbelt-technology/pi-anthropic-messages` to be installed.** Without it, Anthropic rejects the request. `prefixToolName` and `CORE_TOOL_NAMES` are removed, and `spawnFaux` now always reports `finishToolName: "finish"`. OpenSpec: remove-flows-mcp-tool-prefix.
+- **BREAKING: flow agents no longer prefix tool names with `mcp__flows__`** (`subagent-spawn` capability). On Anthropic models, pi-flows registered custom tools, extension tools, `finish` and `ask_user` as `mcp__flows__<name>`, so tool-call events reported the prefixed name instead of the tool's real name. Tools now keep their plain names on every provider, and tool-call events report those names. pi-flows no longer renames tools for the wire; any renaming an endpoint requires must come from a provider extension loaded into the agent. `prefixToolName` and `CORE_TOOL_NAMES` are removed, and `spawnFaux` now always reports `finishToolName: "finish"`.
 
 ### Fixed
 
 - **Tools that agent extensions register are now callable when the agent declares them** (`subagent-spawn` capability). Tools registered through `extraAgentExtensions` (`pi.registerTool`) were never activated, so calls failed with "Tool X not found". Declared ones are now activated; undeclared ones stay inactive.
-- **Parallel tool calls in one turn keep their own results** (`subagent-spawn` capability). Tool results arrive in completion order but were written onto the last recorded call, so in the dashboard and `onToolResult` one tool's output could appear under another tool and its own row stayed empty. Results are now matched by tool-call id.
+- **Parallel tool calls in one turn keep their own results** (`subagent-spawn` capability). Tool results arrive in completion order but were written onto the last recorded call, so in tool-call events and `onToolResult` one tool's output could appear under another tool. Results are now matched by tool-call id.
 
 ### Added
 
