@@ -11,7 +11,6 @@
 import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { AccessRules, AgentOutput } from "./types.js";
-import { prefixToolName } from "./tool-prefix.js";
 
 export interface GuardOptions {
   allowedTools?: string[];
@@ -20,8 +19,6 @@ export interface GuardOptions {
   decisionBranches?: string[];
   agentOutputs?: AgentOutput[];
   allowAskUser?: boolean;
-  /** When set, non-core tool names are prefixed (e.g., "mcp__flows__") for Anthropic OAuth. */
-  toolPrefix?: string;
 }
 
 /**
@@ -29,11 +26,8 @@ export interface GuardOptions {
  * This is the primary API — no env vars, no temp files.
  */
 export function createGuardExtension(options: GuardOptions): ExtensionFactory {
-  const tp = options.toolPrefix || "";
-
-  // Compute prefixed names for special tools
-  const finishName = prefixToolName("finish", tp);
-  const askUserName = prefixToolName("ask_user", tp);
+  const finishName = "finish";
+  const askUserName = "ask_user";
 
   return (pi: ExtensionAPI) => {
     // Block ask_user unless explicitly allowed
@@ -52,7 +46,7 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
 
     // ── Tool whitelist enforcement ──
     if (options.allowedTools) {
-      const allowedTools = new Set(options.allowedTools.map(t => prefixToolName(t, tp)));
+      const allowedTools = new Set(options.allowedTools);
       // Ensure finish is always allowed
       allowedTools.add(finishName);
 

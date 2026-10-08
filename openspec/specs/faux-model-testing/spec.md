@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by syncing change add-faux-model-flow-tests. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Faux test harness
 
 The test suite SHALL provide a reusable harness (`__tests__/faux-harness.ts`) that constructs a `pi-ai` faux provider, a `modelRegistry` stub backed by the faux models, and a `spawnAgent` invocation wired to that registry — without any network access or real credentials.
@@ -89,15 +91,6 @@ The `runFlow` faux smoke tests SHALL distinguish concurrent agents via a scripte
 - **WHEN** two independent steps run concurrently and a third step is `blockedBy` both
 - **THEN** all three steps complete and the fan-in step runs only after both upstream steps finish
 
-### Requirement: Tool-name prefix path coverage
-
-The faux suites SHALL cover both tool-name forms: the default unprefixed `finish` (faux `api: "faux"`) and the `mcp__flows__`-prefixed name produced when `model.api === "anthropic-messages"`.
-
-#### Scenario: Anthropic-messages prefix variant
-
-- **WHEN** a faux model is configured with `api: "anthropic-messages"` and the agent finishes
-- **THEN** the prefixed `mcp__flows__finish` tool name is used and the finish is captured correctly
-
 ### Requirement: Full-integration flow coverage
 
 The harness SHALL provide a `runFauxFlow` helper that materializes `code` / `code-decision` handlers to temp files (wiring each step's `target:`), answers `fork` prompts, and surfaces step lifecycle callbacks — so a single large DAG can exercise agents, code nodes, decisions, and loops against one scripted faux model. At least one integration test SHALL drive a large flow combining parallel fan-in, input wiring, code-node typed outputs, code-decision routing, and an agent-decision loop.
@@ -157,3 +150,17 @@ Resolution SHALL succeed under npm (deduped/hoisted), npm (version-pinned nested
 
 - **WHEN** no `pi-ai/compat.js` belonging to pi-coding-agent can be resolved
 - **THEN** the harness SHALL throw an error that names the nested-pi-ai resolution problem before any faux stream is attempted.
+
+### Requirement: Anthropic-messages agents use unprefixed tool names
+
+The faux suites SHALL verify that an agent whose model has `api: "anthropic-messages"` registers, activates and reports its tools under plain pi names, with no `mcp__flows__` prefix.
+
+#### Scenario: Anthropic-messages agent finishes with plain finish
+
+- **WHEN** a faux model is configured with `api: "anthropic-messages"` and the agent calls `finish`
+- **THEN** the finish is captured correctly and `spawnFaux` reports `finishToolName` as `finish`
+
+#### Scenario: Prefixed finish is not recognised
+
+- **WHEN** a faux model is configured with `api: "anthropic-messages"` and the script calls `mcp__flows__finish`
+- **THEN** the agent SHALL NOT complete via that call (no tool with that name is registered)

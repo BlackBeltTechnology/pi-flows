@@ -87,12 +87,15 @@ Runs the real `spawnAgent` loop against a scripted faux provider, registering th
 | `task` | `string` | defaults to `"do the thing"` |
 | `responses` | `FauxResponseStep[]` | **required** — the queued responses |
 | `signal` | `AbortSignal` | for abort-mid-stream tests |
-| `modelApi` | `string` | faux model `api`; set `"anthropic-messages"` to exercise the `mcp__flows__` prefix path |
+| `modelApi` | `string` | faux model `api`; set `"anthropic-messages"` to exercise the Anthropic provider path (tool names stay unprefixed) |
 | `modelId` | `string` | default `"faux-1"` |
 | `tokensPerSecond` | `number` | streaming rate; low values make abort deterministic |
 | `cwd` | `string` | defaults to `process.cwd()` |
+| `extraCustomTools` | `any[]` | extra `ToolDefinition`s for the agent session |
+| `extraAgentExtensions` | `ExtensionFactory[]` | extra agent extension factories |
+| `onToolCall` / `onToolResult` | callbacks | observe tool calls/results as reported to callers |
 
-The returned `finishToolName` tells the test which tool name the agent finishes with (prefixed under `anthropic-messages`).
+The returned `finishToolName` is always `finish`, the tool name the agent uses to finish.
 
 ### `runFaux` — multi-agent DAG
 
@@ -159,8 +162,8 @@ Routing on content (not call count) is what makes parallel fan-in and loop re-en
 **1. The faux provider must be registered into pi-coding-agent's *nested* pi-ai.**
 `@earendil-works/pi-coding-agent` bundles its own nested copy of `@earendil-works/pi-ai`, and the api-provider registry is module-scoped. The harness resolves that exact nested `pi-ai/compat.js` via a filesystem walk-up and registers the faux provider there — the same instance `createAgentSession` resolves streams through. A contributor who imports `pi-ai` directly hits a *different* registry and every session fails with **"No API provider registered"**. Always go through the harness.
 
-**2. The model's `api` drives the finish tool-name prefix.**
-With the default `api: "faux"`, the finish tool is `finish`. With `api: "anthropic-messages"`, it becomes `mcp__flows__finish`. Pass `modelApi: "anthropic-messages"` to `spawnFaux` to exercise the prefixed path; the returned `finishToolName` reflects the active form.
+**2. The finish tool is always `finish`, regardless of the model's `api`.**
+Pass `modelApi: "anthropic-messages"` to `spawnFaux` to exercise the Anthropic provider path. pi-flows applies no `mcp__flows__` prefix, and the returned `finishToolName` remains `finish`.
 
 ## Worked Examples
 

@@ -22,11 +22,10 @@ Files in this area. Purposes left for the agent to author.
 | `flow-persist.ts` | Persist `flow:*` events as `flow-event` session entries via `FlowEventPersister`; map event names, find orphaned runs, and project run/node state. |
 | `flow-prompt.ts` | Emit `flow:prompt-request` through `emitPromptAndAwait`; accept first matching `flow:prompt-response` or PromptBus result; cancel on timeout. |
 | `flow-tui.ts` | Wire flow dashboard and summary TUI via `setupFlowTui`; observe/render lifecycle, emit and persist `flow:*` events, handle navigation and orphaned runs. |
-| `guard.ts` | Build `createGuardExtension`; enforce allowed tools, `ask_user`, read/write/bash access, prefixed `finish` schema, declared outputs, and post-finish lockout. |
+| `guard.ts` | Build `createGuardExtension`; enforce allowed tools, `ask_user`, read/write/bash access, `finish` schema, declared outputs, and post-finish lockout. |
 | `index.ts` | Activate flow engine; discover/register flows, agents, tools, skills, gates, commands, and `flow:*` event handlers; dispatch runs through `FlowManager`. |
 | `model-roles.ts` | Resolve `@role`, `provider/model-id`, and thinking suffixes via `resolveModel`; use `model:resolve` first, then `pi.modelRegistry` literal fallback. |
 | `prompt-bus-access.ts` | Cache PromptBus request function from `prompt:set-bus-request`; expose `setPromptBusRequest`, `hasPromptBus`, `promptBusRequest`, `listenForPromptBus`. |
 | `result-parser.ts` | Parse agent `<result>` XML into `ParsedResult` via `parseResult`; detect nested artifact tags by dotted path through `hasArtifactElement`. |
 | `testing.ts` | Expose zero-network faux harness: script finish/tool/error responses, register faux `ModelRuntime`, run `spawnFaux`, `runFaux`, and `runFauxFlow`. |
-| `tool-prefix.ts` | Define `CORE_TOOL_NAMES`; apply `mcp__flows__` to non-core, non-MCP tool names through `prefixToolName` for Anthropic OAuth. |
 | `types.ts` | Define flow-engine contracts: configs, steps, results, events, typed I/O, code handlers, diagnostics, `FailureOutcome`, `FailureInfo`, and `FlowHardError`. |

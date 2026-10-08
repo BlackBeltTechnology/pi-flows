@@ -28,6 +28,10 @@ Or from a local clone:
 pi install /path/to/pi-flows
 ```
 
+### Anthropic OAuth (Claude subscription) models
+
+pi-flows registers agent tools under their plain pi names on every provider. Anthropic's OAuth endpoint rejects requests whose custom tools aren't `mcp__`-prefixed (it answers with an "out of extra usage" error). Install [`@blackbelt-technology/pi-anthropic-messages`](https://www.npmjs.com/package/@blackbelt-technology/pi-anthropic-messages) (`pi install npm:@blackbelt-technology/pi-anthropic-messages`): pi-flows loads it into every flow agent automatically, and it renames tools on the wire and back. The pi-agent-dashboard `flows-anthropic-bridge-plugin` is optional. Anthropic API-key and other providers don't need any of this.
+
 ## Quick Start
 
 1. **Create an agent** (`.pi/flows/agents/reviewer.md`):

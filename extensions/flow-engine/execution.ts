@@ -21,11 +21,8 @@ import { resolveModel } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
 import { createGuardExtension } from "./guard.js";
-import { prefixToolName } from "./tool-prefix.js";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve as pathResolve, join as pathJoin, dirname } from "node:path";
-
-export { prefixToolName } from "./tool-prefix.js";
 
 /**
  * Decide how a spawned agent's session should be created.
@@ -203,7 +200,7 @@ export interface SpawnOptions {
  * ExtensionAPI that records handlers and tools into an Extension-shaped
  * object, which the ExtensionRunner will later bind with real actions.
  */
-async function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any, toolPrefix: string = ""): Promise<any> {
+async function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any): Promise<any> {
   const handlers = new Map<string, any[]>();
   const tools = new Map<string, any>();
 
@@ -216,9 +213,7 @@ async function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any
       handlers.get(event)!.push(handler);
     },
     registerTool: (tool: any) => {
-      const name = prefixToolName(tool.name, toolPrefix);
-      const prefixedTool = name !== tool.name ? { ...tool, name } : tool;
-      tools.set(name, { definition: prefixedTool, extensionPath: "<guard>" });
+      tools.set(tool.name, { definition: tool, extensionPath: "<guard>" });
     },
     registerCommand: () => {},
     registerShortcut: () => {},
@@ -345,15 +340,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     };
   }
 
-  // Detect Anthropic-messages protocol: any provider using anthropic-messages
-  // needs non-core tools registered with mcp__flows__ prefix so Anthropic's
-  // endpoint accepts them. This covers direct OAuth, API key, AND proxy
-  // providers (e.g., 9Router) that forward to Anthropic. The mcp__ prefix
-  // is harmless for all anthropic-messages endpoints.
-  let toolPrefix = "";
-  if (model.api === "anthropic-messages") {
-    toolPrefix = "mcp__flows__";
-  }
+  // Tool names stay plain pi names on every provider API. Wire-level renaming
+  // that an endpoint requires (e.g. Anthropic OAuth's mcp__ allowlist) is owned
+  // by the provider extension loaded into the agent (pi-anthropic-messages via
+  // flow:register-agent-extension), which also reverses it on inbound events.
 
   // Built-in pi tools (read/write/grep/find/bash/edit/ls) the agent declares.
   // pi-coding-agent's createAgentSession({ tools }) accepts a STRING ARRAY of
@@ -366,8 +356,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   //
   // pi's SDK looks tools up by their canonical lowercase name ("read",
   // "bash", "grep", "find", "ls", "edit", "write"). Outbound canonical
-  // capitalization or mcp__ prefixing for Claude-model anthropic-messages
-  // sessions happens later in pi-ai or @pi/anthropic-messages — we MUST pass
+  // capitalization or mcp__ prefixing for anthropic-messages sessions happens
+  // later in pi-ai or pi-anthropic-messages — for built-in AND custom tools — we MUST pass
   // the lowercase pi-internal names here.
   // An agent that declares `skills:` reads the advertised SKILL.md / topic
   // files with the standard `read` tool (pi's own skill mechanism), so ensure
@@ -379,14 +369,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   const builtinToolNames = effectiveTools.filter(t => TOOL_FACTORIES[t]);
 
-  // Custom tools (flow_agents, flow_write, finish, ask_user, …)
-  // are passed as full ToolDefinition objects via `customTools`. The SDK adds
-  // them to its tool registry. For anthropic-messages sessions they need the
-  // mcp__flows__ prefix on their wire name so Claude's endpoint accepts them.
-  const customTools = (options.extraCustomTools ?? []).map((t: any) => {
-    const prefixed = prefixToolName(t.name, toolPrefix);
-    return prefixed !== t.name ? { ...t, name: prefixed } : t;
-  });
+  // Custom tools (flow_agents, flow_write, …) are passed as full
+  // ToolDefinition objects via `customTools`, under their plain names. The SDK
+  // adds them to its tool registry.
+  const customTools = options.extraCustomTools ?? [];
 
   // When the agent sandboxes reads (`access.read`), widen it to include the
   // resolved skill directories so `read` can reach the advertised SKILL.md and
@@ -405,7 +391,6 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     decisionBranches: options.decisionBranches,
     agentOutputs: agent.outputs,
     allowAskUser: !!options.onExtensionUIRequest,
-    toolPrefix,
   };
 
   // Build extension factories array
@@ -424,7 +409,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       // MUST await — see buildExtensionFromFactory doc comment. Async
       // factories (pi-anthropic-messages adapter, etc.) register hooks
       // only after their internal awaits resolve.
-      const ext = await buildExtensionFromFactory(factory, runtime, toolPrefix);
+      const ext = await buildExtensionFromFactory(factory, runtime);
       extensions.push(ext);
     } catch {
       // Skip failed extensions
@@ -465,7 +450,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // IMPORTANT: we pass `tools: undefined` (NOT a filtered name list) so
   // pi-coding-agent's `allowedToolNames` is undefined and the SDK does NOT
   // filter out our `customTools` or extension-registered tools (the guard's
-  // `mcp__flows__finish`, `mcp__flows__flow_agents`, etc.).
+  // `finish`, `flow_agents`, etc.).
   //
   // The agent's tool sandbox is enforced by the guard extension (which blocks
   // tool_call events for unauthorized names) — not by the SDK's name allowlist.
@@ -537,16 +522,22 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // after bindExtensions because that's when the guard extension registers
   // its `finish` tool into the session's tool registry. Calling
   // setActiveToolsByName here:
-  //   - Picks the prefixed built-in names (read/grep/find — or Read/Grep/Find
+  //   - Picks the plain built-in names (read/grep/find — or Read/Grep/Find
   //     once pi-ai canonicalizes them outbound).
-  //   - Adds prefixed customTools (mcp__flows__flow_agents, mcp__flows__flow_write, …).
-  //   - Adds the guard's prefixed finish tool (mcp__flows__finish).
+  //   - Adds customTools under their plain names (flow_agents, flow_write, …).
+  //   - Adds the guard's finish tool.
+  //   - Adds tools registered by agent extensions, but only those the agent
+  //     declares in `tools` (undeclared ones would be guard-blocked anyway).
   // The system prompt + outbound `tools` array are rebuilt accordingly.
-  const activeToolNames = [
-    ...builtinToolNames.map(name => prefixToolName(name, toolPrefix)),
+  const extensionToolNames = extensions
+    .flatMap((ext: any) => [...ext.tools.keys()])
+    .filter((name: string) => effectiveTools.includes(name));
+  const activeToolNames = [...new Set([
+    ...builtinToolNames,
     ...customTools.map((t: any) => t.name),
-    prefixToolName("finish", toolPrefix),
-  ];
+    ...extensionToolNames,
+    "finish",
+  ])];
   try {
     session.setActiveToolsByName(activeToolNames);
   } catch {
@@ -556,7 +547,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   }
 
   // Wire event capture
-  const finishToolName = prefixToolName("finish", toolPrefix);
+  const finishToolName = "finish";
+  const recordsByCallId = new Map<string, ToolCallRecord>();
   // First-correct-finish-wins latch: captures finish args at END (keyed by
   // toolCallId), freezes the first non-error finish, and ignores all later
   // finish ends. See finish-latch.ts and change latch-agent-finish-result.
@@ -582,6 +574,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
           isError: false,
         };
         toolCalls.push(tc);
+        if (event.toolCallId) recordsByCallId.set(event.toolCallId, tc);
         options.onToolCall?.(event.toolName, event.args);
         break;
       }
@@ -591,12 +584,14 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
         if (rawResult?.content?.[0]?.text) {
           try { output = JSON.parse(rawResult.content[0].text); } catch { output = rawResult.content[0].text; }
         }
-        const last = toolCalls[toolCalls.length - 1];
-        if (last) {
-          last.output = output ?? "";
-          last.isError = !!event.isError;
+        // tool_execution_end arrives in COMPLETION order, so parallel calls
+        // must be matched by toolCallId, not by position.
+        const rec = recordsByCallId.get(event.toolCallId) ?? toolCalls[toolCalls.length - 1];
+        if (rec) {
+          rec.output = output ?? "";
+          rec.isError = !!event.isError;
         }
-        options.onToolResult?.(event.toolName || last?.toolName || "", output, !!event.isError);
+        options.onToolResult?.(event.toolName || rec?.toolName || "", output, !!event.isError);
 
         // First-correct-finish-wins latch (D2/D3). The latch freezes the first
         // non-error finish and tells us to abort exactly once; it runs AFTER

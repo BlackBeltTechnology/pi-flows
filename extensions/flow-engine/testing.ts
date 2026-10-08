@@ -37,7 +37,7 @@ import type { registerFauxProvider as RegisterFauxProviderFn } from "@earendil-w
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 
-import { spawnAgent } from "./execution.js";
+import { spawnAgent, type SpawnOptions } from "./execution.js";
 import { runFlow, type FlowRunOptions } from "./flow-execution.js";
 import { parseFlowYamlString } from "./flow-parser-yaml.js";
 import type { AgentConfig, AgentResult, FlowConfig, FlowResult } from "./types.js";
@@ -280,7 +280,7 @@ export interface SpawnFauxOptions {
   task?: string;
   responses: FauxResponseStep[];
   signal?: AbortSignal;
-  /** Faux model `api` — set "anthropic-messages" to exercise the mcp__flows__ prefix path. */
+  /** Faux model `api` — set "anthropic-messages" to exercise the Anthropic provider path. */
   modelApi?: string;
   /** Faux model id (default "faux-1"). */
   modelId?: string;
@@ -295,12 +295,20 @@ export interface SpawnFauxOptions {
    * with pi's `loadSkillsFromDir` against a real skill directory.
    */
   skills?: Skill[];
+  /** Forwarded to spawnAgent: extra ToolDefinitions for the agent session. */
+  extraCustomTools?: any[];
+  /** Forwarded to spawnAgent: extra agent extension factories. */
+  extraAgentExtensions?: SpawnOptions["extraAgentExtensions"];
+  /** Forwarded to spawnAgent: observe tool calls as reported to callers. */
+  onToolCall?: SpawnOptions["onToolCall"];
+  /** Forwarded to spawnAgent: observe tool results as reported to callers. */
+  onToolResult?: SpawnOptions["onToolResult"];
 }
 
 export interface SpawnFauxOutcome {
   result: AgentResult;
   faux: FauxRegistration;
-  /** Tool name the agent should call to finish (prefixed under anthropic-messages). */
+  /** Tool name the agent should call to finish (always the plain `finish`). */
   finishToolName: string;
 }
 
@@ -313,8 +321,7 @@ export interface SpawnFauxOutcome {
 export async function spawnFaux(options: SpawnFauxOptions): Promise<SpawnFauxOutcome> {
   const modelId = options.modelId ?? "faux-1";
   // `api` is BOTH the global-registry key and the model's `api` field — they
-  // must match (compat's wrapStream throws on mismatch). The model's api also
-  // drives toolPrefix in spawnAgent ("anthropic-messages" → mcp__flows__).
+  // must match (compat's wrapStream throws on mismatch).
   const api = options.modelApi ?? "faux";
   const provider = api === "anthropic-messages" ? "anthropic" : "faux";
   const { faux, runtime } = await registerFauxOnRuntime({
@@ -325,7 +332,7 @@ export async function spawnFaux(options: SpawnFauxOptions): Promise<SpawnFauxOut
   });
   faux.setResponses(options.responses);
 
-  const finishToolName = api === "anthropic-messages" ? "mcp__flows__finish" : "finish";
+  const finishToolName = "finish";
   const registry = makeFauxRegistry(faux);
   const agent = makeAgent({ model: `${provider}/${modelId}`, ...options.agent });
 
@@ -341,6 +348,10 @@ export async function spawnFaux(options: SpawnFauxOptions): Promise<SpawnFauxOut
       resolvedModelId: `${provider}/${modelId}`,
       skills: options.skills,
       signal: options.signal,
+      extraCustomTools: options.extraCustomTools,
+      extraAgentExtensions: options.extraAgentExtensions,
+      onToolCall: options.onToolCall,
+      onToolResult: options.onToolResult,
     });
     return { result, faux, finishToolName };
   } finally {

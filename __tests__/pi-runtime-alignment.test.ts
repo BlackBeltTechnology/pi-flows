@@ -28,15 +28,15 @@ describe("pi runtime alignment — spawnAgent bootstrap", () => {
     expect(result.result.summary).toBe("aligned");
   });
 
-  it("also completes on the anthropic-messages prefix path", async () => {
+  it("also completes on anthropic-messages with the plain finish name", async () => {
     const { result } = await spawnFaux({
       modelApi: "anthropic-messages",
       responses: [
-        scriptFinish({ status: "complete", summary: "aligned-prefixed" }, "mcp__flows__finish"),
+        scriptFinish({ status: "complete", summary: "aligned-anthropic" }),
       ],
     });
 
     expect(result.success).toBe(true);
-    expect(result.result.summary).toBe("aligned-prefixed");
+    expect(result.result.summary).toBe("aligned-anthropic");
   });
 });

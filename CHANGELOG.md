@@ -5,6 +5,21 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: flow agents no longer prefix tool names with `mcp__flows__`** (`subagent-spawn` capability). On `anthropic-messages` models, pi-flows used to register custom tools, extension tools, `finish` and `ask_user` as `mcp__flows__<name>`. pi-anthropic-messages left those names alone on the way back, so the dashboard showed `mcp__flows__rackinspect_zoom_image` where the main chat showed `rackinspect_zoom_image`. Tools now keep their plain pi names on every provider, and wire renaming is left to pi-anthropic-messages, which pi-flows' built-in adapter loads into every flow agent (the dashboard's `flows-anthropic-bridge-plugin` is optional). **Flow agents on Anthropic OAuth now require `@blackbelt-technology/pi-anthropic-messages` to be installed.** Without it, Anthropic rejects the request. `prefixToolName` and `CORE_TOOL_NAMES` are removed, and `spawnFaux` now always reports `finishToolName: "finish"`. OpenSpec: remove-flows-mcp-tool-prefix.
+
+### Fixed
+
+- **Tools that agent extensions register are now callable when the agent declares them** (`subagent-spawn` capability). Tools registered through `extraAgentExtensions` (`pi.registerTool`) were never activated, so calls failed with "Tool X not found". Declared ones are now activated; undeclared ones stay inactive.
+- **Parallel tool calls in one turn keep their own results** (`subagent-spawn` capability). Tool results arrive in completion order but were written onto the last recorded call, so in the dashboard and `onToolResult` one tool's output could appear under another tool and its own row stayed empty. Results are now matched by tool-call id.
+
+### Added
+
+- **`spawnFaux` passes through `extraCustomTools`, `extraAgentExtensions`, `onToolCall` and `onToolResult`** (testing subpath).
+
 ## [v0.7.1] - 2026-10-07
 
 ### Fixed
