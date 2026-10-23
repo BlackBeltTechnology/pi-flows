@@ -34,3 +34,12 @@ AcroLab Lite: role file updated (prepared, NOT live-integrated). Nothing else to
 | Committed | done (`066286e`, unpushed) |
 | Installed | done, scoped: AcroLab role file only (prepared) |
 | Live / merge / push / publish / Beta | NOT — still requires separate Human Gate; nothing claimed |
+
+## Addendum 2026-10-23: single live-model canary (gate C, executed)
+
+- Authorization: user "Pues entonces adelante" — ONE bounded native real-LLM invocation only; no merge/push/publish, no AcroLab/product/profile/goal mutation.
+- Run: fresh per-invocation bundle `/tmp/ed-live-demo-xSFKAU` (snapshot 1.1.0, AcroLab goal `active_goal_2026102302513671_mvkdirny-8z2un6.md` read-only, git `906d7a6`), spawned session `01a16818-…-07614c` (cwd = disposable target, shut down after run), single prompt `/role-lab:evidence-delta <frozen question>`.
+- Native proof: Flow `role-lab:evidence-delta`, runId `b20b7fc4-2b40-4602-83eb-d8e8948bd037`, status `success`; agent `resolvedModel: opencode-go/muse-spark-1.3-contributor`; exactly 4 `read` calls (contract/surface/goal-excerpt/MANIFEST) + `finish(status=complete, facts, minimalDelta, gate)`; 0 extraneous calls; tokens 7650 in / 1738 out (~$0.0011 advisory vs $0.03 cap); outputs carry fixture+heading provenance, `ADVISORY / NOT APPLIED`, STOP gates, UNKNOWN markings.
+- No mutation: no `mutation.txt`; AcroLab unchanged (role sha `4a1807…` as installed under gate B; fixtures/flow/product/goals/sessions untouched).
+- Receipt: `.rollout-local/live-model-canary-20261023/receipt.json` (private, durable). Faux receipts (`faux/faux-1`, scripted) cannot pass as this: they lack native flow events + resolvedModel + real token usage.
+- Remaining gates: merge/push of `fb88f04`, any further live runs, Beta/publish — all need separate Human Gate.
