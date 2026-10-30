@@ -3,8 +3,8 @@
  * Spec: faux-model-testing → "Anthropic-messages agents use unprefixed tool names";
  *       subagent-spawn → plain-name tool activation, customTools, guard.
  *
- * Wire renaming for Anthropic is owned by pi-anthropic-messages (loaded into
- * every flow agent by the bridge plugin), not by pi-flows.
+ * pi-flows does no Anthropic-specific wire handling; hosts add any they need
+ * via flow:register-agent-extension.
  */
 
 import { describe, it, expect } from "vitest";

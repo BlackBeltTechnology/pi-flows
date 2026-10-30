@@ -23,4 +23,4 @@
 
 - [x] 5.1 Bump `version` to `0.6.0` and add a CHANGELOG `0.6.0` section noting pi 1.x support (range widened to `>=0.84.1 <2.0.0`) and the switch to `typebox`; verify `npm pack --dry-run` shows 0.6.0
 - [x] 5.2 Doubt-driven review of the peer-range change before publishing; verify findings resolved
-- [ ] 5.3 Trigger the `Release` workflow with version `0.6.0` (per `docs/releasing.md`); verify `npm view @blackbelt-technology/pi-flows version` returns `0.6.0`
+- [x] 5.3 Trigger the `Release` workflow with version `0.6.0` (per `docs/releasing.md`); verify `npm view @blackbelt-technology/pi-flows version` returns `0.6.0`

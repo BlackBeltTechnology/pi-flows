@@ -241,9 +241,8 @@ async function buildExtensionFromFactory(factory: ExtensionFactory, runtime: any
   };
 
   // Run the factory — it calls api.on() and api.registerTool().
-  // MUST await: see the doc comment above. Async factories (e.g. the
-  // pi-anthropic-messages adapter that dynamic-imports the package before
-  // registering hooks) will otherwise return a pending Promise and leave
+  // MUST await: see the doc comment above. Async factories (e.g. ones that
+  // dynamic-import a module before registering hooks) will otherwise return a pending Promise and leave
   // `handlers` empty.
   await factory(api);
 
@@ -340,10 +339,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     };
   }
 
-  // Tool names stay plain pi names on every provider API. Wire-level renaming
-  // that an endpoint requires (e.g. Anthropic OAuth's mcp__ allowlist) is owned
-  // by the provider extension loaded into the agent (pi-anthropic-messages via
-  // flow:register-agent-extension), which also reverses it on inbound events.
+  // Tool names stay plain pi names on every provider API. pi-flows does no
+  // provider-specific prompt or wire handling; a host that needs it (e.g. the
+  // dashboard's system-prompt section rewrite) registers an agent extension
+  // via flow:register-agent-extension.
 
   // Built-in pi tools (read/write/grep/find/bash/edit/ls) the agent declares.
   // pi-coding-agent's createAgentSession({ tools }) accepts a STRING ARRAY of
@@ -356,8 +355,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   //
   // pi's SDK looks tools up by their canonical lowercase name ("read",
   // "bash", "grep", "find", "ls", "edit", "write"). Outbound canonical
-  // capitalization or mcp__ prefixing for anthropic-messages sessions happens
-  // later in pi-ai or pi-anthropic-messages — for built-in AND custom tools — we MUST pass
+  // capitalization for anthropic-messages sessions happens later in pi-ai —
+  // for built-in AND custom tools — we MUST pass
   // the lowercase pi-internal names here.
   // An agent that declares `skills:` reads the advertised SKILL.md / topic
   // files with the standard `read` tool (pi's own skill mechanism), so ensure
@@ -407,7 +406,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   for (const factory of extensionFactories) {
     try {
       // MUST await — see buildExtensionFromFactory doc comment. Async
-      // factories (pi-anthropic-messages adapter, etc.) register hooks
+      // factories register hooks
       // only after their internal awaits resolve.
       const ext = await buildExtensionFromFactory(factory, runtime);
       extensions.push(ext);

@@ -4,7 +4,6 @@ Files in this area. Purposes left for the agent to author.
 
 | `abort-utils.ts` | Expose `signalRejection` and `raceWithAbort`; reject pending work with `FlowCancelledError` when `AbortSignal` fires. |
 | `agent-parser.ts` | Parse agent Markdown via `parseAgentFile`/`parseAgentString`; map YAML frontmatter, access rules, outputs, and prompt body into `AgentConfig`. |
-| `anthropic-messages-adapter.ts` | Export `anthropicMessagesAgentFactory`; resolve optional `@blackbelt-technology/pi-anthropic-messages` bridge and apply transforms to spawned sessions. |
 | `discovery.ts` | Discover bundled, project, and extra agent/flow directories via `discoverAll`; parse `.md` agents and `flow.yaml`; return configs plus warnings. |
 | `edit-flow-config.ts` | Resolve and persist `flows.editFlow` in `.pi/settings.json`; expose `readEditFlowFlag`, `isEditFlowEnabled`, `setEditFlowFlag`, `parseEditModeArg`. |
 | `edit-flow-reconcile.ts` | Build `makeEditFlowToolReconciler`; add or remove `flow_agents` and `flow_write` from active tools only when edit-mode changes. |

@@ -18,7 +18,6 @@ import {
   findSkillDir,
 } from "./tools/skill-read.js";
 import { registerFlowAgentsTool } from "./tools/flow-agents.js";
-import { anthropicMessagesAgentFactory } from "./anthropic-messages-adapter.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { isEditFlowEnabled, setEditFlowFlag, parseEditModeArg } from "./edit-flow-config.js";
 import { syncEditFlowSkill } from "./edit-flow-skill.js";
@@ -65,14 +64,9 @@ let flows = new Map<string, FlowConfig>();
 let packageRoot = "";
 const extraAgentsDirs: string[] = [];
 const extraFlowsDirs: string[] = [];
-const extraAgentExtensions: any[] = [
-  // Delegate anthropic-messages payload transforms to @pi/anthropic-messages
-  // (if installed). Propagates the main session's mcp__ prefixing +
-  // inbound-response translation to each spawned subagent. See
-  // anthropic-messages-adapter.ts for the direction-of-dependency rationale.
-  // No-op when the package is not installed.
-  anthropicMessagesAgentFactory,
-];
+// Provider-specific prompt/wire handling (e.g. the dashboard's system-prompt
+// section rewrite) arrives here via flow:register-agent-extension.
+const extraAgentExtensions: any[] = [];
 const registeredExtensionTools: any[] = [];
 
 export function getDiscoveredAgents(): Map<string, AgentConfig> {
@@ -342,10 +336,9 @@ export function activate(pi: ExtensionAPI) {
   const handleRegisterAgentExtension = (data: unknown) => {
     const entry = data as { factory?: any; path?: string };
     if (entry.factory) {
-      // Dedupe by reference: producers (e.g. the dashboard
-      // flows-anthropic-bridge plugin) re-announce the SAME stable factory on
+      // Dedupe by reference: producers (e.g. the dashboard) re-announce the SAME stable factory on
       // every session_start so it survives this array being re-seeded. Only
-      // push the first time to avoid registering the bridge N times per spawn.
+      // push the first time to avoid registering it N times per spawn.
       if (!extraAgentExtensions.includes(entry.factory)) {
         extraAgentExtensions.push(entry.factory);
       }

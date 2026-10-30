@@ -5,6 +5,12 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **pi-flows no longer loads `pi-anthropic-messages` into flow agents.** The `anthropic-messages-adapter` is gone, and pi-flows does no Anthropic-specific prompt or wire handling. Hosts that need it, such as the pi-agent-dashboard's system-prompt section rewrite for Claude subscriptions, register an agent extension through `flow:register-agent-extension`.
+
 ## [v0.8.0] - 2026-10-08
 
 ### Changed
