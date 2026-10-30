@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Edit-mode no longer writes into the project working tree** (`edit-mode` capability). Session start used to create or rewrite `<repo>/.pi/skills/manage-flows/SKILL.md` in every repo, which left `git status` dirty. Now:
+  - Session start writes no file under the project.
+  - The `manage-flows` skill ships in the package (`pi.skills`) and is always reachable via `/skill:manage-flows`.
+  - Its visibility to the model is computed per turn, in memory, from the effective `flows.editFlow` value (project overrides global).
+  - A project or global setting change flips both the `flow_agents`/`flow_write` tools and the skill's visibility on the next turn.
+  - `/flows:edit-mode` and `flow:set-edit-mode` still write `flows.editFlow` to the project `.pi/settings.json`. They skip the write when the value is already set and no longer reload the session; both apply from the next turn.
+
+  **Existing repos are left untouched.** If you have a leftover `.pi/skills/manage-flows/` directory, you can delete it: pi warns about the duplicate skill name, and its frontmatter is ignored for visibility. A leftover project `flows.editFlow: false` overrides the global value, so delete that key if you want the repo to follow the global setting. OpenSpec: stop-edit-mode-project-writes.
+
 ### Removed
 
 - **pi-flows no longer loads `pi-anthropic-messages` into flow agents.** The `anthropic-messages-adapter` is gone, and pi-flows does no Anthropic-specific prompt or wire handling. Hosts that need it, such as the pi-agent-dashboard's system-prompt section rewrite for Claude subscriptions, register an agent extension through `flow:register-agent-extension`.

@@ -6,8 +6,7 @@ Files in this area. Purposes left for the agent to author.
 | `agent-parser.ts` | Parse agent Markdown via `parseAgentFile`/`parseAgentString`; map YAML frontmatter, access rules, outputs, and prompt body into `AgentConfig`. |
 | `discovery.ts` | Discover bundled, project, and extra agent/flow directories via `discoverAll`; parse `.md` agents and `flow.yaml`; return configs plus warnings. |
 | `edit-flow-config.ts` | Resolve and persist `flows.editFlow` in `.pi/settings.json`; expose `readEditFlowFlag`, `isEditFlowEnabled`, `setEditFlowFlag`, `parseEditModeArg`. |
-| `edit-flow-reconcile.ts` | Build `makeEditFlowToolReconciler`; add or remove `flow_agents` and `flow_write` from active tools only when edit-mode changes. |
-| `edit-flow-skill.ts` | Materialize project `.pi/skills/manage-flows/SKILL.md`; sync `disable-model-invocation` through `syncEditFlowSkill` without writing package templates. |
+| `edit-flow-reconcile.ts` | `makeEditFlowToolReconciler`: change-gated `flow_agents`/`flow_write` activation; `applyManageFlowsVisibility`: per-turn, in-memory `manage-flows` prompt-visibility. |
 | `execute-code-step.ts` | Execute `CodeStep`/`CodeDecisionStep` handlers via `executeCodeStep`; resolve typed inputs, timeout/abort work, validate outputs, classify failures. |
 | `execution.ts` | Plan and spawn isolated agent sessions via `spawnAgent`; resolve models, context, skills, guards, finish latch, tools, templates, typed outputs, retries. |
 | `failure.ts` | Classify agent and thrown failures with `classifyAgentOutcome`/`classifyThrownError`; apply `on_error` routing through `resolveRouteOutcome`. |

@@ -97,3 +97,49 @@ describe("makeEditFlowToolReconciler — change-gated tool reconcile (§1)", () 
     expect(tools.active.filter((t) => t === "flow_write")).toHaveLength(1);
   });
 });
+
+// ── manage-flows skill prompt-visibility (stop-edit-mode-project-writes §3) ──
+
+import { applyManageFlowsVisibility } from "../extensions/flow-engine/edit-flow-reconcile.js";
+
+const sk = (name: string, disableModelInvocation: boolean, filePath = `/pkg/skills/${name}/SKILL.md`) => ({
+  name,
+  description: "d",
+  filePath,
+  baseDir: filePath.replace(/\/SKILL\.md$/, ""),
+  sourceInfo: {},
+  disableModelInvocation,
+});
+
+describe("applyManageFlowsVisibility — per-turn skill visibility (§3)", () => {
+  it("enabled → manage-flows is model-visible", () => {
+    const skills = [sk("manage-flows", true)];
+    applyManageFlowsVisibility(skills, true);
+    expect(skills[0].disableModelInvocation).toBe(false);
+  });
+
+  it("disabled → manage-flows is hidden from the model", () => {
+    const skills = [sk("manage-flows", false)];
+    applyManageFlowsVisibility(skills, false);
+    expect(skills[0].disableModelInvocation).toBe(true);
+  });
+
+  it("a leftover project copy is flipped either way, matched by name not path", () => {
+    const leftover = sk("manage-flows", true, "/repo/.pi/skills/manage-flows/SKILL.md");
+    applyManageFlowsVisibility([leftover], true);
+    expect(leftover.disableModelInvocation).toBe(false);
+    applyManageFlowsVisibility([leftover], false);
+    expect(leftover.disableModelInvocation).toBe(true);
+  });
+
+  it("other skills are untouched", () => {
+    const skills = [sk("other", false), sk("hidden", true), sk("manage-flows", false)];
+    applyManageFlowsVisibility(skills, false);
+    expect(skills[0].disableModelInvocation).toBe(false);
+    expect(skills[1].disableModelInvocation).toBe(true);
+  });
+
+  it("tolerates a missing skills list", () => {
+    expect(() => applyManageFlowsVisibility(undefined, true)).not.toThrow();
+  });
+});

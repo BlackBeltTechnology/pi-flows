@@ -61,11 +61,14 @@ export function isEditFlowEnabled(
 /**
  * Persist `flows.editFlow` to the PROJECT `.pi/settings.json` (never the global
  * file). Read-merge-write: all other keys are preserved; the file (and `.pi/`)
- * is created when absent. The edit-mode toggle owns this write.
+ * is created when absent. The edit-mode toggle owns this write. No-op (file
+ * untouched) when `flows.editFlow` already equals `enabled`.
  */
 export function setEditFlowFlag(projectRoot: string, enabled: boolean): void {
   const path = join(projectRoot, CONFIG_DIR, "settings.json");
   const existing = readSettingsFile(path);
+  const existingFlows = (existing as { flows?: Record<string, unknown> } | undefined)?.flows;
+  if (existingFlows && typeof existingFlows === "object" && existingFlows.editFlow === enabled) return;
   const settings: Record<string, unknown> =
     existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
   const flows =

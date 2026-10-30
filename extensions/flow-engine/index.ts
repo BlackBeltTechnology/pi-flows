@@ -20,8 +20,7 @@ import {
 import { registerFlowAgentsTool } from "./tools/flow-agents.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
 import { isEditFlowEnabled, setEditFlowFlag, parseEditModeArg } from "./edit-flow-config.js";
-import { syncEditFlowSkill } from "./edit-flow-skill.js";
-import { makeEditFlowToolReconciler } from "./edit-flow-reconcile.js";
+import { makeEditFlowToolReconciler, applyManageFlowsVisibility } from "./edit-flow-reconcile.js";
 
 import { FlowManager } from "./flow-manager.js";
 import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
@@ -382,48 +381,35 @@ export function activate(pi: ExtensionAPI) {
     editFlowTools: EDIT_FLOW_TOOLS,
   });
 
-  // Shared edit-mode toggle: persist the setting, sync the project-local skill's
-  // model-visibility, reconcile the authoring tools, and (when a reload-capable
-  // context is available — i.e. the command path) reload so the skill change is
-  // live this session. The event path has no `reload()` (base ExtensionContext),
-  // so its skill change applies next session; tools update immediately either way.
-  const applyEditMode = async (
+  // Shared edit-mode toggle (explicit user action): persist the setting to the
+  // project and reconcile the authoring tools. The packaged manage-flows skill's
+  // prompt-visibility is computed per turn in before_agent_start, so no skill
+  // file is written and no reload is needed — both surfaces apply from the next turn.
+  const applyEditMode = (
     enabled: boolean,
-    opts: { reload?: () => Promise<void>; notify?: (msg: string, level?: string) => void } = {},
-  ): Promise<void> => {
+    opts: { notify?: (msg: string, level?: string) => void } = {},
+  ): void => {
     setEditFlowFlag(projectRoot, enabled);
-    try { syncEditFlowSkill(projectRoot, pkgRoot, enabled); } catch { /* non-fatal */ }
     reconcileEditFlowTools(enabled);
-    if (opts.reload) {
-      await opts.reload();
-      opts.notify?.(`Edit-mode ${enabled ? "ON" : "OFF"}.`, "info");
-    } else {
-      opts.notify?.(
-        `Edit-mode ${enabled ? "ON" : "OFF"} — tools updated; skill visibility applies next session.`,
-        "info",
-      );
-    }
+    opts.notify?.(`Edit-mode ${enabled ? "ON" : "OFF"} — applies from the next turn.`, "info");
   };
 
-  // Reconcile edit-flow tools AND materialize/sync the project-local skill at
-  // each session start (idempotent) so the skill is discoverable by default with
-  // frontmatter reflecting the current setting.
+  // Seed the authoring tools at session start. Never writes under projectRoot.
   pi.on("session_start", (_ev: any, _ctx: any) => {
-    const enabled = isEditFlowEnabled(projectRoot);
-    reconcileEditFlowTools(enabled);
-    try { syncEditFlowSkill(projectRoot, pkgRoot, enabled); } catch { /* non-fatal */ }
-  });
-
-  // Re-read `flows.editFlow` at each turn start so an out-of-band settings
-  // change (e.g. a direct edit of .pi/settings.json while the session runs) is
-  // picked up on the next agent turn without a restart. Change-gated, so
-  // unchanged turns are no-ops. Tools only — skill prompt-visibility stays
-  // coupled to session_start/reload (turn/event contexts have no reload()).
-  pi.on("before_agent_start", (_ev: any, _ctx: any) => {
     reconcileEditFlowTools(isEditFlowEnabled(projectRoot));
   });
 
-  // `/flows:edit-mode <on|off>` — command path has ctx.reload() for live effect.
+  // Re-read `flows.editFlow` (project overrides global) at each turn start so an
+  // out-of-band settings change is picked up on the next agent turn without a
+  // restart. Tools are change-gated; the manage-flows skill's prompt-visibility
+  // is applied in memory to this run's systemPromptOptions (rebuilt per run).
+  pi.on("before_agent_start", (ev: any, _ctx: any) => {
+    const enabled = isEditFlowEnabled(projectRoot);
+    reconcileEditFlowTools(enabled);
+    applyManageFlowsVisibility(ev?.systemPromptOptions?.skills, enabled);
+  });
+
+  // `/flows:edit-mode <on|off>` — explicit project toggle.
   pi.registerCommand("flows:edit-mode", {
     description: "Toggle flow/agent authoring (edit-mode): tools + skill visibility, applied live",
     getArgumentCompletions: (prefix: string) => {
@@ -436,18 +422,14 @@ export function activate(pi: ExtensionAPI) {
         ctx.ui?.notify?.("Usage: /flows:edit-mode <on|off>", "warning");
         return;
       }
-      await applyEditMode(enabled, {
-        reload: ctx.reload ? () => ctx.reload() : undefined,
-        notify: (m, l) => ctx.ui?.notify?.(m, l),
-      });
+      applyEditMode(enabled, { notify: (m, l) => ctx.ui?.notify?.(m, l) });
     },
   });
 
-  // Inbound `flow:set-edit-mode` event (dashboard). Base ExtensionContext has no
-  // reload(); tools update immediately, skill visibility applies next session.
+  // Inbound `flow:set-edit-mode` event (dashboard) — same handler as the command.
   pi.events.on("flow:set-edit-mode", (data: any) => {
     if (typeof data?.enabled !== "boolean") return;
-    void applyEditMode(data.enabled);
+    applyEditMode(data.enabled);
   });
 
   // ── Register flow commands ──

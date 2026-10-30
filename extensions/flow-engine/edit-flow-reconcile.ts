@@ -44,3 +44,23 @@ export function makeEditFlowToolReconciler(
     return true;
   };
 }
+
+/** Name of the authoring skill whose prompt-visibility follows edit-mode. */
+export const MANAGE_FLOWS_SKILL = "manage-flows";
+
+/**
+ * Per-turn, in-memory prompt-visibility for the `manage-flows` skill.
+ *
+ * Mutates `before_agent_start`'s `systemPromptOptions.skills` so every skill
+ * named `manage-flows` (the packaged copy or a leftover project copy) is
+ * model-visible iff edit-mode is enabled. Other skills are untouched. The skill
+ * stays reachable via `/skill:manage-flows` either way. Never writes a file.
+ */
+export function applyManageFlowsVisibility(
+  skills: Array<{ name: string; disableModelInvocation: boolean }> | undefined,
+  enabled: boolean,
+): void {
+  for (const s of skills ?? []) {
+    if (s.name === MANAGE_FLOWS_SKILL) s.disableModelInvocation = !enabled;
+  }
+}
