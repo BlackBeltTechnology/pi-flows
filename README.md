@@ -98,7 +98,7 @@ Flows also register as slash commands based on directory path: `.pi/flows/flows/
 - **Flows** — YAML files defining a DAG of steps connected via `blockedBy`. The engine schedules independent steps in parallel, up to `max_concurrent`.
 - **Template variables** — `${{task}}`, `${{result.step-id.summary}}`, `${{input.name}}` wire data between steps at dispatch time.
 - **Models** — `model:` is optional: a literal model, an optional `@name` alias (resolved by an installed `model:resolve` resolver such as pi-agent-dashboard), an ordered list, or nothing. Unresolvable aliases fall back to the session model.
-- **Settings** (`.pi/settings.json`, project overrides global) — `flows.modelFallback`: `"session"` (default) or `"error"`; `flows.decisionAgent`: agent used for decision steps without their own `agent:` (flow-level `decision_agent:` wins over it).
+- **Settings** (`.pi/settings.json`, project overrides global) — `flows.modelFallback`: `"session"` (default) or `"error"`; `flows.decisionAgent`: agent used for decision steps without their own `agent:` (flow-level `decision_agent:` wins over it); `flows.decider`: default decider chain, e.g. `["system-one", "agent"]` (see `docs/flows.md`).
 - **Edit flow** — Create and edit flows/agents conversationally in the main session using the `flow_agents` and `flow_write` tools. These tools are off by default; enable them per project (`/flows:edit-mode on`, or `flows.editFlow: true` in `.pi/settings.json`) or globally (`~/.pi/agent/settings.json`). The setting is re-read every turn and also controls whether the model sees the packaged `manage-flows` skill. pi-flows never writes into the repo unless you toggle edit mode explicitly. Load `/skill:manage-flows` for the format reference.
 
 ## Writing Agents

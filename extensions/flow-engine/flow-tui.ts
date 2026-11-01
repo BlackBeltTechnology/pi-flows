@@ -9,6 +9,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
   AgentConfig,
   AgentResult,
+  DecisionEvent,
   FlowConfig,
   FlowResult,
   NodeKind,
@@ -698,13 +699,19 @@ export class EventEmitObserver implements FlowObserver {
     agentName: string,
     chosenBranch: string,
     targetStepId: string,
+    detail?: { confidence?: number },
   ): void {
     this.emit("flow:auto-decision", {
       forkId,
       agentName,
       chosenBranch,
       targetStepId,
+      ...(detail?.confidence !== undefined ? { confidence: detail.confidence } : {}),
     });
+  }
+
+  onDecision(event: DecisionEvent): void {
+    this.emit("flow:decision", event);
   }
 
   onLoopIteration(

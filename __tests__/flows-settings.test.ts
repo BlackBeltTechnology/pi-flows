@@ -47,3 +47,23 @@ describe("readFlowsSettings", () => {
     expect(s.warnings.join(" ")).toContain("bogus");
   });
 });
+
+describe("readFlowsSettings: decider (change: classifier-decisions)", () => {
+  it("undefined by default", () => {
+    expect(readFlowsSettings(proj, { home }).decider).toBeUndefined();
+  });
+  it("list form; project overrides global", () => {
+    put(home, [".pi", "agent"], { decider: ["system-one", "agent"] });
+    expect(readFlowsSettings(proj, { home }).decider).toEqual({ entries: ["system-one", "agent"] });
+    put(proj, [".pi"], { decider: { chain: ["agent"], trust: "confidence", min_confidence: 0.9 } });
+    expect(readFlowsSettings(proj, { home }).decider).toEqual({ entries: ["agent"], trust: "confidence", minConfidence: 0.9 });
+  });
+  it("invalid value warns and is ignored", () => {
+    put(home, [".pi", "agent"], { decider: ["magic"] });
+    const s = readFlowsSettings(proj, { home });
+    expect(s.decider).toBeUndefined();
+    expect(s.warnings.join()).toMatch(/flows\.decider/);
+    expect(s.warnings.join()).toMatch(/magic/);
+  });
+});
+

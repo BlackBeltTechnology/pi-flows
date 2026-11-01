@@ -10,12 +10,16 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ENTRY_FORMS, TRUST_MODES, isValidEntry, parseDeciderSpec } from "./decider/chain.js";
+import type { DeciderSpec } from "./types.js";
 
 export type ModelFallbackMode = "session" | "error";
 
 export interface FlowsSettings {
   modelFallback: ModelFallbackMode;
   decisionAgent: string | undefined;
+  /** `flows.decider` default chain for decision steps (undefined → [agent]). */
+  decider: DeciderSpec | undefined;
   warnings: string[];
 }
 
@@ -45,5 +49,20 @@ export function readFlowsSettings(projectRoot: string, opts: { home?: string } =
   const rawAgent = project.decisionAgent !== undefined ? project.decisionAgent : global.decisionAgent;
   const decisionAgent = typeof rawAgent === "string" && rawAgent.trim() ? rawAgent.trim() : undefined;
 
-  return { modelFallback, decisionAgent, warnings };
+  let decider: DeciderSpec | undefined;
+  const rawDecider = "decider" in project ? project.decider : global.decider;
+  if (rawDecider !== undefined) {
+    try {
+      const spec = parseDeciderSpec(rawDecider);
+      const bad = (spec.entries ?? []).filter((e) => !isValidEntry(e));
+      if (bad.length) throw new Error(`unknown entry "${bad[0]}" (use ${ENTRY_FORMS})`);
+      if (spec.trust !== undefined && !TRUST_MODES.includes(spec.trust)) throw new Error(`invalid trust "${spec.trust}"`);
+      if (spec.minConfidence !== undefined && !(spec.minConfidence >= 0 && spec.minConfidence <= 1)) throw new Error("min_confidence must be between 0 and 1");
+      decider = spec;
+    } catch (err) {
+      warnings.push(`Invalid flows.decider: ${err instanceof Error ? err.message : String(err)}; using the default [agent].`);
+    }
+  }
+
+  return { modelFallback, decisionAgent, decider, warnings };
 }

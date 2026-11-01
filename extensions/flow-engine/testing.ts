@@ -405,6 +405,16 @@ export interface RunFauxOptions {
   withoutParentModel?: boolean;
   /** Observe agent starts (incl. `modelFallback` extra). */
   onAgentStarted?: FlowRunOptions["onAgentStarted"];
+  /** `flows.decider` for the run. */
+  decider?: FlowRunOptions["decider"];
+  /** Replace decider entries (`system-one`, `provider/model`) with fakes. */
+  entryOverrides?: FlowRunOptions["entryOverrides"];
+  /** Observe `flow:decision` payloads. */
+  onDecision?: FlowRunOptions["onDecision"];
+  /** Observe agent completion. */
+  onAgentComplete?: FlowRunOptions["onAgentComplete"];
+  /** Answer interactive prompts (default: first option). */
+  askUser?: FlowRunOptions["askUser"];
 }
 
 /**
@@ -444,9 +454,13 @@ export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
     modelRuntime: runtime,
     pi,
     getAgent: (name: string) => agentMap.get(name),
-    askUser: async () => ({ answer: "" }),
+    askUser: options.askUser ?? (async () => ({ answer: "" })),
     signal: options.signal,
     isAutonomous: options.isAutonomous,
+    decider: options.decider,
+    entryOverrides: options.entryOverrides,
+    onDecision: options.onDecision,
+    onAgentComplete: options.onAgentComplete,
     modelFallback: options.modelFallback,
     decisionAgent: options.decisionAgent,
     onAgentStarted: options.onAgentStarted,
@@ -511,12 +525,16 @@ export async function runFauxFlow(options: RunFauxFlowOptions): Promise<FlowResu
     modelRuntime: runtime,
     pi,
     getAgent: (name: string) => agentMap.get(name),
-    askUser: async (_q, _t, opts) => {
+    decider: options.decider,
+    entryOverrides: options.entryOverrides,
+    onDecision: options.onDecision,
+    isAutonomous: options.isAutonomous,
+    askUser: options.askUser ?? (async (_q, _t, opts) => {
       // Fork answer resolution: the engine passes the fork's option list; we
       // return the configured answer (or the first option as a safe default).
       const answer = options.forkAnswers && Object.values(options.forkAnswers)[0];
       return { answer: answer ?? (opts?.[0] ?? "") };
-    },
+    }),
     onAgentStarted: options.onAgentStarted,
     onAgentComplete: options.onAgentComplete,
     signal: options.signal,

@@ -44,7 +44,7 @@ export function registerFlowWriteTool(
         }),
       ),
     }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+    execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       const { name, content } = params as { namespace?: string; name: string; content: string };
       const namespace = (params as { namespace?: string }).namespace?.trim() || "custom";
 
@@ -63,7 +63,15 @@ export function registerFlowWriteTool(
       }
 
       // Run validation first
-      const validation = validateFlowContent(content, getDiscoveredAgents);
+      // Classifier-model check needs the session registry; skipped without one.
+      const registry: any = (ctx as any)?.modelRegistry;
+      const isKnownClassifier = typeof registry?.getModelOfType === "function"
+        ? (ref: string) => {
+            const i = ref.indexOf("/");
+            try { return !!registry.getModelOfType("classifier", ref.slice(0, i), ref.slice(i + 1)); } catch { return true; }
+          }
+        : undefined;
+      const validation = validateFlowContent(content, getDiscoveredAgents, isKnownClassifier);
       if (!validation.valid) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ written: false, diagnostics: validation.diagnostics }, null, 2) }],

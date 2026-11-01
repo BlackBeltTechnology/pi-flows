@@ -177,6 +177,7 @@ export function activate(pi: ExtensionAPI) {
   // session_start. Flow agents share this runtime (never the parent's model) so
   // runtime-registered providers work; the registry backs model resolution.
   let sessionModelRegistry: any = undefined;
+  let sessionCtx: any = undefined; // latest ExtensionContext (project-trust decision)
   let sessionModelRuntime: any = undefined;
   // The dispatching session's current model — snapshotted into each flow run as
   // the fallback for agents whose `model:` is omitted or unresolvable.
@@ -244,6 +245,9 @@ export function activate(pi: ExtensionAPI) {
         for (const w of s.warnings) pi.events.emit("flow:notify", { message: w, level: "warning" });
         return s;
       },
+      isProjectTrusted: () => {
+        try { return sessionCtx?.isProjectTrusted?.() === true; } catch { return false; }
+      },
       getSessionManager: () => sessionManager,
       getExtraAgentExtensions: () => [...extraAgentExtensions],
       getExtensionTools: () => [...registeredExtensionTools],
@@ -270,6 +274,7 @@ export function activate(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event: any, ctx: any) => {
+    sessionCtx = ctx;
     if (ctx.model) sessionModel = ctx.model;
     if (ctx.modelRegistry) {
       sessionModelRegistry = ctx.modelRegistry;

@@ -20,7 +20,9 @@ import type {
   CodeDecisionStep,
   ForkStep,
   AgentDecisionStep,
+  DeciderSpec,
 } from "../types.js";
+import { ENTRY_FORMS, TRUST_MODES, isClassifierRefEntry, isValidEntry } from "../decider/chain.js";
 export type { Diagnostic };
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
 
@@ -162,6 +164,74 @@ function stepLine(idx: LineIndex, stepId: string): number {
   return idx.steps.get(stepId)?.headerLine ?? 1;
 }
 
+// ---- Decider validation (change: classifier-decisions) ---------------------
+
+function checkDeciderSpec(
+  spec: DeciderSpec,
+  line: number,
+  where: string,
+  diagnostics: Diagnostic[],
+  isKnownClassifier?: (ref: string) => boolean,
+): void {
+  for (const e of spec.entries ?? []) {
+    if (!isValidEntry(e)) {
+      diagnostics.push({
+        line, severity: "error",
+        message: `${where}: unknown decider entry "${e}"`,
+        suggestion: `Use ${ENTRY_FORMS}`,
+      });
+    } else if (isClassifierRefEntry(e) && isKnownClassifier && !isKnownClassifier(e)) {
+      diagnostics.push({
+        line, severity: "error",
+        message: `${where}: decider entry "${e}" is not a classifier model`,
+        suggestion: "Use a pi-ai classifier model (e.g. typesafe/jev-latest), not a chat model",
+      });
+    }
+  }
+  if (spec.trust !== undefined && !TRUST_MODES.includes(spec.trust)) {
+    diagnostics.push({
+      line, severity: "error",
+      message: `${where}: invalid trust "${spec.trust}"`,
+      suggestion: `Use one of: ${TRUST_MODES.join(", ")}`,
+    });
+  }
+  if (spec.minConfidence !== undefined && !(spec.minConfidence >= 0 && spec.minConfidence <= 1)) {
+    diagnostics.push({
+      line, severity: "error",
+      message: `${where}: min_confidence must be a number between 0 and 1`,
+    });
+  }
+}
+
+function validateDeciders(
+  flow: FlowConfig,
+  idx: LineIndex,
+  diagnostics: Diagnostic[],
+  isKnownClassifier?: (ref: string) => boolean,
+): void {
+  if (flow.decider) checkDeciderSpec(flow.decider, 1, "flow decider", diagnostics, isKnownClassifier);
+  for (const step of flow.steps) {
+    if (step.stepType !== "agent-decision" && step.stepType !== "fork") continue;
+    const s = step as AgentDecisionStep | ForkStep;
+    const line = stepPropLine(idx, s.id, "decider") || stepLine(idx, s.id);
+    if (s.decider) checkDeciderSpec(s.decider, line, `${step.stepType} "${s.id}"`, diagnostics, isKnownClassifier);
+    // Classifier chains: agent-decision branches should say what they mean.
+    const entries = s.decider?.entries ?? flow.decider?.entries ?? [];
+    if (step.stepType === "agent-decision" && entries.some((e) => e !== "agent")) {
+      for (const label of Object.keys(s.branches ?? {})) {
+        if (!s.branchMeans?.[label]) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, "branches") || stepLine(idx, s.id),
+            severity: "warning",
+            message: `agent-decision "${s.id}": branch "${label}" has no "means" description for the classifier`,
+            suggestion: `Write it as ${label}: { to: <step>, means: "<criterion>" }`,
+          });
+        }
+      }
+    }
+  }
+}
+
 // ---- Public validation function -------------------------------------------
 
 /**
@@ -171,6 +241,8 @@ function stepLine(idx: LineIndex, stepId: string): number {
 export function validateFlowContent(
   content: string,
   getDiscoveredAgents?: () => Map<string, AgentConfig>,
+  /** Optional catalog check: is `provider/model` a known pi-ai classifier model? */
+  isKnownClassifier?: (ref: string) => boolean,
 ): { valid: boolean; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   const lines = content.split("\n");
@@ -296,12 +368,12 @@ export function validateFlowContent(
             });
           }
           // allowCustom requires agent: field for custom answer routing
-          if (s.allowCustom && !s.agent) {
+          if (s.allowCustom && !s.agent && !s.decider?.entries && !flow.decider?.entries) {
             diagnostics.push({
               line: stepPropLine(idx, s.id, "allowCustom"),
               severity: "error",
               message: `Fork "${s.id}" has allowCustom: true but no agent: field. An agent is required to route custom freetext answers to branches.`,
-              suggestion: "Add agent: <agent-name> to this fork step",
+              suggestion: "Add agent: <agent-name> (or a decider: chain) to this fork step",
             });
           }
           break;
@@ -551,6 +623,9 @@ export function validateFlowContent(
       }
     }
   }
+
+  // 4e2. Decider chains (change: classifier-decisions).
+  validateDeciders(flow, idx, diagnostics, isKnownClassifier);
 
   // 4f. Branch target validation.
   // Fork: dangling-target only (human-driven, no loop/min-branch rules).

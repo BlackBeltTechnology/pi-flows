@@ -136,6 +136,30 @@ export interface FlowInputDecl {
   required?: boolean;
 }
 
+// ---- Decider chain (change: classifier-decisions) -------------------------
+
+export type TrustMode = "auto" | "calibrated" | "confidence";
+
+/** Parsed `decider:` — entries are `system-one`, `provider/model` or `agent`. */
+export interface DeciderSpec {
+  entries?: string[];
+  trust?: TrustMode;
+  minConfidence?: number;
+}
+
+/** Emitted once per decision (change: classifier-decisions). Never carries state or task text. */
+export interface DecisionEvent {
+  flowName: string;
+  stepId: string;
+  nodeKind: NodeKind;
+  consumerId: string;
+  chain: string[];
+  attempts: import("./decider/types.js").DecisionAttempt[];
+  /** The entry that routed; absent when the chain was exhausted. */
+  routedBy?: string;
+  label?: string;
+}
+
 export interface FlowConfig {
   name: string;
   description: string;
@@ -144,6 +168,7 @@ export interface FlowConfig {
   task_prompt?: string; // Custom prompt text (default: "Describe what you want <name> to do:")
   inputs?: Record<string, FlowInputDecl>; // Optional typed flow-input schema
   decision_agent?: string; // Agent for decision steps without their own agent:
+  decider?: DeciderSpec; // Default decider chain for decision steps without their own
   steps: FlowStep[];
   source: string; // File path where this flow was discovered
 }
@@ -191,6 +216,9 @@ export interface ForkStep {
   multiSelect?: boolean;
   agent?: string;         // Agent to use when auto-deciding (autonomous mode)
   task?: string;          // Context/task for the agent when auto-deciding
+  decider?: DeciderSpec;  // Decider chain for autonomous / auto-decide / "Other"
+  state?: Record<string, string>; // Template-expanded classifier state (default { task })
+  branchMeans?: Record<string, string>; // label -> criterion, from the `{ to, means }` branch form
 }
 
 export interface AgentDecisionStep {
@@ -200,6 +228,9 @@ export interface AgentDecisionStep {
   task: string; // Task for the decision agent
   branches: Record<string, string>; // branch label -> step ID mapping
   max_iterations?: number; // Required only when a branch forms a backward (loop) edge
+  decider?: DeciderSpec; // Decider chain (default: flow decider → flows.decider → [agent])
+  state?: Record<string, string>; // Template-expanded classifier state (default { task })
+  branchMeans?: Record<string, string>; // label -> criterion, from the `{ to, means }` branch form
 }
 
 export interface CodeStep {
@@ -228,6 +259,7 @@ export interface CodeDecisionStep {
   inputs?: Record<string, string>; // Named inputs wired from template expressions
   outputs?: Array<{ name: string }>; // Declared DATA output names (strings only; never `branch`)
   branches: Record<string, string>; // branch label -> step ID mapping
+  branchMeans?: Record<string, string>; // label -> description, from the `{ to, means }` branch form
   blockedBy?: string[]; // Step IDs that must complete before this step runs
   max_iterations?: number; // Required only when a branch forms a backward (loop) edge
   timeout?: number; // Optional soft timeout in milliseconds

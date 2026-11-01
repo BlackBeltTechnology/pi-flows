@@ -14,8 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **System-wide decision agent**: step `agent:` → flow `decision_agent:` → setting `flows.decisionAgent` → built-in `flow-decision`. `agent-decision` steps may omit `agent:`.
 - `flow_agents` write emits `model:resolve` per `@`-ref and reports resolver errors as advisory warnings.
 
+- **Classifier decisions** (`classifier-decisions`). Decision points (autonomous `fork`, fork "Other", `agent-decision`) take an ordered `decider:` chain of `system-one`, a pi-ai classifier ref (`provider/model`) and `agent`; set per step, per flow, or via `flows.decider`. Default `[agent]` is unchanged. Trust policy (`trust: auto | calibrated | confidence`, `min_confidence`), untrusted answers are recorded as shadow. Branches may be written `label: { to, means }`; decision steps accept a `state:` map. System One decisions register as consumer `pi-flows:<flow>:<step>`, with an in-process `llm` caller. System One `allowOffMachine: false` also blocks hosted pi-ai classifiers. New `flow:decision` event (persisted as `flow_decision`).
+- **New dependency:** `@blackbelt-technology/pi-system-one ^0.11.0` (no transitive dependencies; imported lazily).
+
 ### Changed
 
+- **Behaviour change:** decision steps no longer fall back silently to the first branch. An invalid or missing label is a failed attempt; when every decider entry fails an `agent-decision` or autonomous `fork` fails the step (hard) with an error listing each attempt, and an interactive fork asks the user again.
 - The resolved `Model` object is passed straight to the agent session (no second registry lookup).
 - Agent validation no longer knows role names; it only checks ref syntax and `:thinking` levels. `AgentConfig.model` is optional; new `AgentConfig.modelRefs`.
 - Built-in agents (`flow-decision`, `project-context-reader`) now work without pi-agent-dashboard via the session-model fallback.

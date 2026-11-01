@@ -288,7 +288,7 @@ Listen to these events to observe a running flow.
 
 Every core lifecycle payload below carries a `runId: string` — an engine-minted identifier that is stable for the duration of one run and distinct across runs. It is minted once by `FlowManager.start()` and stamped onto every live payload, so it is present in **headless/RPC sessions too**, not only under the TUI.
 
-The core set carrying `runId`: `flow:flow-started`, `flow:agent-started`, `flow:agent-complete`, `flow:assistant-text`, `flow:thinking-text`, `flow:subagent-tool-call`, `flow:subagent-tool-result`, `flow:auto-decision`, `flow:loop-iteration`, `flow:agent-error`, `flow:complete`. On `flow:complete` the payload is a `FlowResult`, which carries it as `FlowResult.runId`.
+The core set carrying `runId`: `flow:flow-started`, `flow:agent-started`, `flow:agent-complete`, `flow:assistant-text`, `flow:thinking-text`, `flow:subagent-tool-call`, `flow:subagent-tool-result`, `flow:auto-decision`, `flow:decision`, `flow:loop-iteration`, `flow:agent-error`, `flow:complete`. On `flow:complete` the payload is a `FlowResult`, which carries it as `FlowResult.runId`.
 
 Use `runId` to correlate interleaved events when a host multiplexes several sessions, and to discard stale events from a previous run.
 
@@ -420,6 +420,32 @@ pi.events.on("flow:auto-decision", (data: {
 ```
 
 ---
+
+### `flow:decision`
+
+Emitted once per decision (autonomous `fork`, fork "Other", `agent-decision`), after the [decider chain](flows.md#decider-chain-classifier-decisions) ran. Persisted as `flow_decision`. `flow:auto-decision` is still emitted for forks (its `agentName` is the entry that decided; `confidence` is added for classifiers).
+
+```ts
+pi.events.on("flow:decision", (data: {
+  flowName: string;
+  stepId: string;
+  nodeKind: "fork" | "agent-decision";
+  consumerId: string;          // pi-flows:<flow>:<step>
+  chain: string[];             // resolved entries
+  attempts: Array<{
+    entry: string; outcome: "ok" | "untrusted" | "invalid-label" | "no-backend" | "off-machine"
+      | "credentials" | "timeout" | "error" | "aborted";
+    label?: string; confidence?: number; mode?: "shadow" | "enforce";
+    trusted?: boolean; agreed?: boolean;   // agreed: shadow answer vs the routed label
+    model?: string; latencyMs: number; reason?: string;
+  }>;
+  routedBy?: string;           // absent when the chain was exhausted
+  label?: string;
+  runId: string;
+}) => { /* ... */ });
+```
+
+The payload never contains the classifier state or the task text.
 
 ### `flow:loop-iteration`
 

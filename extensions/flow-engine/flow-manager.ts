@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import type { AgentConfig, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
+import type { AgentConfig, DeciderSpec, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
 import type { ParentModelSnapshot } from "./model-roles.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
@@ -25,7 +25,9 @@ export interface FlowManagerConfig {
   /** Session model snapshot for the fallback chain (undefined when none captured). */
   getParentModel?: () => ParentModelSnapshot | undefined;
   /** `flows.modelFallback` / `flows.decisionAgent`, read once at flow start. */
-  getFlowsSettings?: () => { modelFallback: "session" | "error"; decisionAgent?: string };
+  getFlowsSettings?: () => { modelFallback: "session" | "error"; decisionAgent?: string; decider?: DeciderSpec };
+  /** pi's project-trust decision (gates project-level System One config). */
+  isProjectTrusted?: () => boolean;
   getSessionManager: () => any;
   getExtraAgentExtensions: () => any[];
   getExtensionTools: () => any[];
@@ -127,13 +129,18 @@ export class FlowManager {
       parentModel,
       modelFallback: flowsSettings?.modelFallback,
       decisionAgent: flowsSettings?.decisionAgent,
+      decider: flowsSettings?.decider,
+      projectTrusted: config.isProjectTrusted?.() ?? false,
       mainSessionManager: config.getSessionManager(),
       extraAgentExtensions: config.getExtraAgentExtensions(),
       extraCustomTools: config.getExtensionTools(),
       signal: abortController.signal,
       isAutonomous: () => config.isAutonomous(),
-      onAutoDecision: (forkId, agentName, chosenBranch, targetStepId) => {
-        for (const obs of observers) obs.onAutoDecision?.(forkId, agentName, chosenBranch, targetStepId);
+      onAutoDecision: (forkId, agentName, chosenBranch, targetStepId, detail) => {
+        for (const obs of observers) obs.onAutoDecision?.(forkId, agentName, chosenBranch, targetStepId, detail);
+      },
+      onDecision: (event) => {
+        for (const obs of observers) obs.onDecision?.(event);
       },
       onNotify: (message: string) => {
         ioAdapter.notify?.(message);

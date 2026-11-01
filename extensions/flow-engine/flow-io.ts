@@ -5,7 +5,7 @@
 // lifecycle observation. Enables TUI, web, headless, and test adapters.
 // ---------------------------------------------------------------------------
 
-import type { AgentConfig, AgentResult, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
+import type { AgentConfig, AgentResult, DecisionEvent, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
 
 // ---- FlowIOAdapter --------------------------------------------------------
 
@@ -76,7 +76,9 @@ export interface FlowObserver {
   onAssistantText?(agentName: string, stepId: string, text: string): void;
   onThinkingText?(agentName: string, stepId: string, text: string): void;
   onLoopIteration?(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void;
-  onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void;
+  onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string, detail?: { confidence?: number }): void;
+  /** One call per decision with every decider attempt (change: classifier-decisions). */
+  onDecision?(event: DecisionEvent): void;
   // Step-level (message-level) agent failure, distinct from a tool result with
   // isError:true (which travels via onToolResult). Surfaces as a discrete
   // {kind:"error"} timeline entry.

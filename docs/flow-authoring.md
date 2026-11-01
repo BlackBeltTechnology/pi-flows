@@ -879,3 +879,7 @@ Rules:
 4. pi-flows built-ins
 
 **User flows.** Flows and agents in `<agentDir>/flows/` are available in every project and load without a trust prompt. Code handlers load from the flow's own directory, while `ctx.cwd`, the agents' working directory and run results stay in the project the flow started in. Keep run state under `ctx.cwd`, not next to the flow file, or projects will share it. `/flows` and `flow_agents` `list` label each item `project`, `user`, `package` or `built-in`. `flow_write` and `flow_agents` (`op: write`) accept `scope: "project" | "user"` (default `project`). `/flows:delete` removes a flow from the directory it was found in, names that path in its confirmation, and refuses package and built-in flows.
+
+## Decider chains
+
+Decision steps (`agent-decision`, `fork`) accept `decider:` (list or `{ chain, trust, min_confidence }`) and `state:`; branches accept `{ to, means }`. The flow may set a top-level `decider:`; the setting `flows.decider` is the system-wide default. Full reference: [flows.md](flows.md#decider-chain-classifier-decisions).

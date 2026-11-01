@@ -35,6 +35,7 @@ inputs:
 | `task_required` | | When `true`, prompts the user for a task if none was provided |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
 | `inputs` | | Optional typed input schema (see [Typed Flow Inputs](#typed-flow-inputs)) |
+| `decider` | | Default [decider chain](#decider-chain-classifier-decisions) for decision steps without their own |
 | `decision_agent` | | Agent that makes decisions for `fork` / `agent-decision` steps without their own `agent:` (see [Decision agent selection](#decision-agent-selection)) |
 
 When a flow completes, pi-flows appends one message `[flow] <name> <status>: <summary>` (status is `success`, `error`, or `aborted`) to the parent session. This persists the run for `/resume` and reports the outcome; pi-flows never shuts down or ends the session — that is the host/automation layer's responsibility.
@@ -297,6 +298,51 @@ steps:
     branches: { ready: publish, rework: draft }
     max_iterations: 3
 ```
+
+### Decider chain (classifier decisions)
+
+Every agent-made decision (autonomous `fork`, a fork's "Other" free text, `agent-decision`) is answered by an ordered **decider chain**. Entries:
+
+| Entry | Meaning |
+|---|---|
+| `system-one` | `predict()` from `@blackbelt-technology/pi-system-one` over the backends in `~/.pi/agent/system-one.json` (and the project's `.pi/system-one.json` when pi trusts the project). |
+| `provider/model` | A pi-ai classifier model, e.g. `typesafe/jev-latest` (`modelRegistry.classify`). |
+| `agent` | The decision agent (see above). |
+
+The chain is the step's `decider:`, else the flow's top-level `decider:`, else the setting `flows.decider`, else `[agent]` (today's behaviour). The first entry that returns a **trusted, valid** label routes; later entries are not tried.
+
+```yaml
+decider:
+  chain: [system-one, typesafe/jev-latest, agent]
+  trust: auto            # auto | calibrated | confidence   (default auto)
+  min_confidence: 0.75   # default 0.75
+steps:
+  - id: gate
+    type: agent-decision
+    task: "Review result: ${{result.review.summary}}"
+    state:                 # what the classifier sees; default { task }
+      review: "${{result.review.summary}}"
+    branches:
+      done: { to: report, means: "No blocking issues" }
+      fix:  { to: fixer,  means: "A blocking issue was found" }
+    max_iterations: 3
+```
+
+`decider:` may also be a plain list (`decider: [system-one, agent]`). `trust` and `min_confidence` resolve field by field (step → flow → setting).
+
+**Question.** A classifier receives one `choice` question. Criteria are each branch's `means` (else its label); for a fork each option is its own criterion. Instructions are the expanded `task` (a fork without `task:` uses its `question`). The state is the expanded `state:` map, else `{ task }`; for a fork "Other" answer it also holds `question` and `userText`. A branch may be written `label: step` or `label: { to: step, means: "…" }`; both route identically.
+
+**Trust.** `calibrated` accepts a System One answer only in `enforce` mode. `confidence` accepts confidence ≥ `min_confidence`. `auto` behaves as `calibrated` when a System One calibration record exists for that backend and decision point (the dashboard writes these), else as `confidence`. An untrusted answer is a *shadow* answer: it is recorded and the chain continues.
+
+**Failure.** A label that is not a branch is a failed attempt; so is an agent that returns no valid branch. When every entry fails, an interactive fork asks the user again; otherwise the step fails with an error listing each attempt. There is no silent first-branch default.
+
+**Privacy.** If `~/.pi/agent/system-one.json` sets `allowOffMachine: false`, pi-ai classifier entries on a non-loopback URL fail with `off-machine` without sending a request. Without that file there is no extra gate.
+
+**With and without pi-agent-dashboard.** Without it, a `provider/model` entry, or a hand-written `system-one.json`, is enough; with no configuration a `system-one` entry fails with `no-backend` (no network) and the chain continues. System One `llm` backends work in plain pi: pi-flows supplies an in-process caller that makes one structured completion (role resolved like an agent's `model:`, session-model fallback), not an agent session. With the dashboard installed, each decision point appears in its System One settings as consumer `pi-flows:<flow>:<step>` (lowercased, other characters become `-`), where backends can be retargeted and calibrated. Renaming a flow or step creates a new consumer and loses its calibration.
+
+`flow_write` rejects `provider/model` entries that are not known classifier models; validation warns about branches without `means` in a classifier chain. Observability: [`flow:decision`](events-api.md#flowdecision).
+
+---
 
 ### Loops
 
