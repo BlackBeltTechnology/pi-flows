@@ -29,7 +29,7 @@ If grep finds nothing, then read source.
 | Watch tests | `npm run test:watch` | |
 | CI | — | `.github/workflows/ci.yml` runs `lint + typecheck + test` on Node 22/24 for every push to `develop` and every PR. |
 | Publish | Trigger `Release` workflow in GitHub Actions UI with version input, OR push a `v*` tag | `.github/workflows/publish.yml`. Trusted Publishing via OIDC (`--provenance`), gated by `npm-publish` GH environment. Drafts GitHub Release from CHANGELOG section. See `docs/releasing.md`. |
-| Use flows in a session | `/flows`, `/flows:delete`, `/skill:manage-flows`, `/roles`, `alt+a`, `alt+x`, `alt+o` | Each flow is a self-contained dir `.pi/flows/flows/<namespace>/<name>/` with `flow.yaml`; auto-registers as `/<namespace>:<name>`. Authoring via `flow_agents`/`flow_write` (gated by `flows.editFlow`). |
+| Use flows in a session | `/flows`, `/flows:delete`, `/skill:manage-flows`, `alt+a`, `alt+x`, `alt+o` | Each flow is a self-contained dir `.pi/flows/flows/<namespace>/<name>/` with `flow.yaml`; auto-registers as `/<namespace>:<name>`. Authoring via `flow_agents`/`flow_write` (gated by `flows.editFlow`). |
 
 There is **no compile / bundle / dist step**. TypeScript runs straight from `extensions/` via pi's loader. Treat `extensions/index.ts` as the entrypoint.
 

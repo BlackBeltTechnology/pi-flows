@@ -17,7 +17,7 @@ import {
   createEventBus,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
-import { resolveModel } from "./model-roles.js";
+import { resolveAgentModel, type ParentModelSnapshot } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
 import { createGuardExtension } from "./guard.js";
@@ -186,8 +186,14 @@ export interface SpawnOptions {
   onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void;
   decisionBranches?: string[];
   signal?: AbortSignal;
-  /** Pre-resolved model ID — when provided, skips resolveModel() call. */
+  /** Pre-resolved model ID — when provided, skips model resolution. */
   resolvedModelId?: string;
+  /** Pre-resolved Model object — used directly (no registry re-lookup by id). */
+  resolvedModel?: any;
+  /** Session model snapshot (flow start) for the fallback chain. */
+  parentModel?: ParentModelSnapshot;
+  /** `flows.modelFallback` (default "session"). */
+  modelFallback?: "session" | "error";
   /** Thinking level from the same pre-resolution (frontmatter > ref level). */
   resolvedThinking?: string;
 }
@@ -280,9 +286,36 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   }
 
   // Resolve model (skip if pre-resolved)
-  const { modelId, thinking } = options.resolvedModelId
-    ? { modelId: options.resolvedModelId, thinking: options.resolvedThinking ?? agent.thinking }
-    : resolveModel(pi, agent.model, agent.thinking, options.modelRegistry);
+  let modelId: string;
+  let thinking: string | undefined;
+  let preModel: any = options.resolvedModel;
+  if (options.resolvedModelId) {
+    modelId = options.resolvedModelId;
+    thinking = options.resolvedThinking ?? agent.thinking;
+  } else {
+    try {
+      const r = resolveAgentModel(pi, agent, {
+        registry: options.modelRegistry,
+        parentModel: options.parentModel,
+        modelFallback: options.modelFallback,
+      });
+      modelId = r.modelId;
+      thinking = r.thinking;
+      preModel = r.model;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        output: `Failed to resolve model: ${msg}`,
+        stderr: msg,
+        exitCode: null,
+        result: { status: "error" as const, summary: `Failed to resolve model: ${msg}`, files: [], artifacts: "" },
+        toolCalls,
+        duration: Date.now() - startTime,
+        tokens: { input: 0, output: 0 },
+      };
+    }
+  }
 
   // Build system prompt: expand template variables in agent body
   let systemPrompt = expandTemplateVariables(agent.systemPrompt, templateContext);
@@ -304,9 +337,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Resolve Model object from modelId
   // modelId may be "provider/model-id" or just "model-id"
-  let model: any;
+  let model: any = preModel;
   try {
-    if (options.modelRegistry) {
+    if (!model && options.modelRegistry) {
       const parts = modelId.split("/");
       if (parts.length >= 2) {
         // Explicit provider/model format

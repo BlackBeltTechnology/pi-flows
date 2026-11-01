@@ -11,7 +11,7 @@
  * - Routes FlowHardError as hard failure; everything else as soft failure
  */
 
-import type { CodeStep, CodeDecisionStep, AgentResult, CodeNodeContext, FailureInfo, NodeKind, StepResultValue } from "./types.js";
+import type { CodeStep, CodeDecisionStep, AgentResult, CodeNodeContext, FailureInfo, NodeKind, StepResultValue, AgentStartedExtra } from "./types.js";
 import { classifyThrownError } from "./failure.js";
 import { resolveCodeInput } from "./execution.js";
 import { existsSync } from "node:fs";
@@ -32,7 +32,7 @@ export interface CodeNodeFlowCtx {
 export interface CodeNodeExecOptions {
   cwd: string;
   signal?: AbortSignal;
-  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }) => void;
+  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }) => void;
   onAssistantText?: (agentName: string, stepId: string, text: string) => void;
 }

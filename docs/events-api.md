@@ -770,7 +770,7 @@ pi.events.on("flow:prompt-response", (data: {
 
 ## Category 5 — Role Management
 
-Events for configuring model roles (`@planning`, `@coding`, etc.).
+Events for configuring model roles, provided by a role-managing extension (e.g. pi-agent-dashboard).
 
 | Event | Direction | Payload |
 |-------|-----------|---------|

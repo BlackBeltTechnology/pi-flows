@@ -77,10 +77,27 @@ export interface AgentOutput {
 
 // ---- Agent configuration (parsed from .md frontmatter) --------------------
 
+/** Reported when an agent runs on a fallback instead of its first `model:` entry. */
+export interface ModelFallbackInfo {
+  requested: string[];
+  used: string;
+  reason: "no-resolver" | "resolver-error" | "no-model-declared";
+}
+
+/** Extra context on agent lifecycle callbacks. */
+export interface AgentStartedExtra {
+  nodeKind?: NodeKind;
+  target?: string;
+  modelFallback?: ModelFallbackInfo;
+}
+
 export interface AgentConfig {
   name: string;
   description: string;
-  model: string; // e.g., "@planning", "@coding", or explicit model ID
+  /** First declared `model:` ref (display/catalog); undefined when omitted. */
+  model?: string;
+  /** Full ordered `model:` ref list (single ref → one entry; omitted → []). */
+  modelRefs?: string[];
   thinking?: string; // off, minimal, low, medium, high, xhigh, max
   tools: string[]; // e.g., ["read", "write", "edit", "grep", "bash"]
   skills?: string[]; // e.g., ["judo-backend-docs"]
@@ -126,6 +143,7 @@ export interface FlowConfig {
   task_required?: boolean; // Prompt user for task if no command args provided
   task_prompt?: string; // Custom prompt text (default: "Describe what you want <name> to do:")
   inputs?: Record<string, FlowInputDecl>; // Optional typed flow-input schema
+  decision_agent?: string; // Agent for decision steps without their own agent:
   steps: FlowStep[];
   source: string; // File path where this flow was discovered
 }
@@ -178,7 +196,7 @@ export interface ForkStep {
 export interface AgentDecisionStep {
   stepType: "agent-decision";
   id: string;
-  agent: string; // Agent to dispatch for decision
+  agent?: string; // Agent to dispatch for decision (default: flow decision_agent → flows.decisionAgent → flow-decision)
   task: string; // Task for the decision agent
   branches: Record<string, string>; // branch label -> step ID mapping
   max_iterations?: number; // Required only when a branch forms a backward (loop) edge

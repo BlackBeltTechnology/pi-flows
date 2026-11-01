@@ -251,6 +251,15 @@ export function validateFlowContent(
   if (getDiscoveredAgents) {
     const knownAgents = getDiscoveredAgents();
 
+    if (flow.decision_agent && !knownAgents.has(flow.decision_agent)) {
+      diagnostics.push({
+        line: 1,
+        severity: "warning",
+        message: `decision_agent "${flow.decision_agent}" is not in the discovered agent catalog`,
+        suggestion: "Ensure the agent exists before decision steps run, or remove decision_agent",
+      });
+    }
+
     for (const step of flow.steps) {
       switch (step.stepType) {
         case "agent": {
@@ -267,7 +276,7 @@ export function validateFlowContent(
         }
         case "agent-decision": {
           const s = step as AgentDecisionStep;
-          if (!knownAgents.has(s.agent)) {
+          if (s.agent && !knownAgents.has(s.agent)) {
             diagnostics.push({
               line: stepPropLine(idx, s.id, "agent"),
               severity: "warning",

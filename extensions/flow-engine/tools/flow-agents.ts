@@ -11,7 +11,8 @@
 
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig } from "../types.js";
+import type { AgentConfig, Diagnostic } from "../types.js";
+import { parseAgentString } from "../agent-parser.js";
 import { validateAgentContent } from "./agent-validate.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -173,10 +174,42 @@ export function registerFlowAgentsTool(
 
       pi.events.emit("flow:rediscover", {});
 
+      // Advisory: ask a resolver (if any) about each declared `@`-ref. An error
+      // never blocks the write; it becomes a warning naming the runtime fallback.
+      const diagnostics = [...validation.diagnostics, ...probeModelRefs(pi, content)];
+
       return {
-        content: [{ type: "text" as const, text: JSON.stringify({ written: true, name, path: filePath, diagnostics: validation.diagnostics }, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ written: true, name, path: filePath, diagnostics }, null, 2) }],
         details: {},
       };
     },
   });
+}
+
+/** Emit `model:resolve` per declared `@`-ref; map resolver errors to warnings. */
+function probeModelRefs(pi: ExtensionAPI, content: string): Diagnostic[] {
+  let refs: string[] = [];
+  try {
+    refs = parseAgentString(content, "<flow_agents>").modelRefs ?? [];
+  } catch {
+    return [];
+  }
+  const out: Diagnostic[] = [];
+  for (const ref of refs) {
+    if (!ref.startsWith("@")) continue;
+    const probe: { ref: string; error?: string } = { ref };
+    try {
+      pi.events.emit("model:resolve", probe);
+    } catch {
+      continue;
+    }
+    if (typeof probe.error === "string" && probe.error) {
+      out.push({
+        line: 1,
+        severity: "warning",
+        message: `${ref}: ${probe.error}; will fall back per flows.modelFallback`,
+      });
+    }
+  }
+  return out;
 }

@@ -59,6 +59,7 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
     ...(task_required ? { task_required } : {}),
     ...(task_prompt ? { task_prompt } : {}),
     ...(inputs ? { inputs } : {}),
+    ...(doc.decision_agent ? { decision_agent: String(doc.decision_agent) } : {}),
     steps,
     source,
   };
@@ -194,10 +195,10 @@ function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
   const step: AgentDecisionStep = {
     stepType: "agent-decision",
     id: raw.id,
-    agent: requireString(raw, "agent", source),
     task: requireString(raw, "task", source),
     branches,
   };
+  if (raw.agent) step.agent = String(raw.agent);
   if (raw.max_iterations !== undefined) step.max_iterations = toInt(raw.max_iterations, source);
   return step;
 }

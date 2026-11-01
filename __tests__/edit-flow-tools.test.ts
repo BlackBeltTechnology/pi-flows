@@ -26,7 +26,7 @@ interface CapturedTool {
   execute: (...args: any[]) => Promise<any>;
 }
 
-function mkPi(allToolNames: string[] = []) {
+function mkPi(allToolNames: string[] = [], onEmit?: (channel: string, data: any) => void) {
   const tools = new Map<string, CapturedTool>();
   const emitted: Array<{ channel: string; data: unknown }> = [];
   const pi: any = {
@@ -39,6 +39,7 @@ function mkPi(allToolNames: string[] = []) {
     events: {
       emit(channel: string, data: unknown) {
         emitted.push({ channel, data });
+        onEmit?.(channel, data);
       },
     },
   };
@@ -164,6 +165,33 @@ describe("flow_agents — op: write", () => {
     expect(out.diagnostics.length).toBeGreaterThan(0);
     expect(existsSync(join(tmp, ".pi", "flows", "agents"))).toBe(false);
     expect(emitted.some((e) => e.channel === "flow:rediscover")).toBe(false);
+  });
+
+  it("model:resolve error on an @-ref is an advisory warning; file still written", async () => {
+    const { pi, tools } = mkPi([], (ch, p) => {
+      if (ch === "model:resolve") p.error = 'Role "@nope" is not assigned';
+    });
+    registerFlowAgentsTool(pi, () => new Map(), tmp, "/pkg", () => []);
+    const out = await call(tools.get("flow_agents")!, {
+      op: "write",
+      content: VALID_AGENT.replace('"@coding"', "@nope"),
+    });
+    expect(out.written).toBe(true);
+    const msgs = out.diagnostics.map((d: any) => d.message).join("\n");
+    expect(msgs).toContain('Role "@nope" is not assigned');
+    expect(msgs).toContain("flows.modelFallback");
+    expect(existsSync(join(tmp, ".pi", "flows", "agents", "my-agent.md"))).toBe(true);
+  });
+
+  it("no model:resolve handler → no model diagnostic", async () => {
+    const { pi, tools } = mkPi();
+    registerFlowAgentsTool(pi, () => new Map(), tmp, "/pkg", () => []);
+    const out = await call(tools.get("flow_agents")!, {
+      op: "write",
+      content: VALID_AGENT.replace('"@coding"', "@anything"),
+    });
+    expect(out.written).toBe(true);
+    expect(out.diagnostics.filter((d: any) => /model/i.test(d.message))).toEqual([]);
   });
 
   it("does not accept a raw path parameter", () => {

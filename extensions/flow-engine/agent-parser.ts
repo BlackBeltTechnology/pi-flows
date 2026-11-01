@@ -28,7 +28,8 @@ export function parseAgentString(content: string, source: string): AgentConfig {
 
   const name = requireField(fields, "name", source);
   const description = requireField(fields, "description", source);
-  const model = requireField(fields, "model", source);
+  const modelRefs = parseModelRefs(fields);
+  const model = modelRefs[0];
 
   const thinking = fields.get("thinking") ?? undefined;
   const output = fields.get("output") ?? undefined;
@@ -78,7 +79,8 @@ export function parseAgentString(content: string, source: string): AgentConfig {
   return {
     name,
     description,
-    model,
+    ...(model !== undefined && { model }),
+    modelRefs,
     ...(thinking !== undefined && { thinking }),
     tools,
     ...(skills !== undefined && skills.length > 0 && { skills }),
@@ -273,6 +275,19 @@ function parseAccessBlock(
 }
 
 // ---- Utility functions ----------------------------------------------------
+
+/** `model:` as single ref, inline `[a, b]` list, or block list; omitted → []. */
+function parseModelRefs(fields: Map<string, string>): string[] {
+  const unquote = (v: string) => v.trim().replace(/^["']|["']$/g, "");
+  const scalar = fields.get("model")?.trim();
+  if (scalar) {
+    if (scalar.startsWith("[") && scalar.endsWith("]")) {
+      return scalar.slice(1, -1).split(",").map(unquote).filter(Boolean);
+    }
+    return [unquote(scalar)].filter(Boolean);
+  }
+  return (fields.get("model:array") ?? "").split("\n").map(unquote).filter(Boolean);
+}
 
 /** Split a comma-separated value string into trimmed, non-empty tokens. */
 function splitCsv(value: string): string[] {

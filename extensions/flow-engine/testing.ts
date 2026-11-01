@@ -393,6 +393,18 @@ export interface RunFauxOptions {
   flowInput?: Record<string, unknown>;
   /** Override the flow task string (default "flow task"). */
   task?: string;
+  /** Decide forks autonomously (spawns the decision agent). */
+  isAutonomous?: () => boolean;
+  /** `flows.modelFallback` for the run (default session). */
+  modelFallback?: "session" | "error";
+  /** `flows.decisionAgent` for the run. */
+  decisionAgent?: string;
+  /** Install a `model:resolve` handler on the pi stub (default: silent). */
+  resolveHandler?: (probe: any) => void;
+  /** Run with no captured session model (default: the faux model). */
+  withoutParentModel?: boolean;
+  /** Observe agent starts (incl. `modelFallback` extra). */
+  onAgentStarted?: FlowRunOptions["onAgentStarted"];
 }
 
 /**
@@ -416,7 +428,10 @@ export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
   // pi stub: `events.emit` is silent (no model:resolve handler) so resolveModel
   // falls through to the in-process registry fallback using `pi.modelRegistry`.
   const pi: any = {
-    events: { emit: () => undefined, on: () => undefined },
+    events: {
+      emit: (ch: string, probe: any) => { if (ch === "model:resolve") options.resolveHandler?.(probe); },
+      on: () => undefined,
+    },
     modelRegistry: registry,
   };
 
@@ -431,6 +446,11 @@ export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
     getAgent: (name: string) => agentMap.get(name),
     askUser: async () => ({ answer: "" }),
     signal: options.signal,
+    isAutonomous: options.isAutonomous,
+    modelFallback: options.modelFallback,
+    decisionAgent: options.decisionAgent,
+    onAgentStarted: options.onAgentStarted,
+    parentModel: options.withoutParentModel ? undefined : { model: faux.getModel("faux-1") as any },
   };
 
   try {
@@ -500,6 +520,7 @@ export async function runFauxFlow(options: RunFauxFlowOptions): Promise<FlowResu
     onAgentStarted: options.onAgentStarted,
     onAgentComplete: options.onAgentComplete,
     signal: options.signal,
+    parentModel: { model: faux.getModel("faux-1") as any },
   };
 
   try {

@@ -35,6 +35,7 @@ inputs:
 | `task_required` | | When `true`, prompts the user for a task if none was provided |
 | `task_prompt` | | Custom prompt text shown when asking for a task |
 | `inputs` | | Optional typed input schema (see [Typed Flow Inputs](#typed-flow-inputs)) |
+| `decision_agent` | | Agent that makes decisions for `fork` / `agent-decision` steps without their own `agent:` (see [Decision agent selection](#decision-agent-selection)) |
 
 When a flow completes, pi-flows appends one message `[flow] <name> <status>: <summary>` (status is `success`, `error`, or `aborted`) to the parent session. This persists the run for `/resume` and reports the outcome; pi-flows never shuts down or ends the session — that is the host/automation layer's responsibility.
 
@@ -259,7 +260,7 @@ Delegate a routing decision to an agent. The agent analyzes the context and call
 | Field | Required | Description |
 |-------|:--------:|-------------|
 | `type` | ✓ | Must be `agent-decision`. |
-| `agent` | ✓ | Agent name — must call `finish` with a valid `branch` |
+| `agent` | | Agent name — must call `finish` with a valid `branch`. May be omitted: see [Decision agent selection](#decision-agent-selection). |
 | `task` | ✓ | Task for the decision agent. Supports template variables. |
 | `branches` | ✓ | Map of branch names → step IDs |
 | `max_iterations` | | Required only when a branch target points to an earlier step (a loop). See [Loops](#loops). |
@@ -273,6 +274,29 @@ finish(summary="Quality is sufficient.", branch="ready")
 If the agent returns a `branch` not in `branches`, the flow hard-fails. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#loops).
 
 ---
+
+### Decision agent selection
+
+For an autonomously decided `fork` and for every `agent-decision` step, the agent is the first of:
+
+1. the step's `agent:`;
+2. the flow's top-level `decision_agent:`;
+3. the setting `flows.decisionAgent` in `.pi/settings.json` (project overrides global);
+4. the built-in `flow-decision` agent.
+
+A named agent that does not exist fails the step with an error naming the agent and where it was configured. The built-in `flow-decision` declares `model: @fast`; without a `model:resolve` resolver it runs on the session model (see `docs/agents.md`).
+
+```yaml
+name: review
+description: Review with a custom router
+decision_agent: my-router
+steps:
+  - id: gate
+    type: agent-decision
+    task: "Is the draft ready?"
+    branches: { ready: publish, rework: draft }
+    max_iterations: 3
+```
 
 ### Loops
 

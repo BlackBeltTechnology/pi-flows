@@ -145,3 +145,35 @@ describe("parseAgentString — outputs (simple and expanded)", () => {
     expect(cfg.outputs).toEqual([{ name: "weird" }]);
   });
 });
+
+describe("parseAgentString — model: single, list, omitted", () => {
+  it("single ref → model + one-entry modelRefs", () => {
+    const cfg = parseAgentString(agent("name: a\ndescription: d\nmodel: @coding"), SRC);
+    expect(cfg.model).toBe("@coding");
+    expect(cfg.modelRefs).toEqual(["@coding"]);
+  });
+
+  it("inline list → ordered modelRefs, model = first", () => {
+    const cfg = parseAgentString(
+      agent("name: a\ndescription: d\nmodel: [@fast, anthropic/claude-haiku-4-5]"),
+      SRC,
+    );
+    expect(cfg.modelRefs).toEqual(["@fast", "anthropic/claude-haiku-4-5"]);
+    expect(cfg.model).toBe("@fast");
+  });
+
+  it("block list → ordered modelRefs", () => {
+    const cfg = parseAgentString(
+      agent("name: a\ndescription: d\nmodel:\n  - @fast\n  - anthropic/claude-haiku-4-5:high\ntools: read"),
+      SRC,
+    );
+    expect(cfg.modelRefs).toEqual(["@fast", "anthropic/claude-haiku-4-5:high"]);
+    expect(cfg.model).toBe("@fast");
+  });
+
+  it("omitted model → undefined model, empty modelRefs (no throw)", () => {
+    const cfg = parseAgentString(agent("name: a\ndescription: d"), SRC);
+    expect(cfg.model).toBeUndefined();
+    expect(cfg.modelRefs).toEqual([]);
+  });
+});

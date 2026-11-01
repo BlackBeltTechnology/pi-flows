@@ -19,6 +19,7 @@ import {
 } from "./tools/skill-read.js";
 import { registerFlowAgentsTool } from "./tools/flow-agents.js";
 import { registerFlowWriteTool } from "./tools/flow-write.js";
+import { readFlowsSettings } from "./flows-settings.js";
 import { isEditFlowEnabled, setEditFlowFlag, parseEditModeArg } from "./edit-flow-config.js";
 import { makeEditFlowToolReconciler, applyManageFlowsVisibility } from "./edit-flow-reconcile.js";
 
@@ -163,6 +164,9 @@ export function activate(pi: ExtensionAPI) {
   // runtime-registered providers work; the registry backs model resolution.
   let sessionModelRegistry: any = undefined;
   let sessionModelRuntime: any = undefined;
+  // The dispatching session's current model — snapshotted into each flow run as
+  // the fallback for agents whose `model:` is omitted or unresolvable.
+  let sessionModel: any = undefined;
   // Captured on session_start; used by EventEmitObserver to append the
   // flow-completion marker that opens pi's persistence flush gate.
   let sessionManager: any = undefined;
@@ -215,6 +219,17 @@ export function activate(pi: ExtensionAPI) {
       getPkgRoot: () => pkgRoot,
       getModelRegistry: () => sessionModelRegistry,
       getModelRuntime: () => sessionModelRuntime,
+      getParentModel: () => {
+        if (!sessionModel) return undefined;
+        let thinking: string | undefined;
+        try { thinking = pi.getThinkingLevel?.(); } catch { thinking = undefined; }
+        return { model: sessionModel, thinking };
+      },
+      getFlowsSettings: () => {
+        const s = readFlowsSettings(projectRoot);
+        for (const w of s.warnings) pi.events.emit("flow:notify", { message: w, level: "warning" });
+        return s;
+      },
       getSessionManager: () => sessionManager,
       getExtraAgentExtensions: () => [...extraAgentExtensions],
       getExtensionTools: () => [...registeredExtensionTools],
@@ -236,7 +251,12 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Session start: wire TUI or headless ──
 
+  pi.on("model_select", (event: any) => {
+    if (event?.model) sessionModel = event.model;
+  });
+
   pi.on("session_start", (_event: any, ctx: any) => {
+    if (ctx.model) sessionModel = ctx.model;
     if (ctx.modelRegistry) {
       sessionModelRegistry = ctx.modelRegistry;
       sessionModelRuntime = getModelRuntime(ctx.modelRegistry);
@@ -438,7 +458,8 @@ export function activate(pi: ExtensionAPI) {
     const currentFlow = flows.get(name);
     piApi.registerCommand(name, {
       description: currentFlow?.description || `Run ${name} flow`,
-      handler: async (args) => {
+      handler: async (args, ctx: any) => {
+        if (ctx?.model) sessionModel = ctx.model;
         const flow = flows.get(name);
         if (!flow) {
           pi.events.emit("flow:notify", { message: flowNotFoundMessage(name), level: "error" });

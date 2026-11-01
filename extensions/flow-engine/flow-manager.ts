@@ -6,7 +6,8 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import type { AgentConfig, FlowConfig, FlowResult, NodeKind } from "./types.js";
+import type { AgentConfig, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
+import type { ParentModelSnapshot } from "./model-roles.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 
@@ -21,6 +22,10 @@ export interface FlowManagerConfig {
   getModelRegistry: () => any;
   /** Parent session's providers/keys runtime (never the model). */
   getModelRuntime: () => any;
+  /** Session model snapshot for the fallback chain (undefined when none captured). */
+  getParentModel?: () => ParentModelSnapshot | undefined;
+  /** `flows.modelFallback` / `flows.decisionAgent`, read once at flow start. */
+  getFlowsSettings?: () => { modelFallback: "session" | "error"; decisionAgent?: string };
   getSessionManager: () => any;
   getExtraAgentExtensions: () => any[];
   getExtensionTools: () => any[];
@@ -105,6 +110,10 @@ export class FlowManager {
       // Notify observers (runId first — the run owns its identity)
       for (const obs of observers) obs.onFlowStarted?.(runId, flowName, flow, task);
 
+      // Snapshot the session model + settings now; frozen for the whole run.
+      const parentModel = config.getParentModel?.();
+      const flowsSettings = config.getFlowsSettings?.();
+
       // Dynamic import to avoid circular deps
       const { runFlow: runFlowFn } = await import("./flow-execution.js");
 
@@ -115,6 +124,9 @@ export class FlowManager {
       cwd: config.getProjectRoot(),
       modelRegistry: config.getModelRegistry(),
       modelRuntime: config.getModelRuntime(),
+      parentModel,
+      modelFallback: flowsSettings?.modelFallback,
+      decisionAgent: flowsSettings?.decisionAgent,
       mainSessionManager: config.getSessionManager(),
       extraAgentExtensions: config.getExtraAgentExtensions(),
       extraCustomTools: config.getExtensionTools(),
@@ -136,7 +148,7 @@ export class FlowManager {
           notes: r.notes,
         };
       },
-      onAgentStarted: (agentName: string, stepId: string, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }) => {
+      onAgentStarted: (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => {
         const agentConfig = config.getAgents().get(agentName);
         for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig, resolvedModel, extra);
       },

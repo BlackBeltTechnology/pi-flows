@@ -30,11 +30,13 @@ Both tools perform validation and write to discoverable locations (no raw `path`
 
 ### Model field guidance
 
-The `model:` field in agent frontmatter accepts three forms:
+The `model:` field is optional and accepts:
 
-1. **Role alias (preferred):** `@coding`, `@planning`, `@fast`, `@architect`. Resolved via active role-to-model mapping set with `/roles`.
-2. **Model ID with thinking:** `claude-sonnet-4-20250514:high`. Explicit model; `:high` sets thinking level unless overridden by `thinking:` field.
-3. **Bare model ID:** `claude-haiku-3-5-20241022`. Used as-is; thinking comes from `thinking:` field or none.
+1. **A single ref:** `claude-sonnet-4-20250514:high` (explicit model; `:high` sets thinking unless `thinking:` overrides), a bare `claude-haiku-3-5-20241022`, or an optional `@name` alias.
+2. **An ordered list:** `[@my-alias, anthropic/claude-haiku-4-5]` — the first entry that resolves is used.
+3. **Nothing:** the agent runs on the session model.
+
+`@name` is resolved by an installed `model:resolve` resolver (e.g. pi-agent-dashboard); pi-flows defines no role names. Unresolvable `@name` entries are skipped, and when none resolves the agent falls back to the session model (`flows.modelFallback: "session"`, the default; `"error"` fails instead). A literal ref that does not exist is an error.
 
 The `manage-flows` skill documents these forms in detail for interactive guidance.
 
@@ -50,7 +52,7 @@ Agent files are Markdown documents with YAML frontmatter. The frontmatter config
 ---
 name: my-agent
 description: A one-line description of what this agent does
-model: @coding
+model: anthropic/claude-sonnet-4-5
 thinking: medium
 tools: read, grep, bash
 skills: my-docs
@@ -130,15 +132,17 @@ Target file: ${{input.target_file}}
 
 ### Model references
 
-The `model` field accepts three formats:
+The `model` field accepts a single ref, an ordered list, or can be omitted:
 
 | Format | Example | Description |
 |--------|---------|-------------|
-| Role alias | `@planning` | Resolved via the active role-to-model mapping (set with `/roles` command). |
 | Model ID with thinking | `claude-sonnet-4-20250514:high` | Explicit model ID; `:high` sets thinking level unless `thinking:` field overrides it. |
 | Plain model ID | `claude-haiku-3-5-20241022` | Used as-is; thinking from `thinking:` field or none. |
+| `@name` alias | `@my-alias` | Optional; needs a `model:resolve` resolver, otherwise falls back to the session model per `flows.modelFallback`. |
+| List | `[@my-alias, anthropic/claude-haiku-4-5]` | First entry that resolves wins; unresolvable `@name` entries are skipped. |
+| Omitted | *(none)* | Runs on the session model. |
 
-**Available built-in roles:** `@planning`, `@coding`, `@fast`, `@architect`. Custom roles can be added via the `/roles` command.
+Agent validation treats refs as opaque: it checks only that refs are non-empty and that any `:thinking` suffix is a valid level (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `off`).
 
 ---
 

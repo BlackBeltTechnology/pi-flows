@@ -1,10 +1,10 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue } from "./types.js";
+import type { AgentStartedExtra, FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
 import { resolveRouteOutcome } from "./failure.js";
-import type { FailureInfo } from "./types.js";
-import { resolveModel } from "./model-roles.js";
+import type { FailureInfo, ModelFallbackInfo } from "./types.js";
+import { resolveAgentModel, type ParentModelSnapshot } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 
 import { raceWithAbort } from "./abort-utils.js";
@@ -67,6 +67,12 @@ export interface FlowRunOptions {
   modelRegistry?: any;
   /** Parent session's providers/keys runtime, shared with every agent session. */
   modelRuntime?: any;
+  /** Session model (+ thinking) snapshot taken at flow start — the fallback target. */
+  parentModel?: ParentModelSnapshot;
+  /** `flows.modelFallback` (default "session"), frozen for the run. */
+  modelFallback?: "session" | "error";
+  /** `flows.decisionAgent`, frozen for the run. */
+  decisionAgent?: string;
   /** Operator's live SessionManager — forked into agents declaring `fork_session`. */
   mainSessionManager?: any;
   extraAgentExtensions?: any[];
@@ -78,7 +84,7 @@ export interface FlowRunOptions {
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkill?: (name: string) => Skill | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
-  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }) => void;
+  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }) => void;
   onToolCall?: (agentName: string, stepId: string, toolName: string, input: any) => void;
   onToolResult?: (agentName: string, stepId: string, toolName: string, output: any, isError: boolean) => void;
@@ -648,6 +654,60 @@ function filterExtensionTools(allTools: any[] | undefined, agentTools: string[])
   return allTools.filter(t => agentTools.includes(t.name));
 }
 
+/**
+ * Resolve an agent's model before spawning (so observers see it and spawn
+ * receives the resolved Model object). Failure is deferred: spawnAgent
+ * re-resolves and reports the error on the step.
+ */
+function preResolveModel(agentConfig: any, options: FlowRunOptions): {
+  resolvedModelId?: string;
+  fallback?: ModelFallbackInfo;
+  spawn: Record<string, unknown>;
+} {
+  const spawn: Record<string, unknown> = { parentModel: options.parentModel, modelFallback: options.modelFallback };
+  try {
+    // Keep the thinking level too (frontmatter `thinking:` > ref level from
+    // role/suffix) — dropping it lets pi's defaultThinkingLevel take over.
+    const r = resolveAgentModel(options.pi, agentConfig, {
+      registry: options.modelRegistry,
+      parentModel: options.parentModel,
+      modelFallback: options.modelFallback,
+    });
+    return {
+      resolvedModelId: r.modelId,
+      fallback: r.fallback,
+      spawn: { ...spawn, resolvedModel: r.model, resolvedModelId: r.modelId, resolvedThinking: r.thinking },
+    };
+  } catch {
+    return { spawn };
+  }
+}
+
+type DecisionAgentPick =
+  | { ok: true; agent: any; name: string }
+  | { ok: false; name: string; source: string };
+
+/** Decision agent: step agent → flow decision_agent → flows.decisionAgent → flow-decision. */
+function pickDecisionAgent(step: { agent?: string }, ctx: FlowContext, options: FlowRunOptions): DecisionAgentPick {
+  let name: string;
+  let source: string;
+  if (step.agent) { name = step.agent; source = "the step's agent:"; }
+  else if (options.flow.decision_agent) { name = options.flow.decision_agent; source = "the flow's decision_agent:"; }
+  else if (options.decisionAgent) { name = options.decisionAgent; source = "flows.decisionAgent"; }
+  else { name = "flow-decision"; source = "the built-in default"; }
+  const agent = options.getAgent(name);
+  return agent ? { ok: true, agent, name } : { ok: false, name, source };
+}
+
+function decisionAgentMissing(pick: { name: string; source: string }): AgentResult {
+  const msg = `Decision agent not found: "${pick.name}" (configured via ${pick.source}). Ensure the agent exists in the catalog.`;
+  return {
+    success: false, output: msg, stderr: msg, exitCode: 1,
+    result: { status: "error" as const, files: [], artifacts: "", summary: msg },
+    toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+  };
+}
+
 async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: FlowRunOptions): Promise<AgentResult | null> {
   const agentConfig = options.getAgent(step.agent);
   if (!agentConfig) {
@@ -667,19 +727,8 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   }
 
   // Resolve model early so it's available for onAgentStarted observers
-  let resolvedModelId: string | undefined;
-  let resolvedThinking: string | undefined;
-  try {
-    // Keep the thinking level too (frontmatter `thinking:` > ref level from
-    // role/suffix) — dropping it lets pi's defaultThinkingLevel take over.
-    const { modelId, thinking } = resolveModel(options.pi, agentConfig.model, agentConfig.thinking, options.modelRegistry);
-    resolvedModelId = modelId;
-    resolvedThinking = thinking;
-  } catch {
-    // Model resolution failed — will be caught again inside spawnAgent
-  }
-
-  options.onAgentStarted?.(step.agent, step.id, resolvedModelId, { nodeKind: "agent" });
+  const pre = preResolveModel(agentConfig, options);
+  options.onAgentStarted?.(step.agent, step.id, pre.resolvedModelId, { nodeKind: "agent", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
 
   // Resolve step inputs at dispatch time via plain template expansion (strings).
   // File-backed data is passed as a PATH and read just-in-time by the agent's
@@ -765,8 +814,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond)
       : undefined,
     signal: options.signal,
-    resolvedModelId,
-    resolvedThinking,
+    ...pre.spawn,
   });
 
   options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent" });
@@ -784,23 +832,9 @@ async function spawnForkDecisionAgent(
   options: FlowRunOptions,
   customText?: string,
 ): Promise<StepResult> {
-  const agentConfig = step.agent
-    ? options.getAgent(step.agent)
-    : options.getAgent("flow-decision");
-  if (!agentConfig) {
-    return {
-      agentResult: {
-        success: false,
-        output: `Decision agent not found: "${step.agent || 'flow-decision'}". Ensure the agent exists in the catalog.`,
-        stderr: `Decision agent "${step.agent || 'flow-decision'}" not found`,
-        exitCode: 1,
-        result: { status: "error" as const, files: [], artifacts: "", summary: "" },
-        toolCalls: [],
-        duration: 0,
-        tokens: { input: 0, output: 0 },
-      },
-    };
-  }
+  const pick = pickDecisionAgent(step, ctx, options);
+  if (!pick.ok) return { agentResult: decisionAgentMissing(pick) };
+  const agentConfig = pick.agent;
 
   const branchNames = Object.keys(step.branches);
   const templateCtx: TemplateContext = {
@@ -818,8 +852,9 @@ async function spawnForkDecisionAgent(
     decisionTask += `\n\nThe user typed a custom answer instead of picking an option: "${customText}"\nBased on their intent, choose the closest matching branch.`;
   }
 
-  const agentName = step.agent || agentConfig.name;
-  options.onAgentStarted?.(agentName, step.id, undefined, { nodeKind: "fork" });
+  const agentName = pick.name;
+  const pre = preResolveModel(agentConfig, options);
+  options.onAgentStarted?.(agentName, step.id, pre.resolvedModelId, { nodeKind: "fork", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
 
   const result = await spawnAgent({
     agent: agentConfig,
@@ -837,6 +872,7 @@ async function spawnForkDecisionAgent(
     onAssistantText: (text) => options.onAssistantText?.(agentName, step.id, text),
     onThinkingText: (text) => options.onThinkingText?.(agentName, step.id, text),
     signal: options.signal,
+    ...pre.spawn,
   });
 
   options.onAgentComplete?.(agentName, step.id, result, { nodeKind: "fork" });
@@ -845,7 +881,7 @@ async function spawnForkDecisionAgent(
   if (branch && step.branches[branch]) {
     ctx.forks[step.id] = { answer: branch, notes: customText };
     storeForkContext(ctx, step, step.branches[branch], branch, customText, step.agent);
-    options.onAutoDecision?.(step.id, step.agent || agentConfig.name, branch, step.branches[branch]);
+    options.onAutoDecision?.(step.id, agentName, branch, step.branches[branch]);
     return { nextStepId: step.branches[branch], agentResult: result };
   }
 
@@ -993,8 +1029,15 @@ async function executeCodeDecisionStep(step: CodeDecisionStep, ctx: FlowContext,
 }
 
 async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
-  const agentConfig = options.getAgent(step.agent);
-  if (!agentConfig) return {};
+  const pick = pickDecisionAgent(step, ctx, options);
+  if (!pick.ok) {
+    const failed = decisionAgentMissing(pick);
+    options.onAgentStarted?.(pick.name, step.id, undefined, { nodeKind: "agent-decision" });
+    options.onAgentComplete?.(pick.name, step.id, failed, { nodeKind: "agent-decision" });
+    return { agentResult: failed };
+  }
+  const agentConfig = pick.agent;
+  const agentName = pick.name;
 
   const decisionConfig = { ...agentConfig };
   const branchNames = Object.keys(step.branches);
@@ -1018,7 +1061,8 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
       if (s) skills.push(s);
     }
   }
-  options.onAgentStarted?.(step.agent, step.id, undefined, { nodeKind: "agent-decision" });
+  const pre = preResolveModel(decisionConfig, options);
+  options.onAgentStarted?.(agentName, step.id, pre.resolvedModelId, { nodeKind: "agent-decision", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
 
   const result = await spawnAgent({
     agent: decisionConfig,
@@ -1032,14 +1076,15 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
     decisionBranches: branchNames,
-    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
-    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
-    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text),
-    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text),
+    onToolCall: (name, input) => options.onToolCall?.(agentName, step.id, name, input),
+    onToolResult: (name, output, err) => options.onToolResult?.(agentName, step.id, name, output, err),
+    onAssistantText: (text) => options.onAssistantText?.(agentName, step.id, text),
+    onThinkingText: (text) => options.onThinkingText?.(agentName, step.id, text),
     signal: options.signal,
+    ...pre.spawn,
   });
 
-  options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent-decision" });
+  options.onAgentComplete?.(agentName, step.id, result, { nodeKind: "agent-decision" });
 
   // Route via finish tool's branch parameter. A backward branch target loops
   // (bounded by max_iterations); a forward target exits.

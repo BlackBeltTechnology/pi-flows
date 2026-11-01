@@ -5,6 +5,21 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Optional, resolver-agnostic `model:`** (`resolver-agnostic-model-refs`). `model:` accepts a single ref, an ordered list (`[@fast, anthropic/claude-haiku-4-5]`), or nothing. Unresolvable `@`-refs (no `model:resolve` resolver, or the resolver reports an error) are skipped; when nothing resolves — or `model:` is omitted — the agent runs on the dispatching session's model (snapshot at flow start) and the fallback is reported on `flow:agent-started` (`modelFallback`). Literal refs that do not exist still fail.
+- Setting `flows.modelFallback: "session" | "error"` (default `session`).
+- **System-wide decision agent**: step `agent:` → flow `decision_agent:` → setting `flows.decisionAgent` → built-in `flow-decision`. `agent-decision` steps may omit `agent:`.
+- `flow_agents` write emits `model:resolve` per `@`-ref and reports resolver errors as advisory warnings.
+
+### Changed
+
+- The resolved `Model` object is passed straight to the agent session (no second registry lookup).
+- Agent validation no longer knows role names; it only checks ref syntax and `:thinking` levels. `AgentConfig.model` is optional; new `AgentConfig.modelRefs`.
+- Built-in agents (`flow-decision`, `project-context-reader`) now work without pi-agent-dashboard via the session-model fallback.
+
 ## [v0.8.1] - 2026-10-30
 
 ### Changed
