@@ -7,7 +7,8 @@
 // ---------------------------------------------------------------------------
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+import { loadSkillsFromDir, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 import type { AgentConfig, FlowConfig, FlowResult } from "./types.js";
 import { discoverAll, resolvePackageRoot } from "./discovery.js";
 import { getModelRuntime } from "./model-runtime.js";
@@ -73,9 +74,22 @@ export function getDiscoveredAgents(): Map<string, AgentConfig> {
   return agents;
 }
 
+export function getDiscoveredFlows(): Map<string, FlowConfig> {
+  return flows;
+}
+
+export function getExtraFlowsDirs(): string[] {
+  return extraFlowsDirs;
+}
+
+/** User-level flows root: `<agentDir>/flows` (honours PI_CODING_AGENT_DIR). */
+export function userFlowsRoot(): string {
+  return join(getAgentDir(), "flows");
+}
+
 export function init(pkgRoot: string, projectRoot: string): void {
   packageRoot = pkgRoot;
-  const result = discoverAll(pkgRoot, projectRoot, extraAgentsDirs, extraFlowsDirs);
+  const result = discoverAll(pkgRoot, projectRoot, extraAgentsDirs, extraFlowsDirs, userFlowsRoot());
   agents = result.agents;
   flows = result.flows;
 }
@@ -387,8 +401,8 @@ export function activate(pi: ExtensionAPI) {
   // project value, when trusted, overrides the global value). The
   // manage-flows skill stays available as /skill:manage-flows regardless.
   const EDIT_FLOW_TOOLS = ["flow_agents", "flow_write"];
-  registerFlowAgentsTool(pi, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs);
-  registerFlowWriteTool(pi, () => agents, projectRoot);
+  registerFlowAgentsTool(pi, () => agents, projectRoot, pkgRoot, () => extraAgentsDirs, userFlowsRoot());
+  registerFlowWriteTool(pi, () => agents, projectRoot, userFlowsRoot());
 
   // Activate/deactivate the authoring tools to match the requested edit-mode.
   // Change-gated (see edit-flow-reconcile.ts): applies only when the resolved

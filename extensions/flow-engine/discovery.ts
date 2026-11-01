@@ -9,7 +9,7 @@ import type { AgentConfig, FlowConfig } from "./types.js";
 import { parseAgentFile } from "./agent-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
 import { readdirSync, existsSync, statSync } from "node:fs";
-import { join, dirname, relative } from "node:path";
+import { join, dirname, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- Public types ---------------------------------------------------------
@@ -29,6 +29,7 @@ export function discoverAll(
   projectRoot: string,
   extraAgentsDirs?: string[],
   extraFlowsDirs?: string[],
+  userRoot?: string,
 ): DiscoveryResult {
   const agents = new Map<string, AgentConfig>();
   const flows = new Map<string, FlowConfig>();
@@ -68,6 +69,17 @@ export function discoverAll(
     flows.set(flow.name, flow);
   }
 
+  // --- User tier (<agentDir>/flows): overrides packages + built-ins, loses to project ---
+
+  if (userRoot) {
+    for (const agent of discoverAgentsInDir(join(userRoot, "agents"), warnings)) {
+      agents.set(agent.name, agent);
+    }
+    for (const flow of discoverFlowsInDir(join(userRoot, "flows"), warnings)) {
+      flows.set(flow.name, flow);
+    }
+  }
+
   // --- Project-local (highest priority — overrides package on name collision) ---
 
   const localAgentsDir = join(projectRoot, ".pi", "flows", "agents");
@@ -81,6 +93,30 @@ export function discoverAll(
   }
 
   return { agents, flows, warnings };
+}
+
+export type SourceKind = "project" | "user" | "package" | "built-in";
+
+function under(path: string, dir: string): boolean {
+  const rel = relative(dir, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Classify a discovered item's source path. Order mirrors precedence:
+ * project (.pi/flows) > user (<agentDir>/flows) > package (registered dirs) > built-in.
+ */
+export function classifySource(
+  path: string | undefined,
+  roots: { projectRoot: string; userRoot?: string; extraDirs?: string[] },
+): SourceKind {
+  if (!path) return "built-in";
+  if (under(path, join(roots.projectRoot, ".pi", "flows"))) return "project";
+  if (roots.userRoot && under(path, roots.userRoot)) return "user";
+  for (const dir of roots.extraDirs ?? []) {
+    if (under(path, dir)) return "package";
+  }
+  return "built-in";
 }
 
 /**

@@ -103,7 +103,7 @@ Flows also register as slash commands based on directory path: `.pi/flows/flows/
 
 ## Writing Agents
 
-Agents are `.md` files in `.pi/flows/agents/` (project-local) or a package's `agents/` directory.
+Agents are `.md` files in `.pi/flows/agents/` (project-local), `~/.pi/agent/flows/agents/` (user-level, all projects; flows go in `~/.pi/agent/flows/flows/`; project overrides user) or a package's `agents/` directory.
 
 ```markdown
 ---

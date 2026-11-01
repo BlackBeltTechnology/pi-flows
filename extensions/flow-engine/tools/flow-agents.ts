@@ -16,27 +16,7 @@ import { parseAgentString } from "../agent-parser.js";
 import { validateAgentContent } from "./agent-validate.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-
-/**
- * Classify an agent's source path as "local" (project .pi/flows/),
- * "package" (registered by dependent packages), or "built-in" (pi-flows).
- */
-function classifyAgentSource(
-  agent: AgentConfig,
-  projectRoot: string,
-  packageRoot: string,
-  extraAgentsDirs: string[],
-): "local" | "package" | "built-in" {
-  const src = agent.source;
-  if (!src) return "built-in";
-  const piLocal = join(projectRoot, ".pi");
-  if (src.startsWith(piLocal)) return "local";
-  for (const dir of extraAgentsDirs) {
-    if (src.startsWith(dir)) return "package";
-  }
-  if (src.startsWith(packageRoot)) return "built-in";
-  return "built-in";
-}
+import { classifySource } from "../discovery.js";
 
 /** Extract the agent `name` from YAML frontmatter, if present. */
 function extractAgentName(content: string): string | null {
@@ -53,6 +33,7 @@ export function registerFlowAgentsTool(
   projectRoot: string,
   packageRoot: string,
   getExtraAgentsDirs: () => string[],
+  userRoot?: string,
 ): void {
   pi.registerTool({
     name: "flow_agents",
@@ -61,7 +42,7 @@ export function registerFlowAgentsTool(
       "List or write flow agents. op \"list\" returns the agent catalog " +
       "(name, description, tools, inputs, card, source info, architect metadata) — " +
       "use it before creating/editing a flow. op \"write\" validates an agent .md " +
-      "definition and, on success, writes it to .pi/flows/agents/<name>.md (the " +
+      "definition and, on success, writes it to .pi/flows/agents/<name>.md (or <agentDir>/flows/agents/ with scope \"user\"; the " +
       "filename is derived from the agent's frontmatter name) and triggers " +
       "re-discovery. Returns validation diagnostics on failure. Overwriting an " +
       "existing agent edits it.",
@@ -72,9 +53,14 @@ export function registerFlowAgentsTool(
       content: Type.Optional(
         Type.String({ description: "Agent .md content (required for op \"write\")" }),
       ),
+      scope: Type.Optional(
+        Type.Union([Type.Literal("project"), Type.Literal("user")], {
+          description: "Where op \"write\" saves the agent: \"project\" (default, .pi/flows/agents/) or \"user\" (<agentDir>/flows/agents/)",
+        }),
+      ),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const { op, content } = params as { op: "list" | "write"; content?: string };
+      const { op, content, scope } = params as { op: "list" | "write"; content?: string; scope?: string };
 
       // -- list --
       if (op === "list") {
@@ -83,7 +69,7 @@ export function registerFlowAgentsTool(
         const catalog: Array<Record<string, unknown>> = [];
 
         for (const [, agent] of agents) {
-          const sourceType = classifyAgentSource(agent, projectRoot, packageRoot, extraDirs);
+          const sourceType = classifySource(agent.source, { projectRoot, userRoot, extraDirs });
           catalog.push({
             name: agent.name,
             description: agent.description,
@@ -141,6 +127,19 @@ export function registerFlowAgentsTool(
         };
       }
 
+      if (scope !== undefined && scope !== "project" && scope !== "user") {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: `Invalid scope "${String(scope)}". Allowed values: "project", "user".` }, null, 2) }],
+          details: {},
+        };
+      }
+      if (scope === "user" && !userRoot) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: "User scope is not available (no user flows directory configured)." }, null, 2) }],
+          details: {},
+        };
+      }
+
       // Validate first (with dynamically discovered tool names)
       const dynamicTools = new Set(pi.getAllTools().map(t => t.name));
       const validation = validateAgentContent(content, dynamicTools);
@@ -160,7 +159,7 @@ export function registerFlowAgentsTool(
         };
       }
 
-      const agentsDir = join(projectRoot, ".pi", "flows", "agents");
+      const agentsDir = scope === "user" ? join(userRoot!, "agents") : join(projectRoot, ".pi", "flows", "agents");
       const filePath = join(agentsDir, `${name}.md`);
       try {
         mkdirSync(agentsDir, { recursive: true });

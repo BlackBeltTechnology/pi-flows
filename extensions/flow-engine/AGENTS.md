@@ -4,7 +4,7 @@ Files in this area. Purposes left for the agent to author.
 
 | `abort-utils.ts` | Expose `signalRejection` and `raceWithAbort`; reject pending work with `FlowCancelledError` when `AbortSignal` fires. |
 | `agent-parser.ts` | Parse agent Markdown via `parseAgentFile`/`parseAgentString`; map YAML frontmatter, access rules, outputs, and prompt body into `AgentConfig`. `model:` may be a single ref, list, or omitted (`modelRefs`). See change: resolver-agnostic-model-refs. |
-| `discovery.ts` | Discover bundled, project, and extra agent/flow directories via `discoverAll`; parse `.md` agents and `flow.yaml`; return configs plus warnings. |
+| `discovery.ts` | Discover bundled, project, and extra agent/flow directories via `discoverAll`; parse `.md` agents and `flow.yaml`; return configs plus warnings. user, project, and extra agent/flow directories via `discoverAll`; classifySource labels project|user|package|built-in (See change: global-flow-location); parse `.md` agents and `flow.yaml`; return configs plus warnings. |
 | `edit-flow-config.ts` | Resolve and persist `flows.editFlow` in `.pi/settings.json`; expose `readEditFlowFlag`, `isEditFlowEnabled`, `setEditFlowFlag`, `parseEditModeArg`. |
 | `edit-flow-reconcile.ts` | `makeEditFlowToolReconciler`: change-gated `flow_agents`/`flow_write` activation; `applyManageFlowsVisibility`: per-turn, in-memory `manage-flows` prompt-visibility. |
 | `execute-code-step.ts` | Execute `CodeStep`/`CodeDecisionStep` handlers via `executeCodeStep`; resolve typed inputs, timeout/abort work, validate outputs, classify failures. |

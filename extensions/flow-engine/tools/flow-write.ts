@@ -21,6 +21,7 @@ export function registerFlowWriteTool(
   pi: ExtensionAPI,
   getDiscoveredAgents: () => Map<string, AgentConfig>,
   projectRoot: string,
+  userRoot?: string,
 ): void {
   pi.registerTool({
     name: "flow_write",
@@ -28,7 +29,7 @@ export function registerFlowWriteTool(
     description:
       "Validate and write a flow YAML file. Validates internally first; on " +
       "success writes to .pi/flows/flows/<namespace>/<name>.yaml, which " +
-      "auto-registers as the /<namespace>:<name> command. namespace defaults " +
+      "auto-registers as the /<namespace>:<name> command. scope \"user\" writes to <agentDir>/flows/flows/ instead (all projects). namespace defaults " +
       "to \"custom\". Overwriting an existing <namespace>/<name>.yaml edits it. " +
       "On success returns the written flow path plus generatedHandlers — the " +
       "absolute paths of the <id>.ts.default scaffolds written for each code " +
@@ -37,10 +38,29 @@ export function registerFlowWriteTool(
       namespace: Type.Optional(Type.String({ description: "Flow namespace / subfolder (default \"custom\"). Becomes the /<namespace>: command prefix." })),
       name: Type.String({ description: "Flow file name without extension. Becomes the command name after the namespace prefix." }),
       content: Type.String({ description: "The flow YAML content to validate and write" }),
+      scope: Type.Optional(
+        Type.Union([Type.Literal("project"), Type.Literal("user")], {
+          description: "Where to save: \"project\" (default, .pi/flows/) or \"user\" (<agentDir>/flows/, available in every project)",
+        }),
+      ),
     }),
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
       const { name, content } = params as { namespace?: string; name: string; content: string };
       const namespace = (params as { namespace?: string }).namespace?.trim() || "custom";
+
+      const scope = (params as { scope?: unknown }).scope;
+      if (scope !== undefined && scope !== "project" && scope !== "user") {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: `Invalid scope "${String(scope)}". Allowed values: "project", "user".` }, null, 2) }],
+          details: {},
+        };
+      }
+      if (scope === "user" && !userRoot) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: "User scope is not available (no user flows directory configured)." }, null, 2) }],
+          details: {},
+        };
+      }
 
       // Run validation first
       const validation = validateFlowContent(content, getDiscoveredAgents);
@@ -54,7 +74,7 @@ export function registerFlowWriteTool(
       // Bundled layout: each flow is a self-contained directory
       // `.pi/flows/flows/<namespace>/<name>/` holding `flow.yaml` and its
       // co-located code handlers.
-      const flowDir = join(projectRoot, ".pi", "flows", "flows", namespace, name);
+      const flowDir = join(scope === "user" ? userRoot! : join(projectRoot, ".pi", "flows"), "flows", namespace, name);
       const filePath = join(flowDir, "flow.yaml");
       const command = `${namespace}:${name}`;
 

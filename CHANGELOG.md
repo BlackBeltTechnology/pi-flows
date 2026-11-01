@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent validation no longer knows role names; it only checks ref syntax and `:thinking` levels. `AgentConfig.model` is optional; new `AgentConfig.modelRefs`.
 - Built-in agents (`flow-decision`, `project-context-reader`) now work without pi-agent-dashboard via the session-model fallback.
 
+- **User-level flows and agents** (`user-flow-location`): discovered from `<agentDir>/flows/{flows,agents}/`; precedence project > user > package > built-in. `/flows` and `flow_agents list` show a `project | user | package | built-in` source label (`flow_agents` `source_type` `local` is now `project`). `flow_write` and `flow_agents write` accept `scope: "project" | "user"`. `/flows:delete` names the deleted path and refuses package/built-in flows.
+
 ## [v0.8.1] - 2026-10-30
 
 ### Changed

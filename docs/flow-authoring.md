@@ -864,13 +864,18 @@ Rules:
 |---------|----------|---------|
 | Built-in agents | `pi-flows/agents/` | `*.md` (non-recursive) |
 | Project-local agents | `.pi/flows/agents/` | `*.md` (non-recursive) |
+| User agents | `<agentDir>/flows/agents/` (default `~/.pi/agent`, honours `PI_CODING_AGENT_DIR`) | `*.md` (non-recursive) |
 | Package agents | Registered via `flow:register-agents-dir` | `*.md` |
 | Built-in flows | `pi-flows/flows/` | `<namespace>/<name>/flow.yaml` |
 | Project-local flows | `.pi/flows/flows/` | `<namespace>/<name>/flow.yaml` |
+| User flows | `<agentDir>/flows/flows/` | `<namespace>/<name>/flow.yaml` |
 | Package flows | Registered via `flow:register-flows-dir` | `<namespace>/<name>/flow.yaml` |
 | Skills | Registered via `flow:register-skills-dir` | `<name>/SKILL.md` |
 
 **Override priority (highest to lowest):**
 1. Project-local (`.pi/flows/`)
-2. Package (registered via events)
-3. pi-flows built-ins
+2. User (`<agentDir>/flows/`)
+3. Package (registered via events)
+4. pi-flows built-ins
+
+**User flows.** Flows and agents in `<agentDir>/flows/` are available in every project and load without a trust prompt. Code handlers load from the flow's own directory, while `ctx.cwd`, the agents' working directory and run results stay in the project the flow started in. Keep run state under `ctx.cwd`, not next to the flow file, or projects will share it. `/flows` and `flow_agents` `list` label each item `project`, `user`, `package` or `built-in`. `flow_write` and `flow_agents` (`op: write`) accept `scope: "project" | "user"` (default `project`). `/flows:delete` removes a flow from the directory it was found in, names that path in its confirmation, and refuses package and built-in flows.

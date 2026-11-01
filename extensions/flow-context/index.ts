@@ -14,6 +14,9 @@ import { Type } from "typebox";
 import { readFileSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { projectRuns } from "../flow-engine/flow-persist.js";
+import { classifySource, type SourceKind } from "../flow-engine/discovery.js";
+import { getDiscoveredFlows, getExtraFlowsDirs, userFlowsRoot } from "../flow-engine/index.js";
+import type { FlowConfig } from "../flow-engine/types.js";
 
 function getFlowResultNames(resultsDir: string): string[] {
   if (!existsSync(resultsDir)) return [];
@@ -26,37 +29,41 @@ function getFlowResultNames(resultsDir: string): string[] {
   }
 }
 
-function getFlowFiles(projectRoot: string): { name: string; path: string }[] {
-  const flowFiles: { name: string; path: string }[] = [];
+export interface FlowFileEntry {
+  name: string;
+  path: string;
+  source: SourceKind;
+}
 
-  // Saved flows — scan .pi/flows/flows/ with one level of subfolders
-  const savedFlowsDir = join(projectRoot, ".pi", "flows", "flows");
-  if (existsSync(savedFlowsDir)) {
-    try {
-      for (const entry of readdirSync(savedFlowsDir)) {
-        const entryPath = join(savedFlowsDir, entry);
-        if (entry.endsWith(".yaml")) {
-          // Top-level flow file
-          flowFiles.push({ name: entry.replace(".yaml", ""), path: entryPath });
-        } else {
-          // Check for subfolder (one level deep only)
-          try {
-            const stat = statSync(entryPath);
-            if (stat.isDirectory()) {
-              for (const sub of readdirSync(entryPath)) {
-                if (sub.endsWith(".yaml")) {
-                  const name = `${entry}:${sub.replace(".yaml", "")}`;
-                  flowFiles.push({ name, path: join(entryPath, sub) });
-                }
-              }
-            }
-          } catch { /* ignore */ }
-        }
-      }
-    } catch { /* ignore */ }
-  }
+/** Discovered flows with their source label (project | user | package | built-in). */
+export function listFlowEntries(
+  flows: Map<string, FlowConfig>,
+  roots: { projectRoot: string; userRoot?: string; extraDirs?: string[] },
+): FlowFileEntry[] {
+  return [...flows.values()].map((f) => ({
+    name: f.name,
+    path: f.source,
+    source: classifySource(f.source, roots),
+  }));
+}
 
-  return flowFiles;
+/** Where a flow may be deleted from: null when allowed, else the refusal message. */
+export function deleteRefusal(entry: FlowFileEntry): string | null {
+  if (entry.source === "project" || entry.source === "user") return null;
+  return `Flow "${entry.name}" comes from a ${entry.source} source and cannot be deleted.`;
+}
+
+/** Confirmation body naming the directory that will be removed. */
+export function deleteConfirmation(entry: FlowFileEntry): string {
+  return `Removes ${dirname(entry.path)} (${entry.source})`;
+}
+
+function getFlowFiles(projectRoot: string): FlowFileEntry[] {
+  return listFlowEntries(getDiscoveredFlows(), {
+    projectRoot,
+    userRoot: userFlowsRoot(),
+    extraDirs: getExtraFlowsDirs(),
+  });
 }
 
 function flowResultCompletions(resultsDir: string, prefix: string): AutocompleteItem[] | null {
@@ -79,6 +86,7 @@ function deleteFlowFiles(
   projectRoot: string,
   flowName: string,
   flowPath: string,
+  source: SourceKind = "project",
 ): { success: boolean; error?: string } {
   // Read flow before deletion to identify agent references
   let agentNames: string[] = [];
@@ -99,9 +107,10 @@ function deleteFlowFiles(
     return { success: false, error: `Failed to delete flow: ${err.message}` };
   }
 
-  // Delete associated custom agents in .pi/flows/agents/
+  // Delete associated custom agents in .pi/flows/agents/ (project flows only;
+  // user agents are never auto-deleted)
   const piAgentsDir = join(projectRoot, ".pi", "flows", "agents");
-  if (existsSync(piAgentsDir)) {
+  if (source === "project" && existsSync(piAgentsDir)) {
     for (const agentName of agentNames) {
       const agentPath = join(piAgentsDir, `${agentName}.md`);
       try {
@@ -149,7 +158,7 @@ export function activate(pi: ExtensionAPI) {
     const matching = flowFiles.find(f => f.name === flowName);
     if (!matching) return;
 
-    deleteFlowFiles(pi, projectRoot, flowName, matching.path);
+    deleteFlowFiles(pi, projectRoot, flowName, matching.path, matching.source);
   });
 
   // -- flow_results tool — LLM-callable access to flow results ----------------
@@ -359,7 +368,7 @@ export function activate(pi: ExtensionAPI) {
         if (topAction === "List flows") {
           const allNames = [...new Set([...names, ...flowFiles.map(f => f.name)])];
           ctx.ui.notify(
-            `Available flows:\n${allNames.map(f => `  • ${f}`).join("\n")}\n\n` +
+            `Available flows:\n${allNames.map(f => { const e = flowFiles.find(x => x.name === f); return `  • ${f}${e ? ` [${e.source}]` : ""}`; }).join("\n")}\n\n` +
             `Run a flow with its /<name> command. Use /flows <name> for actions. Set \`flows.editFlow: true\` in .pi/settings.json to create/edit flows here.`,
             "info",
           );
@@ -390,13 +399,18 @@ export function activate(pi: ExtensionAPI) {
       if (action === "inject") {
         pi.sendUserMessage(`Read the flow results for "${name}"`);
       } else if (action === "delete") {
-        const confirmed = await ctx.ui.confirm(`Delete flow "${name}"?`, "");
+        const refusal = matchingFlow ? deleteRefusal(matchingFlow) : null;
+        if (refusal) {
+          ctx.ui.notify(refusal, "warning");
+          return;
+        }
+        const confirmed = await ctx.ui.confirm(`Delete flow "${name}"?`, matchingFlow ? deleteConfirmation(matchingFlow) : "");
         if (!confirmed) {
           ctx.ui.notify("Cancelled.", "warning");
           return;
         }
         if (matchingFlow) {
-          const result = deleteFlowFiles(pi, projectRoot, name, matchingFlow.path);
+          const result = deleteFlowFiles(pi, projectRoot, name, matchingFlow.path, matchingFlow.source);
           if (result.success) {
             ctx.ui.notify(`Flow "${name}" deleted.`, "info");
           } else {
@@ -456,7 +470,7 @@ export function activate(pi: ExtensionAPI) {
         const deleteItems: SelectItem[] = allNames.map((n) => ({
           value: n,
           label: n,
-          description: flowNameSet.has(n) ? "Flow file" : "Result only",
+          description: flowNameSet.has(n) ? `Flow file (${flowFiles.find(f => f.name === n)!.source})` : "Result only",
         }));
 
         const { selectOverlay } = await import("../shared/select-overlay.js");
@@ -470,14 +484,20 @@ export function activate(pi: ExtensionAPI) {
       const flowFiles = getFlowFiles(projectRoot);
       const matchingFlow = flowFiles.find(f => f.name === name);
 
-      const confirmed = await ctx.ui.confirm(`Delete flow "${name}"?`, "");
+      const refusal = matchingFlow ? deleteRefusal(matchingFlow) : null;
+      if (refusal) {
+        ctx.ui.notify(refusal, "warning");
+        return;
+      }
+
+      const confirmed = await ctx.ui.confirm(`Delete flow "${name}"?`, matchingFlow ? deleteConfirmation(matchingFlow) : "");
       if (!confirmed) {
         ctx.ui.notify("Cancelled.", "warning");
         return;
       }
 
       if (matchingFlow) {
-        const result = deleteFlowFiles(pi, projectRoot, name, matchingFlow.path);
+        const result = deleteFlowFiles(pi, projectRoot, name, matchingFlow.path, matchingFlow.source);
         if (result.success) {
           ctx.ui.notify(`Flow "${name}" deleted.`, "info");
         } else {
