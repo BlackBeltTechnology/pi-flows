@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change add-node-resolvable-entry. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Package is Node-resolvable as an ES module
 
 `pi-flows/package.json` SHALL declare `"type": "module"`, `"main": "./extensions/index.ts"`, and `"exports": { ".": "./extensions/index.ts" }`. The entry path SHALL be the same file pi's own loader uses (the first entry in `pi.extensions`, after resolving the directory form).
@@ -56,22 +58,26 @@ The `./testing` subpath exists so a downstream consumer can resolve the flow-tes
 - **WHEN** the published tarball is inspected (`npm pack --dry-run`)
 - **THEN** `__tests__/` SHALL NOT be included in the package payload, and `extensions/flow-engine/testing.ts` SHALL be included.
 
-### Requirement: Declares supported peer version range
+### Requirement: Declares supported peer version range across pi 0.84+ and 1.x
 
-`pi-flows/package.json` SHALL declare `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` in `peerDependencies` with the range `>=0.84.1 <1.0.0`. The range SHALL admit every host on the 0.84, 0.85, and 0.86 lines (and any later pre-1.0.0 line) while excluding 1.0.0 and above. No caret (`^`) form SHALL be used for these three peers, because a caret pinned to a `0.x` version narrows to a single minor line and would exclude newer supported hosts.
+`pi-flows/package.json` SHALL declare `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` in `peerDependencies` with the range `>=0.84.1 <2.0.0`. The range SHALL admit every host on the 0.84 line and later, including every 1.x line, while excluding 2.0.0 and above. No caret (`^`) form SHALL be used for these three peers. `pi-flows/package.json` SHALL declare `typebox` (not `@sinclair/typebox`) as a peer with a range satisfied by the TypeBox versions those hosts ship (1.3.7 on 0.84.1, 1.3.27 on 1.0.2), and SHALL NOT declare `@sinclair/typebox` in `dependencies` or `peerDependencies`.
 
 #### Scenario: 0.84 host satisfies the peer range
 
-- **WHEN** a consumer installs `pi-flows` on a host providing `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` at `0.84.1`
-- **THEN** the peer range SHALL be satisfied and the install SHALL NOT report an unmet peer dependency.
+- **WHEN** a consumer installs `pi-flows` on a host providing the three `@earendil-works/*` peers at `0.84.1` and `typebox` at `1.3.7`
+- **THEN** the peer ranges SHALL be satisfied and the install SHALL NOT report an unmet peer dependency.
 
-#### Scenario: 0.86 host satisfies the peer range
+#### Scenario: 1.0.2 host satisfies the peer range
 
-- **WHEN** a consumer installs `pi-flows` on a host providing the three `@earendil-works/*` peers at `0.86.1`
-- **THEN** the peer range SHALL be satisfied and the install SHALL NOT report an unmet peer dependency.
+- **WHEN** a consumer installs `pi-flows` on a host providing the three `@earendil-works/*` peers at `1.0.2` and `typebox` at `1.3.27`
+- **THEN** the peer ranges SHALL be satisfied and the install SHALL NOT report an unmet peer dependency.
 
-#### Scenario: A 1.0.0 host is excluded
+#### Scenario: A 2.0.0 host is excluded
 
-- **WHEN** a consumer installs `pi-flows` on a host providing any of the three `@earendil-works/*` peers at `1.0.0`
+- **WHEN** a consumer installs `pi-flows` on a host providing any of the three `@earendil-works/*` peers at `2.0.0`
 - **THEN** the peer range SHALL NOT be satisfied, so an incompatible major host is flagged rather than silently accepted.
 
+#### Scenario: No legacy TypeBox dependency
+
+- **WHEN** `pi-flows/package.json` is inspected
+- **THEN** `@sinclair/typebox` SHALL NOT appear in `dependencies` or `peerDependencies`, and `typebox` SHALL appear in `peerDependencies`.
