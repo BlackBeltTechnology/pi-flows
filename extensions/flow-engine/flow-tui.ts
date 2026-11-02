@@ -381,6 +381,18 @@ function wireDashboard(dashboard: any, ui: any) {
 
 // ---- TuiFlowObserver -------------------------------------------------------
 
+/**
+ * One-line summary of a routed decision, e.g. `decided fix via typesafe/jev-latest (0.91)`
+ * or `decided done via agent`. Confidence is shown for classifiers only.
+ * Returns undefined when nothing was routed.
+ */
+export function formatDecisionLine(event: DecisionEvent): string | undefined {
+  if (event.routedBy === undefined || event.label === undefined) return undefined;
+  const routed = event.attempts.find((a) => a.entry === event.routedBy && a.outcome === "ok");
+  const conf = event.routedBy !== "agent" && routed?.confidence !== undefined ? ` (${routed.confidence.toFixed(2)})` : "";
+  return `decided ${event.label} via ${event.routedBy}${conf}`;
+}
+
 export class TuiFlowObserver implements FlowObserver {
   private dashboard: any = null;
   private renderDashboard: (() => void) | undefined;
@@ -493,6 +505,11 @@ export class TuiFlowObserver implements FlowObserver {
       this.dashboard.onThinkingText(agentName, text);
       this.renderDashboard!();
     }
+  }
+
+  onDecision(event: DecisionEvent): void {
+    const line = formatDecisionLine(event);
+    if (line) this.pi.events.emit("flow:notify", { message: line, level: "info" });
   }
 
   onLoopIteration(
