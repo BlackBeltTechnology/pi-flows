@@ -27,8 +27,9 @@ describe("agent validation — model refs are opaque", () => {
   });
 
   it("invalid thinking suffix names level and valid levels", () => {
-    const d = modelDiags(md("model: anthropic/claude-haiku-4-5:extreme\n"));
+    const d = modelDiags(md("model: @fast:extreme\n"));
     expect(d.length).toBeGreaterThan(0);
+    expect(d[0].severity).toBe("error");
     expect(d[0].message).toContain("extreme");
     const all = d.map((x) => x.message + (x.suggestion ?? "")).join(" ");
     expect(all).toContain("minimal");

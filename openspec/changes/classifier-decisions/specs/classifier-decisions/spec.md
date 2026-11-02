@@ -109,12 +109,17 @@ An entry of the form `provider/model` SHALL resolve to a pi-ai classifier model 
 
 ### Requirement: Off-machine classification follows the System One privacy switch
 
-When the System One configuration sets `allowOffMachine: false`, a pi-ai classifier entry whose model does not run on this machine (a non-loopback base URL) SHALL fail with reason `off-machine` without sending any request. Without a System One configuration no extra gate SHALL apply.
+When `~/.pi/agent/system-one.json` or a trusted project's `.pi/system-one.json` sets `allowOffMachine: false`, a pi-ai classifier entry whose model does not run on this machine (a non-loopback base URL) SHALL fail with reason `off-machine` without sending any request. A project file SHALL only tighten this. The configuration SHALL be read on every flow run. Without a System One configuration no extra gate SHALL apply.
 
 #### Scenario: Hosted classifier blocked by privacy switch
 - **GIVEN** `~/.pi/agent/system-one.json` with `allowOffMachine: false` AND `decider: [openai/gpt-6-luna, agent]`
 - **WHEN** the step runs
 - **THEN** no request SHALL reach OpenAI AND the attempt SHALL fail with reason `off-machine`
+
+#### Scenario: Trusted project tightens the switch
+- **GIVEN** no user System One file AND a trusted project's `.pi/system-one.json` with `allowOffMachine: false`
+- **WHEN** a hosted pi-ai classifier entry is tried
+- **THEN** it SHALL fail with reason `off-machine` without sending a request
 
 #### Scenario: Local classifier allowed
 - **GIVEN** `allowOffMachine: false` AND a llama.cpp classifier on `127.0.0.1`

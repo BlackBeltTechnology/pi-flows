@@ -84,8 +84,13 @@ Agent validation SHALL NOT contain or check against any list of model role names
 
 #### Scenario: Invalid thinking suffix is reported
 
-- **WHEN** an agent with `model: anthropic/claude-haiku-4-5:extreme` is validated
-- **THEN** validation SHALL report a diagnostic naming the invalid level and listing the valid levels
+- **WHEN** an agent with `model: @fast:extreme` is validated
+- **THEN** validation SHALL report an error naming the invalid level and listing the valid levels
+
+#### Scenario: Literal id with a colon is not a thinking suffix
+
+- **WHEN** an agent with `model: ollama/llama3:8b` is validated
+- **THEN** validation SHALL report no diagnostic for the suffix, because a literal's non-level suffix is part of the model id
 
 ### Requirement: Write-time model resolution SHALL be advisory
 

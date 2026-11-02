@@ -24,11 +24,11 @@ describe("R1 — ':suffix' that is not a thinking level", () => {
     expect(errors(md("model: @fast:high\n"))).toEqual([]);
   });
 
-  it("spec scenario: literal :extreme still yields a diagnostic naming the level and valid levels", () => {
-    const d = validateAgentContent(md("model: anthropic/claude-haiku-4-5:extreme\n")).diagnostics;
-    expect(d.length).toBeGreaterThan(0);
-    expect(d[0].message).toContain("extreme");
-    expect(d.map((x) => x.message + (x.suggestion ?? "")).join(" ")).toContain("xhigh");
+  it("a literal id with a non-level suffix gets no diagnostic at all", () => {
+    for (const m of ["ollama/llama3:8b", "anthropic/claude-haiku-4-5:extreme"]) {
+      const d = validateAgentContent(md(`model: ${m}\n`)).diagnostics.filter((x) => /thinking|level/i.test(x.message));
+      expect(d, m).toEqual([]);
+    }
   });
 });
 
