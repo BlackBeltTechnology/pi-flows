@@ -4,7 +4,7 @@ Files in this area. Purposes left for the agent to author.
 
 | `abort-utils.ts` | `signalRejection`, `raceWithAbort`: reject pending work with `FlowCancelledError` when `AbortSignal` fires. |
 | `agent-parser.ts` | `parseAgentFile`/`parseAgentString`: frontmatter, access rules, outputs, body → `AgentConfig`; `model:` is a ref, list or omitted (`modelRefs`). |
-| `discovery.ts` | `discoverAll`: merge built-in, package, user and project agent/flow dirs (project wins); `classifySource` labels project|user|package|built-in. Returns configs + warnings. |
+| `discovery.ts` | `discoverAll`: merge built-in<package<user<project agent/flow dirs; `classifySource` labels project|user|package|built-in. Returns configs, warnings. |
 | `edit-flow-config.ts` | Resolve/persist `flows.editFlow` in `.pi/settings.json`: `readEditFlowFlag`, `isEditFlowEnabled`, `setEditFlowFlag`, `parseEditModeArg`. |
 | `edit-flow-reconcile.ts` | `makeEditFlowToolReconciler`: change-gated `flow_agents`/`flow_write` activation; `applyManageFlowsVisibility`: per-turn `manage-flows` prompt visibility. |
 | `execute-code-step.ts` | `executeCodeStep`: run `CodeStep`/`CodeDecisionStep` handlers; typed inputs, timeout/abort, output validation, failure classification. |
@@ -22,7 +22,7 @@ Files in this area. Purposes left for the agent to author.
 | `flow-tui.ts` | `setupFlowTui`, `TuiFlowObserver`, `EventEmitObserver`: render lifecycle, emit/persist `flow:*` events (`agent-started` has `modelFallback`; `flow:decision`). |
 | `flows-settings.ts` | `readFlowsSettings`: `flows.modelFallback` (default `session`), `flows.decisionAgent`, `flows.decider`; project over global. |
 | `guard.ts` | `createGuardExtension`: enforce allowed tools, `ask_user`, read/write/bash access, `finish` schema, declared outputs, post-finish lockout. |
-| `index.ts` | Activate engine: rediscovers per flow start; flow commands, tools, skills, gates, `flow:*` handlers; tracks `sessionModel`, `isProjectTrusted`; dispatches via `FlowManager`; `userFlowsRoot`. |
+| `index.ts` | Activate engine: rediscovers per flow start; flow commands, tools, skills, gates, `flow:*` handlers; tracks `sessionModel`, `isProjectTrusted`; `FlowManager` dispatch; `userFlowsRoot`. |
 | `model-roles.ts` | `resolveModel`: `@role`/literal/thinking suffix via `model:resolve`, then registry; `resolveAgentModel`: ordered refs → session-model fallback; errors keep resolver detail. |
 | `prompt-bus-access.ts` | Cache PromptBus request fn from `prompt:set-bus-request`: `setPromptBusRequest`, `hasPromptBus`, `promptBusRequest`, `listenForPromptBus`. |
 | `result-parser.ts` | `parseResult`: agent `<result>` XML → `ParsedResult`; `hasArtifactElement` detects nested artifact tags by dotted path. |

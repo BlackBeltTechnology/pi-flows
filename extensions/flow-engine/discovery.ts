@@ -2,7 +2,7 @@
 // Flow Engine -- Discovery
 //
 // Discovers agents and flows from package and registered directories.
-// Discovery: extra packages → pi-flows package → project-local.
+// Precedence (low → high): built-in → registered packages → user → project.
 // ---------------------------------------------------------------------------
 
 import type { AgentConfig, FlowConfig } from "./types.js";
@@ -23,7 +23,7 @@ export interface DiscoveryResult {
 // ---- Public API -----------------------------------------------------------
 
 // Discover all agents and flows from multiple tiers:
-// extra package dirs -> pi-flows package -> project-local (.pi/flows/)
+// built-in -> registered package dirs -> user -> project-local (.pi/flows/)
 export function discoverAll(
   packageRoot: string,
   projectRoot: string,
@@ -37,7 +37,13 @@ export function discoverAll(
 
   // --- Agents ---
 
-  // Extra package agents (registered by dependent packages via events)
+  // Built-in pi-flows agents: agents/*.md (lowest priority)
+  const packageAgentsDir = join(packageRoot, "agents");
+  for (const agent of discoverAgentsInDir(packageAgentsDir, warnings)) {
+    agents.set(agent.name, agent);
+  }
+
+  // Package agents (registered by dependent packages via events): override built-ins
   if (extraAgentsDirs) {
     for (const dir of extraAgentsDirs) {
       for (const agent of discoverAgentsInDir(dir, warnings)) {
@@ -46,27 +52,21 @@ export function discoverAll(
     }
   }
 
-  // pi-flows package agents: agents/*.md
-  const packageAgentsDir = join(packageRoot, "agents");
-  for (const agent of discoverAgentsInDir(packageAgentsDir, warnings)) {
-    agents.set(agent.name, agent);
-  }
-
   // --- Flows ---
 
-  // Extra package flows (registered by dependent packages via events)
+  // Built-in pi-flows flows (recursive; lowest priority)
+  const packageFlowsDir = join(packageRoot, "flows");
+  for (const flow of discoverFlowsInDir(packageFlowsDir, warnings)) {
+    flows.set(flow.name, flow);
+  }
+
+  // Package flows (registered by dependent packages via events): override built-ins
   if (extraFlowsDirs) {
     for (const dir of extraFlowsDirs) {
       for (const flow of discoverFlowsInDir(dir, warnings)) {
         flows.set(flow.name, flow);
       }
     }
-  }
-
-  // pi-flows package flows: flows/*.yaml (recursive)
-  const packageFlowsDir = join(packageRoot, "flows");
-  for (const flow of discoverFlowsInDir(packageFlowsDir, warnings)) {
-    flows.set(flow.name, flow);
   }
 
   // --- User tier (<agentDir>/flows): overrides packages + built-ins, loses to project ---
