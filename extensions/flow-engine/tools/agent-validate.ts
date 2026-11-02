@@ -9,6 +9,7 @@
 
 import type { Diagnostic } from "../types.js";
 import { VALID_THINKING_LEVELS } from "../model-roles.js";
+import { parseAgentString } from "../agent-parser.js";
 export type { Diagnostic };
 
 // ---- Known constants ------------------------------------------------------
@@ -31,6 +32,19 @@ const BASE_TOOLS = new Set([
   "ls",
   "bash",
 ]);
+
+/** Output names that collide with the `finish` tool's own fields. */
+export const RESERVED_FINISH_OUTPUTS = ["status", "summary", "files", "artifacts"];
+
+/** Error text for a reserved output name; `kind` is the reason it is reserved. */
+export function reservedOutputMessage(name: string, kind: "finish" | "branch"): { message: string; suggestion: string } {
+  return {
+    message: kind === "finish"
+      ? `Output "${name}" is reserved (finish tool field)`
+      : `Output "${name}" is reserved for routing on a decision agent`,
+    suggestion: `Use a different output name, e.g. "outcome"`,
+  };
+}
 
 // ---- Public validation function -------------------------------------------
 
@@ -255,6 +269,29 @@ export function validateAgentContent(
           message: `Invalid output identifier "${cleanName}"`,
           suggestion: "Output names must be alphanumeric with hyphens/underscores, starting with a letter or digit",
         });
+      }
+    }
+  }
+
+  // ---- 5c. Reserved output names (finish-tool fields) ---------------------
+
+  {
+    let declared: string[] = [];
+    try {
+      declared = (parseAgentString(content, "<validate>").outputs ?? []).map((o) => o.name);
+    } catch {
+      // malformed frontmatter is reported elsewhere
+    }
+    // Inline form (`outputs: [a, b]`) is not produced by the block parser.
+    const inline = fields.get("outputs")?.value.replace(/^\[|\]$/g, "") ?? "";
+    for (const part of inline.split(",")) {
+      const n = part.trim().replace(/^name:\s*/, "").replace(/^["']|["']$/g, "");
+      if (n) declared.push(n);
+    }
+    const line = (fields.get("outputs")?.line) ?? frontmatterStartLine + 1;
+    for (const name of new Set(declared)) {
+      if (RESERVED_FINISH_OUTPUTS.includes(name)) {
+        diagnostics.push({ line, severity: "error", ...reservedOutputMessage(name, "finish") });
       }
     }
   }

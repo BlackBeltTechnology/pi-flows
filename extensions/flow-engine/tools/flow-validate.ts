@@ -24,6 +24,7 @@ import type {
 } from "../types.js";
 import { ENTRY_FORMS, TRUST_MODES, isClassifierRefEntry, isValidEntry } from "../decider/chain.js";
 export type { Diagnostic };
+import { reservedOutputMessage } from "./agent-validate.js";
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
 
 // ---- Path-safe names ------------------------------------------------------
@@ -341,6 +342,26 @@ export function validateFlowContent(
         message: `decision_agent "${flow.decision_agent}" is not in the discovered agent catalog`,
         suggestion: "Ensure the agent exists before decision steps run, or remove decision_agent",
       });
+    }
+
+    // `branch` is the reserved routing key: decision agents must not declare it.
+    const decisionAgents = new Set<string>();
+    if (flow.decision_agent) decisionAgents.add(flow.decision_agent);
+    for (const step of flow.steps) {
+      if (step.stepType === "agent-decision" || step.stepType === "fork") {
+        const a = (step as AgentDecisionStep | ForkStep).agent;
+        if (a) decisionAgents.add(a);
+      }
+    }
+    for (const name of decisionAgents) {
+      if ((knownAgents.get(name)?.outputs ?? []).some((o) => o.name === "branch")) {
+        diagnostics.push({
+          line: 1,
+          severity: "error",
+          message: `Decision agent "${name}": ${reservedOutputMessage("branch", "branch").message}`,
+          suggestion: reservedOutputMessage("branch", "branch").suggestion,
+        });
+      }
     }
 
     for (const step of flow.steps) {
