@@ -479,6 +479,8 @@ export function activate(pi: ExtensionAPI) {
       description: currentFlow?.description || `Run ${name} flow`,
       handler: async (args, ctx: any) => {
         if (ctx?.model) sessionModel = ctx.model;
+        // Fresh definitions per run: re-read agent/flow files (no /reload needed).
+        if (!flowManager.isRunning) init(pkgRoot, projectRoot);
         const flow = flows.get(name);
         if (!flow) {
           pi.events.emit("flow:notify", { message: flowNotFoundMessage(name), level: "error" });
@@ -542,6 +544,8 @@ export function activate(pi: ExtensionAPI) {
   }
 
   async function runFlowByName(flowName: string, opts?: { task?: string; flowInput?: Record<string, unknown> }) {
+    // Fresh definitions per run: re-read agent/flow files (no /reload needed).
+    if (!flowManager.isRunning) init(pkgRoot, projectRoot);
     const flowConfig = flows.get(flowName);
     if (!flowConfig) {
       emitDispatchRejection(flowName, flowNotFoundMessage(flowName));
