@@ -3,7 +3,7 @@
 // See change: classifier-decisions (D2, D7).
 // ---------------------------------------------------------------------------
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ParentModelSnapshot } from "../model-roles.js";
@@ -33,31 +33,32 @@ interface PrivacyGate {
   isLoopbackHost: (hostname: string) => boolean;
 }
 
-const gates = new WeakMap<object, Promise<PrivacyGate>>();
-
 /**
  * System One's `allowOffMachine: false` also blocks hosted pi-ai classifiers.
- * Without a System One configuration file there is no gate. Read once per run.
+ * Without a System One configuration file there is no gate. Evaluated fresh for
+ * every decision (never cached across runs) so config edits and the run's own
+ * project `.pi/system-one.json` (trusted projects only) are honoured. The
+ * library ignores `allowOffMachine` in project files, so a project file that
+ * sets it to `false` is read here: tightening the switch is always safe.
  */
-function privacyGate(env: DeciderEnv): Promise<PrivacyGate> {
-  const key = env.pi ?? env;
-  let p = gates.get(key);
-  if (!p) {
-    p = (async (): Promise<PrivacyGate> => {
-      if (!existsSync(join(homedir(), ".pi", "agent", "system-one.json"))) {
-        return { blockOffMachine: false, isLoopbackHost: localLoopback };
-      }
-      try {
-        const lib = await loadSystemOneLib();
-        const cfg = lib.loadConfig({ project: { cwd: env.cwd, trusted: env.projectTrusted === true } });
-        return { blockOffMachine: cfg.allowOffMachine === false, isLoopbackHost: lib.isLoopbackHost ?? localLoopback };
-      } catch {
-        return { blockOffMachine: false, isLoopbackHost: localLoopback };
-      }
-    })();
-    gates.set(key, p);
+async function privacyGate(env: DeciderEnv): Promise<PrivacyGate> {
+  const open: PrivacyGate = { blockOffMachine: false, isLoopbackHost: localLoopback };
+  const trusted = env.projectTrusted === true;
+  const projectFile = join(env.cwd, ".pi", "system-one.json");
+  const hasUser = existsSync(join(homedir(), ".pi", "agent", "system-one.json"));
+  const hasProject = trusted && existsSync(projectFile);
+  if (!hasUser && !hasProject) return open;
+  try {
+    const lib = await loadSystemOneLib();
+    const cfg = lib.loadConfig({ project: { cwd: env.cwd, trusted } });
+    let block = cfg.allowOffMachine === false;
+    if (!block && hasProject) {
+      try { block = JSON.parse(readFileSync(projectFile, "utf8"))?.allowOffMachine === false; } catch { /* ignore */ }
+    }
+    return { blockOffMachine: block, isLoopbackHost: lib.isLoopbackHost ?? localLoopback };
+  } catch {
+    return open;
   }
-  return p;
 }
 
 export interface EntryRunnerArgs {
