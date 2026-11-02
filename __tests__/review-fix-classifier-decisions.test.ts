@@ -121,3 +121,36 @@ describe("C2 — decider timeouts (design D9)", () => {
     expect(await settled).toMatch(/15000 ms/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// C3 — pi too old for classifier models
+// ---------------------------------------------------------------------------
+import { createPiAiEntry } from "../extensions/flow-engine/decider/pi-ai.js";
+import { registerFlowWriteTool } from "../extensions/flow-engine/tools/flow-write.js";
+
+const TOO_OLD = "pi too old: classifier models need pi >= 0.99.0";
+
+describe("C3 — pi too old", () => {
+  it("pi-ai entry fails with the version reason when the registry has no classifier API", async () => {
+    for (const registry of [{}, { getModelOfType: () => ({}) }, undefined]) {
+      const r = await createPiAiEntry({ ref: "typesafe/jev-latest", registry, blockOffMachine: false, isLoopbackHost: () => true })(q, sig);
+      expect(r).toMatchObject({ ok: false, outcome: "error", reason: TOO_OLD });
+    }
+  });
+
+  it("flow_write warns (does not silently skip) when the registry lacks getModelOfType", async () => {
+    const root = mkdtempSync(join(tmpdir(), "c3-"));
+    const tools = new Map<string, any>();
+    const pi: any = { registerTool: (t: any) => tools.set(t.name, t), events: { emit: () => {} } };
+    registerFlowWriteTool(pi, () => new Map([["a", { name: "a" } as any]]), root);
+    const flow =
+      "name: x\ndescription: d\ndecider: [typesafe/jev-latest, agent]\nsteps:\n  - id: s\n    type: agent\n    agent: a\n";
+    const out = JSON.parse((await tools.get("flow_write").execute("1", { name: "f", content: flow }, undefined, undefined, { modelRegistry: {} })).content[0].text);
+    expect(out.written).toBe(true);
+    expect(out.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ severity: "warning", message: expect.stringContaining(TOO_OLD) })]));
+
+    const plain = "name: y\ndescription: d\nsteps:\n  - id: s\n    type: agent\n    agent: a\n";
+    const out2 = JSON.parse((await tools.get("flow_write").execute("1", { name: "g", content: plain }, undefined, undefined, { modelRegistry: {} })).content[0].text);
+    expect(JSON.stringify(out2.diagnostics)).not.toContain("pi too old");
+  });
+});

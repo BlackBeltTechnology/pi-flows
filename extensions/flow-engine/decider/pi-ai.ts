@@ -5,6 +5,9 @@
 
 import type { ClassifierEntry, EntryResult } from "./types.js";
 
+/** Classifier models arrive with pi 0.99.0 (`modelRegistry.classify` / `getModelOfType`). */
+export const PI_TOO_OLD = "pi too old: classifier models need pi >= 0.99.0";
+
 export interface PiAiEntryOptions {
   /** `provider/model`, e.g. `typesafe/jev-latest`. */
   ref: string;
@@ -20,6 +23,9 @@ export function createPiAiEntry(o: PiAiEntryOptions): ClassifierEntry {
   const provider = o.ref.slice(0, slash);
   const modelId = o.ref.slice(slash + 1);
   return async (q, signal): Promise<EntryResult> => {
+    if (typeof o.registry?.getModelOfType !== "function" || typeof o.registry?.classify !== "function") {
+      return { ok: false, outcome: "error", reason: PI_TOO_OLD };
+    }
     let model: any;
     try {
       model = o.registry?.getModelOfType?.("classifier", provider, modelId);

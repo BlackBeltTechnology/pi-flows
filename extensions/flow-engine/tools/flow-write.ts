@@ -14,6 +14,7 @@ import type { AgentConfig } from "../types.js";
 import { validateFlowContent, unsafeNameError } from "./flow-validate.js";
 import { generateCodeHandlers } from "../flow-generate.js";
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
+import { PI_TOO_OLD } from "../decider/pi-ai.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -71,15 +72,21 @@ export function registerFlowWriteTool(
       }
 
       // Run validation first
-      // Classifier-model check needs the session registry; skipped without one.
+      // Classifier-model check needs the session registry. Without
+      // `getModelOfType` (pi < 0.99.0) it cannot run — warn rather than skip silently.
       const registry: any = (ctx as any)?.modelRegistry;
-      const isKnownClassifier = typeof registry?.getModelOfType === "function"
+      const canCheck = typeof registry?.getModelOfType === "function";
+      let classifierCheckSkipped = false;
+      const isKnownClassifier = canCheck
         ? (ref: string) => {
             const i = ref.indexOf("/");
             try { return !!registry.getModelOfType("classifier", ref.slice(0, i), ref.slice(i + 1)); } catch { return true; }
           }
-        : undefined;
+        : (_ref: string) => { classifierCheckSkipped = true; return true; };
       const validation = validateFlowContent(content, getDiscoveredAgents, isKnownClassifier);
+      if (classifierCheckSkipped) {
+        validation.diagnostics.push({ line: 1, severity: "warning", message: PI_TOO_OLD });
+      }
       if (!validation.valid) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ written: false, diagnostics: validation.diagnostics }, null, 2) }],
