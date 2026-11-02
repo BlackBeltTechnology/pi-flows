@@ -183,6 +183,7 @@ function parseForkStep(raw: any, source: string): ForkStep {
   if (raw.multiSelect === true || raw.multiSelect === "true") step.multiSelect = true;
   if (raw.agent) step.agent = String(raw.agent);
   if (raw.task) step.task = String(raw.task);
+  if (raw.on_error) step.on_error = String(raw.on_error);
 
   return step;
 }
@@ -198,6 +199,7 @@ function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
   };
   if (branchMeans) step.branchMeans = branchMeans;
   if (raw.agent) step.agent = String(raw.agent);
+  if (raw.on_error) step.on_error = String(raw.on_error);
   if (raw.decider !== undefined) step.decider = parseDecider(raw.decider, source);
   const state = parseState(raw.state, raw.id, source);
   if (state) step.state = state;

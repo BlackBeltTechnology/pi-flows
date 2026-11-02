@@ -11,15 +11,15 @@ Files in this area. Purposes left for the agent to author.
 | `execution.ts` | `spawnAgent`: isolated agent session; resolves models (`resolvedModel` used directly, else `resolveAgentModel`), context, skills, guards, finish latch, typed outputs, retries. |
 | `failure.ts` | `classifyAgentOutcome`/`classifyThrownError`; `resolveRouteOutcome` applies `on_error` routing. |
 | `finish-latch.ts` | `FinishLatch`: pair finish tool start/end by tool-call id; latch first successful finish params once. |
-| `flow-execution.ts` | `runFlow`: schedules DAG segments, forks, loops, code nodes; pre-resolves models, `pickDecisionAgent`; `runDecision` routes via the decider chain (no first-branch fallback). |
+| `flow-execution.ts` | `runFlow`: schedules DAG segments, forks, loops, code nodes; `pickDecisionAgent`; `runDecision` routes via the decider chain; exhausted = soft, `on_error` routes. |
 | `flow-generate.ts` | `generateCodeHandlers`: write `.ts.default` code-node scaffolds; report `Input`/`Output` drift `Diagnostic`s. |
 | `flow-io-tui.ts` | `TuiFlowIOAdapter` prompt queues/overlays/auto decisions; `HeadlessFlowIOAdapter` deterministic fallback responses. |
 | `flow-io.ts` | `FlowIOAdapter`, `FlowObserver` (incl. `onDecision`), `AskUserExtra`, `AskUserResult` contracts for prompts, notifications and lifecycle events. |
 | `flow-manager.ts` | `FlowManager`: one active run; mints `runId`, wires adapter/observers to `runFlow`, snapshots session model, flows settings, `projectTrusted`; forwards `onDecision`. |
-| `flow-parser-yaml.ts` | `parseFlowYamlFile`/`parseFlowYamlString`: validate inputs and step shapes; `decision_agent`, `decider`, `state`, `{ to, means }` branches. |
+| `flow-parser-yaml.ts` | `parseFlowYamlFile`/`parseFlowYamlString`: validate inputs and step shapes; `decision_agent`, `decider`, `state`, `on_error`, `{ to, means }` branches. |
 | `flow-persist.ts` | `FlowEventPersister`: persist `flow:*` events as session entries (`flow:decision` → `flow_decision`); find orphaned runs; project run/node state. |
 | `flow-prompt.ts` | `emitPromptAndAwait`: emit `flow:prompt-request`; first `flow:prompt-response` or PromptBus result wins; cancel on timeout. |
-| `flow-tui.ts` | `setupFlowTui`, `TuiFlowObserver`, `EventEmitObserver`: render lifecycle, emit/persist `flow:*` events (`agent-started` has `modelFallback`; `flow:decision`). |
+| `flow-tui.ts` | `setupFlowTui`, `TuiFlowObserver`, `EventEmitObserver`: render lifecycle, emit/persist `flow:*` events (`agent-started` has `modelFallback`; `flow:decision`); `formatDecisionLine`. |
 | `flows-settings.ts` | `readFlowsSettings`: `flows.modelFallback` (default `session`), `flows.decisionAgent`, `flows.decider`; project over global. |
 | `guard.ts` | `createGuardExtension`: enforce allowed tools, `ask_user`, read/write/bash access, `finish` schema, declared outputs, post-finish lockout. |
 | `index.ts` | Activate engine: rediscovers per flow start; flow commands, tools, skills, gates, `flow:*` handlers; tracks `sessionModel`, `isProjectTrusted`; `FlowManager`; `userFlowsRoot`. |

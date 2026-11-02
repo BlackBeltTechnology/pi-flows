@@ -718,6 +718,8 @@ function decisionAgentMissing(pick: { name: string; source: string }): AgentResu
     success: false, output: msg, stderr: msg, exitCode: 1,
     result: { status: "error" as const, files: [], artifacts: "", summary: msg },
     toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+    outcome: "soft",
+    failureInfo: { outcome: "soft", message: msg, source: "decision_agent_missing" },
   };
 }
 
@@ -898,7 +900,7 @@ async function decideForkBranch(
   });
 
   if (run.label === undefined) {
-    return { stepResult: { agentResult: run.result }, exhausted: true };
+    return { stepResult: routeExhaustedDecision(run.result, step.on_error), exhausted: true };
   }
   const branch = run.label;
   ctx.forks[step.id] = { answer: branch, notes: customText };
@@ -1120,7 +1122,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     },
   });
 
-  if (run.label === undefined) return { agentResult: run.result };
+  if (run.label === undefined) return routeExhaustedDecision(run.result, step.on_error);
 
   // A backward branch target loops (bounded by max_iterations); a forward target exits.
   const { nextStepId } = routeDecisionBranch(step, ctx, options, run.label);
@@ -1128,6 +1130,24 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
 }
 
 // ---- Decider chain (change: classifier-decisions) ---------------------------
+
+const MAX_REASON_CHARS = 200;
+const capReason = (s: string): string => (s.length > MAX_REASON_CHARS ? `${s.slice(0, MAX_REASON_CHARS - 1)}…` : s);
+
+/**
+ * Route an exhausted decision. Soft + `on_error` → jump there; anything else
+ * (hard, or soft without `on_error`) escalates to a flow halt, like code steps.
+ */
+function routeExhaustedDecision(result: AgentResult, onError: string | undefined): StepResult {
+  if (resolveRouteOutcome(result, onError) === "soft") return { agentResult: result, nextStepId: onError };
+  result.outcome = "hard";
+  result.failureInfo = {
+    outcome: "hard",
+    message: result.failureInfo?.message ?? result.output ?? "Hard failure",
+    source: result.failureInfo?.source ?? "decision_exhausted",
+  };
+  return { agentResult: result, nextStepId: undefined };
+}
 
 interface RunDecisionArgs {
   step: ForkStep | AgentDecisionStep;
@@ -1191,8 +1211,9 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
       if (typeof branch === "string" && branch) {
         return { ok: true, authoritative: true, answer: { label: branch, confidence: 1 }, payload: result };
       }
+      // Never echo the agent's output/summary: the reason lands in `flow:decision`.
       const why = result.success === false
-        ? `the decision agent failed: ${result.result.summary || result.output}`
+        ? capReason(`the decision agent failed: ${result.failureInfo?.message ?? "no usable result"}`)
         : "the decision agent finished without a branch";
       return { ok: false, outcome: "invalid-label", reason: why, payload: result };
     },
@@ -1220,12 +1241,15 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
   const payload = outcome.payload as AgentResult | undefined;
   if (!outcome.ok) {
     const msg = `${step.stepType} "${step.id}": no decider produced a trusted, valid label.\n${describeAttempts(outcome.attempts, labels)}`;
+    const failedOutcome = payload?.outcome === "hard" ? "hard" : "soft";
     const failed: AgentResult = {
       success: false, output: msg, stderr: msg, exitCode: 1,
       result: { status: "error" as const, files: [], artifacts: "", summary: msg },
       toolCalls: payload?.toolCalls ?? [], duration: payload?.duration ?? 0, tokens: payload?.tokens ?? { input: 0, output: 0 },
-      outcome: "hard",
-      failureInfo: { outcome: "hard", message: msg, source: "decision_exhausted" },
+      // Soft, unless the decision agent itself hard-failed (e.g. terminal API
+      // error): soft lets `on_error` route; the caller escalates when unset.
+      outcome: failedOutcome,
+      failureInfo: { outcome: failedOutcome, message: msg, source: "decision_exhausted" },
     };
     if (!payload) {
       // No agent ran, so observers never saw the step: show the failure on it.

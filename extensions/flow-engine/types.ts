@@ -214,6 +214,7 @@ export interface ForkStep {
   branches: Record<string, string>; // option -> step ID mapping
   allowCustom?: boolean;  // Appends "Other (describe)" option. Custom freetext routes through the fork's agent. Requires agent: field.
   multiSelect?: boolean;
+  on_error?: string;      // Route to step ID when the decider chain is exhausted (autonomous / auto-decide)
   agent?: string;         // Agent to use when auto-deciding (autonomous mode)
   task?: string;          // Context/task for the agent when auto-deciding
   decider?: DeciderSpec;  // Decider chain for autonomous / auto-decide / "Other"
@@ -228,6 +229,7 @@ export interface AgentDecisionStep {
   task: string; // Task for the decision agent
   branches: Record<string, string>; // branch label -> step ID mapping
   max_iterations?: number; // Required only when a branch forms a backward (loop) edge
+  on_error?: string; // Route to step ID when the decider chain is exhausted
   decider?: DeciderSpec; // Decider chain (default: flow decider → flows.decider → [agent])
   state?: Record<string, string>; // Template-expanded classifier state (default { task })
   branchMeans?: Record<string, string>; // label -> criterion, from the `{ to, means }` branch form
