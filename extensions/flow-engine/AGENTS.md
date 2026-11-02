@@ -16,14 +16,14 @@ Files in this area. Purposes left for the agent to author.
 | `flow-io-tui.ts` | `TuiFlowIOAdapter` prompt queues/overlays/auto decisions; `HeadlessFlowIOAdapter` deterministic fallback responses. |
 | `flow-io.ts` | `FlowIOAdapter`, `FlowObserver` (incl. `onDecision`), `AskUserExtra`, `AskUserResult` contracts for prompts, notifications and lifecycle events. |
 | `flow-manager.ts` | `FlowManager`: one active run; mints `runId`, wires adapter/observers to `runFlow`, snapshots session model, flows settings, `projectTrusted`; forwards `onDecision`. |
-| `flow-parser-yaml.ts` | `parseFlowYamlFile`/`parseFlowYamlString`: validate inputs and step shapes; `decision_agent`, optional `agent` on agent-decision, `decider`, `state`, `{ to, means }` branches. |
+| `flow-parser-yaml.ts` | `parseFlowYamlFile`/`parseFlowYamlString`: validate inputs and step shapes; `decision_agent`, `decider`, `state`, `{ to, means }` branches. |
 | `flow-persist.ts` | `FlowEventPersister`: persist `flow:*` events as session entries (`flow:decision` → `flow_decision`); find orphaned runs; project run/node state. |
 | `flow-prompt.ts` | `emitPromptAndAwait`: emit `flow:prompt-request`; first `flow:prompt-response` or PromptBus result wins; cancel on timeout. |
-| `flow-tui.ts` | `setupFlowTui`, `TuiFlowObserver`, `EventEmitObserver`: render lifecycle, emit/persist `flow:*` events (`agent-started` carries `modelFallback`; `onDecision` emits `flow:decision`). |
+| `flow-tui.ts` | `setupFlowTui`, `TuiFlowObserver`, `EventEmitObserver`: render lifecycle, emit/persist `flow:*` events (`agent-started` has `modelFallback`; `flow:decision`). |
 | `flows-settings.ts` | `readFlowsSettings`: `flows.modelFallback` (default `session`), `flows.decisionAgent`, `flows.decider`; project over global. |
 | `guard.ts` | `createGuardExtension`: enforce allowed tools, `ask_user`, read/write/bash access, `finish` schema, declared outputs, post-finish lockout. |
-| `index.ts` | Activate engine: discovery, flow commands, tools, skills, gates, `flow:*` handlers; tracks `sessionModel` and `ctx.isProjectTrusted`; dispatches via `FlowManager`; exports `userFlowsRoot`. |
-| `model-roles.ts` | `resolveModel`: `@role`/literal/thinking suffix via `model:resolve`, then registry literal; `resolveAgentModel`: ordered refs → session-model fallback, errors keep resolver detail. |
+| `index.ts` | Activate engine: discovery, flow commands, tools, skills, gates, `flow:*` handlers; tracks `sessionModel`, `isProjectTrusted`; dispatches via `FlowManager`; `userFlowsRoot`. |
+| `model-roles.ts` | `resolveModel`: `@role`/literal/thinking suffix via `model:resolve`, then registry; `resolveAgentModel`: ordered refs → session-model fallback; errors keep resolver detail. |
 | `prompt-bus-access.ts` | Cache PromptBus request fn from `prompt:set-bus-request`: `setPromptBusRequest`, `hasPromptBus`, `promptBusRequest`, `listenForPromptBus`. |
 | `result-parser.ts` | `parseResult`: agent `<result>` XML → `ParsedResult`; `hasArtifactElement` detects nested artifact tags by dotted path. |
 | `testing.ts` | Faux harness: `scriptFinish`/`scriptError`, `registerFauxOnRuntime`, `spawnFaux`, `runFaux`, `runFauxFlow`; options: parent model, fallback, decider, `entryOverrides`, `onDecision`. |
