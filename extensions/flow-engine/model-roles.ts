@@ -328,8 +328,8 @@ export function resolveAgentModel(
     refs.length === 0 ? "no-model-declared" : skipped[0]?.reason ?? "no-resolver";
   const requestedText = refs.length > 0 ? refs.join(", ") : "(no model declared)";
 
+  const detail = skipped.map((s) => s.message).join("\n");
   if (options.modelFallback === "error") {
-    const detail = skipped.map((s) => s.message).join("\n");
     throw new Error(
       `No model entry resolved for ${where}: ${requestedText}, and flows.modelFallback is "error".` +
         (detail ? `\n${detail}` : ""),
@@ -338,7 +338,8 @@ export function resolveAgentModel(
   const parent = options.parentModel;
   if (!parent?.model) {
     throw new Error(
-      `Cannot run ${where}: no model entry resolved (${requestedText}) and no session model was captured to fall back on.`,
+      `Cannot run ${where}: no model entry resolved (${requestedText}) and no session model was captured to fall back on.` +
+        (detail ? `\n${detail}` : ""),
     );
   }
   const used = modelIdOf(parent.model);

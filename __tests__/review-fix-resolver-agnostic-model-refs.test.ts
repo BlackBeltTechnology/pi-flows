@@ -31,3 +31,24 @@ describe("R1 — ':suffix' that is not a thinking level", () => {
     expect(d.map((x) => x.message + (x.suggestion ?? "")).join(" ")).toContain("xhigh");
   });
 });
+
+// ---------------------------------------------------------------------------
+// R2 — "no session model" error carries the resolver's reasons
+// ---------------------------------------------------------------------------
+import { resolveAgentModel } from "../extensions/flow-engine/model-roles.js";
+
+describe("R2 — no session model keeps resolver detail", () => {
+  it("includes probe.error, agent name and source", () => {
+    const pi: any = {
+      events: { emit: (c: string, p: any) => { if (c === "model:resolve") p.error = 'Role "@fast" is not assigned'; } },
+    };
+    let msg = "";
+    try {
+      resolveAgentModel(pi, { name: "reviewer", source: "/x/reviewer.md", modelRefs: ["@fast"] }, {});
+    } catch (e) { msg = (e as Error).message; }
+    expect(msg).toContain("reviewer");
+    expect(msg).toContain("/x/reviewer.md");
+    expect(msg).toContain('Role "@fast" is not assigned');
+    expect(msg).toMatch(/session model/);
+  });
+});
