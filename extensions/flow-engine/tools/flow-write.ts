@@ -11,7 +11,7 @@
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../types.js";
-import { validateFlowContent } from "./flow-validate.js";
+import { validateFlowContent, unsafeNameError } from "./flow-validate.js";
 import { generateCodeHandlers } from "../flow-generate.js";
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -47,6 +47,14 @@ export function registerFlowWriteTool(
     execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
       const { name, content } = params as { namespace?: string; name: string; content: string };
       const namespace = (params as { namespace?: string }).namespace?.trim() || "custom";
+
+      const nameError = unsafeNameError("name", name) ?? unsafeNameError("namespace", namespace);
+      if (nameError) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: nameError }, null, 2) }],
+          details: {},
+        };
+      }
 
       const scope = (params as { scope?: unknown }).scope;
       if (scope !== undefined && scope !== "project" && scope !== "user") {

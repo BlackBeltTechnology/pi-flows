@@ -14,6 +14,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig, Diagnostic } from "../types.js";
 import { parseAgentString } from "../agent-parser.js";
 import { validateAgentContent } from "./agent-validate.js";
+import { unsafeNameError } from "./flow-validate.js";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { classifySource } from "../discovery.js";
@@ -155,6 +156,14 @@ export function registerFlowAgentsTool(
       if (!name) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: "Could not determine agent name from frontmatter (missing 'name:' field)" }, null, 2) }],
+          details: {},
+        };
+      }
+
+      const nameError = unsafeNameError("agent name", name);
+      if (nameError) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ written: false, error: nameError }, null, 2) }],
           details: {},
         };
       }

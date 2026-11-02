@@ -58,7 +58,7 @@ describe("flow:delete-request event (G1)", () => {
     const pkgFlow = join(extra, "p", "f");
     mkdirSync(pkgFlow, { recursive: true });
     writeFileSync(join(pkgFlow, "flow.yaml"), FLOW, "utf8");
-    const userFlow = putFlow(agentDir, "u", "f");
+    const userFlow = putFlow(join(agentDir, "flows"), "u", "f");
     getExtraFlowsDirs().push(extra);
     init(pkg, project);
 
@@ -76,4 +76,78 @@ describe("flow:delete-request event (G1)", () => {
     h({ flowName: "u:f" });
     expect(existsSync(userFlow)).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// G2 — name/namespace sanitisation in flow_write / flow_agents
+// ---------------------------------------------------------------------------
+import { registerFlowWriteTool } from "../extensions/flow-engine/tools/flow-write.js";
+import { registerFlowAgentsTool } from "../extensions/flow-engine/tools/flow-agents.js";
+import { readdirSync } from "node:fs";
+import type { AgentConfig } from "../extensions/flow-engine/types.js";
+
+function mkPi() {
+  const tools = new Map<string, any>();
+  const pi: any = {
+    registerTool: (t: any) => tools.set(t.name, t),
+    getAllTools: () => [{ name: "read" }],
+    events: { emit: () => {} },
+  };
+  return { pi, tools };
+}
+const call = async (t: any, p: unknown) => JSON.parse((await t.execute("1", p, undefined, undefined, {})).content[0].text);
+const agentMd = (name: string) => `---\nname: ${name}\ndescription: d\nmodel: "@coding"\ntools: read\n---\n\n# System Prompt\n\nhi\n`;
+
+function allFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...allFiles(p)); else out.push(p);
+  }
+  return out;
+}
+
+describe("name sanitisation (G2)", () => {
+  const bad = ["../../x", "a/b", "A", "-x", "", "x y", ".."];
+
+  for (const scope of ["project", "user"] as const) {
+    it(`flow_write rejects bad name/namespace (${scope})`, async () => {
+      const root = tmp("g2-root-");
+      const project = join(root, "project");
+      const user = join(root, "user", "flows");
+      mkdirSync(project, { recursive: true });
+      const { pi, tools } = mkPi();
+      registerFlowWriteTool(pi, () => new Map<string, AgentConfig>([["a", { name: "a" } as AgentConfig]]), project, user);
+      const t = tools.get("flow_write");
+      for (const b of bad) {
+        const r1 = await call(t, { namespace: "ok", name: b, content: FLOW, scope });
+        expect(r1.written, `name ${JSON.stringify(b)}`).toBe(false);
+        expect(r1.error ?? JSON.stringify(r1.diagnostics)).toMatch(/\[a-z0-9\]/);
+        if (b === "") continue; // empty namespace falls back to "custom"
+        const r2 = await call(t, { namespace: b, name: "ok", content: FLOW, scope });
+        expect(r2.written, `namespace ${JSON.stringify(b)}`).toBe(false);
+      }
+      expect(allFiles(root)).toEqual([]);
+      const good = await call(t, { namespace: "my-ns", name: "f1", content: FLOW, scope });
+      expect(good.written).toBe(true);
+    });
+
+    it(`flow_agents rejects bad agent name (${scope})`, async () => {
+      const root = tmp("g2-root-");
+      const project = join(root, "project");
+      const user = join(root, "user", "flows");
+      mkdirSync(project, { recursive: true });
+      const { pi, tools } = mkPi();
+      registerFlowAgentsTool(pi, () => new Map(), project, root, () => [], user);
+      const t = tools.get("flow_agents");
+      for (const b of ["../../x", "a/b", "A", "-x", "x y"]) {
+        const r = await call(t, { op: "write", content: agentMd(JSON.stringify(b)), scope });
+        expect(r.written, `name ${b}`).toBe(false);
+      }
+      expect(allFiles(root).filter((f) => !f.includes("node_modules"))).toEqual([]);
+      const good = await call(t, { op: "write", content: agentMd("good-agent"), scope });
+      expect(good.written).toBe(true);
+    });
+  }
 });

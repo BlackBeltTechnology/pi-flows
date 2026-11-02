@@ -26,6 +26,17 @@ import { ENTRY_FORMS, TRUST_MODES, isClassifierRefEntry, isValidEntry } from "..
 export type { Diagnostic };
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
 
+// ---- Path-safe names ------------------------------------------------------
+
+export const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+/** Error text when `value` is not a path-safe name/namespace; null when fine. */
+export function unsafeNameError(kind: string, value: string): string | null {
+  return SAFE_NAME.test(value)
+    ? null
+    : `Invalid ${kind} ${JSON.stringify(value)}: must match ^[a-z0-9][a-z0-9-]*$`;
+}
+
 // ---- Line index -----------------------------------------------------------
 
 /** Line locations for a single step's header and properties. */
