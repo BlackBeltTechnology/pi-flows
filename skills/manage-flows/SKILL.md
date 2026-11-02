@@ -165,7 +165,7 @@ Context: ${{input.research_context}}
 |-------|----------|-------|
 | `name` | Yes | Unique. Filename = `<name>.md`. Referenced as `agent: <name>` in steps. |
 | `description` | Yes | One line. Shown in catalog. |
-| `model` | Yes | See **Model references**. |
+| `model` | No | Optional; session model when omitted. See **Model references**. |
 | `tools` | Yes | Comma-separated. Guard blocks anything not listed. Standard: `read, write, edit, grep, find, ls, bash, ask_user`. Declaring `skills:` auto-grants `read`; never list `skill_read` (it does not exist). |
 | `thinking` | No | `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Overrides any `:level` suffix in `model`. |
 | `skills` | No | Comma-separated skill names injected into the prompt. |
@@ -371,7 +371,7 @@ Each flow is a self-contained directory: `flow.yaml` plus its co-located handler
 
 Both writing tools validate before writing. On failure they return `{ written: false, diagnostics: [...] }` and write nothing. Read each diagnostic's `message` and `suggestion`, fix the content, and call the tool again. Common cases:
 
-- **Missing required field** (`name`, `description`, `model`, `tools` for agents; `name`, `description` for flows) → add it.
+- **Missing required field** (`name`, `description`, `tools` for agents — `model` is optional, session model when omitted; `name`, `description` for flows) → add it.
 - **"Agent not in catalog"** → the flow references an agent that does not exist. Create it with `flow_agents` `op: write`, then retry `flow_write`.
 - **Unwired declared input** → add the missing key to the step's `inputs:` block.
 - **Bad reference / routing target** → every `blockedBy`, `branches` target, and `on_error` must point at an existing step `id`; fix the typo.
