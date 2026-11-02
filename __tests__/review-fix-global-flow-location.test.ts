@@ -158,7 +158,7 @@ describe("name sanitisation (G2)", () => {
 // ---------------------------------------------------------------------------
 import { activate as activateEngine, userFlowsRoot } from "../extensions/flow-engine/index.js";
 import { activate as activateSummary } from "../extensions/flow-summary/index.js";
-import { fakeExtensionHost, makeParentSession, agentMd } from "./helpers/parent-session.js";
+import { fakeExtensionHost, makeParentSession, agentMd as modelAgentMd } from "./helpers/parent-session.js";
 import { scriptFinish } from "./faux-harness.js";
 
 describe("user flows end-to-end", () => {
@@ -193,7 +193,7 @@ describe("user flows end-to-end", () => {
       "name: one\ndescription: d\nsteps:\n  - id: s\n    type: agent\n    agent: worker\n    task: go\n",
     );
     mkdirSync(join(userRoot, "agents"), { recursive: true });
-    writeFileSync(join(userRoot, "agents", "worker.md"), agentMd("worker", "rtprov/m1"));
+    writeFileSync(join(userRoot, "agents", "worker.md"), modelAgentMd("worker", "rtprov/m1"));
 
     const host = fakeExtensionHost();
     const commands = new Map<string, any>();
