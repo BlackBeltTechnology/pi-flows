@@ -142,3 +142,77 @@ describe("C3 — pi too old", () => {
     expect(JSON.stringify(out2.diagnostics)).not.toContain("pi too old");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Missing coverage: trust `auto`, and a System One `llm` backend end-to-end
+// ---------------------------------------------------------------------------
+describe("decide() with trust auto", () => {
+  const base = { trust: "auto" as const, minConfidence: 0.75, labels: ["done", "fix"] };
+
+  it("calibration record in shadow mode + confidence 0.99 → does not route; next entry decides", async () => {
+    const calls: string[] = [];
+    const r = await decide({
+      ...base,
+      entries: ["system-one", "agent"],
+      run: async (e): Promise<EntryResult> => {
+        calls.push(e);
+        return e === "agent"
+          ? { ok: true, authoritative: true, answer: { label: "fix", confidence: 1 } }
+          : { ok: true, calibrated: true, answer: { label: "done", confidence: 0.99, mode: "shadow" } };
+      },
+    });
+    expect(calls).toEqual(["system-one", "agent"]);
+    expect(r).toMatchObject({ ok: true, label: "fix", routedBy: "agent" });
+    expect(r.attempts[0]).toMatchObject({ entry: "system-one", outcome: "untrusted", trusted: false, agreed: false });
+  });
+
+  it("no calibration + confidence 0.9 → routes", async () => {
+    const calls: string[] = [];
+    const r = await decide({
+      ...base,
+      entries: ["system-one", "agent"],
+      run: async (e): Promise<EntryResult> => {
+        calls.push(e);
+        return { ok: true, calibrated: false, answer: { label: "done", confidence: 0.9, mode: "shadow" } };
+      },
+    });
+    expect(calls).toEqual(["system-one"]);
+    expect(r).toMatchObject({ ok: true, label: "done", routedBy: "system-one" });
+  });
+});
+
+describe("System One llm backend through the real predict()", () => {
+  const oldHome = process.env.HOME;
+  afterEach(() => { process.env.HOME = oldHome; });
+
+  it("is answered by pi-flows' llm caller (mocked completion) and routes without an agent session", async () => {
+    const home = mkdtempSync(join(tmpdir(), "s1-llm-home-"));
+    process.env.HOME = home;
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(join(home, ".pi", "agent", "system-one.json"), JSON.stringify({
+      version: 1,
+      allowOffMachine: true,
+      backends: { llm1: { kind: "llm", role: "@fast" } },
+      presets: { p: { chain: ["llm1"] } },
+      activePreset: "p",
+    }));
+    const cwd = mkdtempSync(join(tmpdir(), "s1-llm-cwd-"));
+    const complete = vi.fn(async () => ({
+      content: [{ type: "text", text: '{"decision":{"choice":"done","probabilities":{"done":0.92,"fix":0.08}}}' }],
+    }));
+    const agentEntry = vi.fn(async () => { throw new Error("agent session must not be spawned"); });
+    const parentModel = { model: { id: "m1", provider: "prov" } as any };
+    const run = makeEntryRunner({
+      env: { pi: { events: { emit: () => {} } }, cwd, modelRegistry: {}, modelRuntime: { complete }, parentModel, projectTrusted: true } as any,
+      flowName: "f", stepId: "s", branchCount: 2, question: q, agentEntry,
+    });
+    const outcome = await decide({
+      trust: "auto", minConfidence: 0.75, labels: ["done", "fix"],
+      entries: ["system-one", "agent"],
+      run,
+    });
+    expect(outcome).toMatchObject({ ok: true, label: "done", routedBy: "system-one" });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(agentEntry).not.toHaveBeenCalled();
+  });
+});
