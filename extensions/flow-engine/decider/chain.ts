@@ -70,8 +70,8 @@ export interface DecideRequest extends TrustPolicy {
   run: (entry: string, signal: AbortSignal) => Promise<EntryResult>;
   signal?: AbortSignal;
   /**
-   * Per pi-ai classifier entry. `agent` and `system-one` are exempt (System One
-   * applies its own per-backend timeouts; its `llm` calls time out in the caller).
+   * Per pi-ai classifier entry. `agent` and `system-one` are exempt (System One applies
+   * its own per-backend timeouts, including for its `llm` backend).
    * Default 15 s.
    */
   timeoutMs?: number;

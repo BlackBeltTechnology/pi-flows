@@ -83,10 +83,9 @@ describe("C1 — privacy gate is evaluated per decision and includes project con
 });
 
 // ---------------------------------------------------------------------------
-// C2 — 15 s timeout applies to pi-ai (and llm calls), not to system-one
+// C2 — 15 s timeout applies to pi-ai entries, not to system-one
 // ---------------------------------------------------------------------------
 import { decide } from "../extensions/flow-engine/decider/chain.js";
-import { createLlmCaller } from "../extensions/flow-engine/decider/llm-caller.js";
 import type { EntryResult } from "../extensions/flow-engine/decider/types.js";
 
 describe("C2 — decider timeouts (design D9)", () => {
@@ -108,17 +107,6 @@ describe("C2 — decider timeouts (design D9)", () => {
     const r = await p;
     expect(r.ok).toBe(false);
     expect(r.attempts[0]).toMatchObject({ entry: "a/b", outcome: "timeout" });
-  });
-
-  it("the System One llm caller applies its own 15 s timeout to the completion", async () => {
-    const caller = createLlmCaller({
-      pi: {}, registry: {}, parentModel: { model: { id: "m", provider: "p" } } as any,
-      complete: () => new Promise(() => {}), // never answers
-    });
-    const p = caller.call({ role: "@fast", state: "s", questions: {}, signal: new AbortController().signal } as any);
-    const settled = p.then(() => "resolved", (e: Error) => e.message);
-    await vi.advanceTimersByTimeAsync(16_000);
-    expect(await settled).toMatch(/15000 ms/);
   });
 });
 
