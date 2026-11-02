@@ -81,3 +81,43 @@ describe("C1 — privacy gate is evaluated per decision and includes project con
     expect(r.ok).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// C2 — 15 s timeout applies to pi-ai (and llm calls), not to system-one
+// ---------------------------------------------------------------------------
+import { decide } from "../extensions/flow-engine/decider/chain.js";
+import { createLlmCaller } from "../extensions/flow-engine/decider/llm-caller.js";
+import type { EntryResult } from "../extensions/flow-engine/decider/types.js";
+
+describe("C2 — decider timeouts (design D9)", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const base = { trust: "confidence" as const, minConfidence: 0.5, labels: ["done", "fix"] };
+  const slowOk = (ms: number): Promise<EntryResult> =>
+    new Promise((resolve) => setTimeout(() => resolve({ ok: true, answer: { label: "done", confidence: 0.9 } }), ms));
+
+  it("a system-one entry slower than 15 s is not cut off", async () => {
+    const p = decide({ ...base, entries: ["system-one"], run: () => slowOk(40_000) });
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(await p).toMatchObject({ ok: true, label: "done", routedBy: "system-one" });
+  });
+
+  it("a pi-ai entry slower than 15 s times out", async () => {
+    const p = decide({ ...base, entries: ["a/b"], run: () => slowOk(40_000) });
+    await vi.advanceTimersByTimeAsync(16_000);
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.attempts[0]).toMatchObject({ entry: "a/b", outcome: "timeout" });
+  });
+
+  it("the System One llm caller applies its own 15 s timeout to the completion", async () => {
+    const caller = createLlmCaller({
+      pi: {}, registry: {}, parentModel: { model: { id: "m", provider: "p" } } as any,
+      complete: () => new Promise(() => {}), // never answers
+    });
+    const p = caller.call({ role: "@fast", state: "s", questions: {}, signal: new AbortController().signal } as any);
+    const settled = p.then(() => "resolved", (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(await settled).toMatch(/15000 ms/);
+  });
+});

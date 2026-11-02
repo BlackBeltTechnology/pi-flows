@@ -12,9 +12,12 @@ export interface LlmCallerOptions {
   parentModel?: ParentModelSnapshot;
   modelFallback?: "session" | "error";
   /** One completion; defaults to `registry.complete`. */
+  /** Per-completion timeout (default 15 s, design D9). */
+  timeoutMs?: number;
   complete?: (model: any, context: any, options?: any) => Promise<{ content: Array<{ type: string; text?: string }> }>;
 }
 
+const LLM_TIMEOUT_MS = 15_000;
 const LOCAL_PROVIDER = /^(ollama|lm-?studio|llama[-._]?cpp)$/i;
 const LOOPBACK = /^(localhost|\[::1\]|127(\.\d{1,3}){3})$/i;
 
@@ -49,11 +52,28 @@ export function createLlmCaller(o: LlmCallerOptions): LlmCaller {
         'Reply with ONLY a JSON object: {"<question name>": {"choice": "<label>", "probabilities": {"<label>": <0..1>, ...}}}. ' +
         "Probabilities must sum to 1. No prose.";
       const prompt = `State:\n${state}\n\nQuestions:\n${q}`;
-      const reply = await complete(
-        resolved.model,
-        { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
-        { signal },
-      );
+      const timeoutMs = o.timeoutMs ?? LLM_TIMEOUT_MS;
+      const timeoutCtl = new AbortController();
+      const anySignal = signal ? AbortSignal.any([signal, timeoutCtl.signal]) : timeoutCtl.signal;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let reply: Awaited<ReturnType<typeof complete>>;
+      try {
+        reply = await Promise.race([
+          complete(
+            resolved.model,
+            { systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }] },
+            { signal: anySignal },
+          ),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              timeoutCtl.abort();
+              reject(new Error(`no answer within ${timeoutMs} ms`));
+            }, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       const text = (reply.content ?? []).map((b: { type: string; text?: string }) => (b.type === "text" ? b.text ?? "" : "")).join("");
       return { answers: parseJsonObject(text), model: resolved.modelId };
     },

@@ -69,7 +69,11 @@ export interface DecideRequest extends TrustPolicy {
   labels: string[];
   run: (entry: string, signal: AbortSignal) => Promise<EntryResult>;
   signal?: AbortSignal;
-  /** Per classifier entry; the `agent` entry is exempt. Default 15 s. */
+  /**
+   * Per pi-ai classifier entry. `agent` and `system-one` are exempt (System One
+   * applies its own per-backend timeouts; its `llm` calls time out in the caller).
+   * Default 15 s.
+   */
   timeoutMs?: number;
 }
 
@@ -86,7 +90,7 @@ export async function decide(req: DecideRequest): Promise<DecisionOutcome> {
       return { ok: false, attempts, aborted: true, payload: lastPayload };
     }
     const t0 = performance.now();
-    const isAgent = entry === "agent";
+    const isAgent = entry === "agent" || entry === "system-one";
     const timeoutCtl = new AbortController();
     const signal = req.signal ? AbortSignal.any([req.signal, timeoutCtl.signal]) : timeoutCtl.signal;
     let timer: ReturnType<typeof setTimeout> | undefined;
