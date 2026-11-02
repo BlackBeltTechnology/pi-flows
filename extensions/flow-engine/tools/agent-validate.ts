@@ -33,8 +33,8 @@ const BASE_TOOLS = new Set([
   "bash",
 ]);
 
-/** Output names that collide with the `finish` tool's own fields. */
-export const RESERVED_FINISH_OUTPUTS = ["status", "summary", "files", "artifacts"];
+import { RESERVED_FINISH_OUTPUTS } from "../reserved-outputs.js";
+export { RESERVED_FINISH_OUTPUTS };
 
 /** Error text for a reserved output name; `kind` is the reason it is reserved. */
 export function reservedOutputMessage(name: string, kind: "finish" | "branch"): { message: string; suggestion: string } {

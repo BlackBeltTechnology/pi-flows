@@ -8,6 +8,7 @@
 import type { AgentConfig, FlowConfig } from "./types.js";
 import { parseAgentFile } from "./agent-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
+import { reservedOutputsOf } from "./reserved-outputs.js";
 import { readdirSync, existsSync, statSync } from "node:fs";
 import { join, dirname, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -162,6 +163,12 @@ function discoverAgentsInDir(dir: string, warnings: string[]): AgentConfig[] {
 
     try {
       const config = parseAgentFile(filePath);
+      const reserved = reservedOutputsOf(config);
+      if (reserved.length) {
+        warnings.push(
+          `[discovery] Agent "${config.name}" (${filePath}) declares reserved output ${reserved.map((r) => `"${r}"`).join(", ")}; flows using it will not start. Rename it (e.g. "outcome").`,
+        );
+      }
       agents.push(config);
     } catch (err) {
       warnings.push(

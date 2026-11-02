@@ -26,5 +26,6 @@ Files in this area. Purposes left for the agent to author.
 | `model-roles.ts` | `resolveModel`: `@role`/literal/thinking suffix via `model:resolve`, then registry; `resolveAgentModel`: ordered refs → session-model fallback; errors keep resolver detail. |
 | `prompt-bus-access.ts` | Cache PromptBus request fn from `prompt:set-bus-request`: `setPromptBusRequest`, `hasPromptBus`, `promptBusRequest`, `listenForPromptBus`. |
 | `result-parser.ts` | `parseResult`: agent `<result>` XML → `ParsedResult`; `hasArtifactElement` detects nested artifact tags by dotted path. |
+| `reserved-outputs.ts` | `RESERVED_FINISH_OUTPUTS`, `reservedOutputsOf`, `reservedOutputProblems`: finish-field output names; discovery warns, `runFlow` refuses to start. |
 | `testing.ts` | Faux harness: `scriptFinish`/`scriptError`, `registerFauxOnRuntime`, `spawnFaux`, `runFaux`, `runFauxFlow`; options: parent model, fallback, decider, `entryOverrides`, `onDecision`. |
 | `types.ts` | Flow-engine contracts: configs, steps, results, events, `FailureInfo`, `FlowHardError`, `modelRefs`, `ModelFallbackInfo`, `DeciderSpec`, `DecisionEvent`. |

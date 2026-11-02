@@ -8,6 +8,7 @@ import { resolveAgentModel, type ParentModelSnapshot } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 
 import { raceWithAbort } from "./abort-utils.js";
+import { reservedOutputProblems } from "./reserved-outputs.js";
 import { decide, describeAttempts, resolveDecider } from "./decider/chain.js";
 import { buildQuestion } from "./decider/question.js";
 import { makeEntryRunner } from "./decider/runtime.js";
@@ -132,6 +133,20 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
       result: { status: "error" as const, summary: inputError, files: [], artifacts: "" },
       toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
       outcome: "hard", failureInfo: { outcome: "hard", message: inputError, source: "flow_input_invalid" },
+    };
+    return { lastResult: errResult, results: {}, forks: {}, flowName: flow.name, stepCount: 0, totalDuration: 0, status: "error" };
+  }
+
+  // Agents declaring a reserved output name (finish-tool fields, or `branch` on
+  // a decision agent) would silently misroute; refuse the run before any step.
+  const reserved = reservedOutputProblems(flow, options.getAgent);
+  if (reserved.length) {
+    const msg = `Flow "${flow.name}" not started: ${reserved.join("; ")}`;
+    const errResult: AgentResult = {
+      success: false, output: msg, stderr: "", exitCode: null,
+      result: { status: "error" as const, summary: msg, files: [], artifacts: "" },
+      toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+      outcome: "hard", failureInfo: { outcome: "hard", message: msg, source: "reserved_output" },
     };
     return { lastResult: errResult, results: {}, forks: {}, flowName: flow.name, stepCount: 0, totalDuration: 0, status: "error" };
   }
