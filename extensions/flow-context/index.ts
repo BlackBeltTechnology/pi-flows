@@ -158,6 +158,12 @@ export function activate(pi: ExtensionAPI) {
     const matching = flowFiles.find(f => f.name === flowName);
     if (!matching) return;
 
+    const refusal = deleteRefusal(matching);
+    if (refusal) {
+      pi.events.emit("flow:notify", { message: refusal, level: "warning" });
+      return;
+    }
+
     deleteFlowFiles(pi, projectRoot, flowName, matching.path, matching.source);
   });
 
