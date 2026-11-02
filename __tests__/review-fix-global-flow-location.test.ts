@@ -151,3 +151,75 @@ describe("name sanitisation (G2)", () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Missing coverage: PI_CODING_AGENT_DIR, user-flow command registration,
+// result file location, and the /flows listing label.
+// ---------------------------------------------------------------------------
+import { activate as activateEngine, userFlowsRoot } from "../extensions/flow-engine/index.js";
+import { activate as activateSummary } from "../extensions/flow-summary/index.js";
+import { fakeExtensionHost, makeParentSession, agentMd } from "./helpers/parent-session.js";
+import { scriptFinish } from "./faux-harness.js";
+
+describe("user flows end-to-end", () => {
+  let project: string, agentDir: string;
+  let savedEnv: string | undefined;
+  beforeEach(() => {
+    project = tmp("e2e-proj-");
+    agentDir = tmp("e2e-agent-");
+    savedEnv = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    vi.spyOn(process, "cwd").mockReturnValue(project);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (savedEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedEnv;
+  });
+
+  it("userFlowsRoot() honours PI_CODING_AGENT_DIR", () => {
+    expect(userFlowsRoot()).toBe(join(agentDir, "flows"));
+    const other = tmp("e2e-other-");
+    process.env.PI_CODING_AGENT_DIR = other;
+    expect(userFlowsRoot()).toBe(join(other, "flows"));
+  });
+
+  it("registers a slash command, lists it as [user], and writes results under the project", async () => {
+    const userRoot = join(agentDir, "flows");
+    const dir = join(userRoot, "flows", "usr", "one");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "flow.yaml"),
+      "name: one\ndescription: d\nsteps:\n  - id: s\n    type: agent\n    agent: worker\n    task: go\n",
+    );
+    mkdirSync(join(userRoot, "agents"), { recursive: true });
+    writeFileSync(join(userRoot, "agents", "worker.md"), agentMd("worker", "rtprov/m1"));
+
+    const host = fakeExtensionHost();
+    const commands = new Map<string, any>();
+    host.pi.registerCommand = (name: string, spec: any) => { commands.set(name, spec); };
+    activateEngine(host.pi);
+    activateSummary(host.pi);
+    activateContext(host.pi);
+
+    // slash command registered for the user flow
+    expect(commands.has("usr:one")).toBe(true);
+
+    // /flows listing labels it [user]
+    const notes: string[] = [];
+    await commands.get("flows").handler("", {
+      ui: { select: async () => "List flows", notify: (m: string) => notes.push(m) },
+    });
+    expect(notes.join("\n")).toContain("• usr:one [user]");
+
+    // run it; the result file lands in the PROJECT's .pi/flows/results/
+    const parent = await makeParentSession("rtprov", [{ id: "m1" }]);
+    parent.faux.setResponses(Array.from({ length: 4 }, () => scriptFinish({ status: "complete", summary: "ok" })));
+    await host.fire("session_start", parent.ctx);
+    const done = host.next("flow:summary-ready");
+    await host.emit("flow:run", { flowName: "usr:one", task: "go" });
+    await done;
+    expect(existsSync(join(project, ".pi", "flows", "results", "usr:one.json"))).toBe(true);
+    expect(existsSync(join(userRoot, "results"))).toBe(false);
+  }, 20_000);
+});
