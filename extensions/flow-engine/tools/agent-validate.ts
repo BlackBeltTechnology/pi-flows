@@ -209,10 +209,16 @@ export function validateAgentContent(
       if (colon > 0) {
         const level = ref.slice(colon + 1).toLowerCase();
         if (!VALID_THINKING_LEVELS.includes(level as never)) {
+          // `@role:<bad>` can only be a thinking suffix → error. A literal id
+          // may legitimately carry a colon (`ollama/llama3:8b`); runtime only
+          // strips valid levels, so it stays part of the id → advisory warning.
+          const isRole = ref.startsWith("@");
           diagnostics.push({
             line,
-            severity: "error",
-            message: `Invalid thinking level "${ref.slice(colon + 1)}" in model "${ref}"`,
+            severity: isRole ? "error" : "warning",
+            message: isRole
+              ? `Invalid thinking level "${ref.slice(colon + 1)}" in model "${ref}"`
+              : `"${ref.slice(colon + 1)}" in model "${ref}" is not a thinking level; treated as part of the model id`,
             suggestion: `Valid levels: ${VALID_THINKING_LEVELS.join(", ")}`,
           });
         }
