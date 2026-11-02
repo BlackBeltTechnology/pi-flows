@@ -162,7 +162,9 @@ export function validateAgentContent(
 
   if (fields.has("tools")) {
     const toolsEntry = fields.get("tools")!;
-    const toolNames = toolsEntry.value.split(",").map((t) => t.trim()).filter(Boolean);
+    // `tools: []` is the explicit "no tools" form (e.g. the built-in flow-decision agent).
+    const rawTools = toolsEntry.value.trim() === "[]" ? "" : toolsEntry.value;
+    const toolNames = rawTools.split(",").map((t) => t.trim()).filter(Boolean);
     for (const tool of toolNames) {
       if (!allTools.has(tool)) {
         diagnostics.push({

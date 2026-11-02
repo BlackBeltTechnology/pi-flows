@@ -414,6 +414,20 @@ export function validateFlowContent(
     }
   }
 
+  // 4a'. on_error targets on non-code steps (code steps are checked in 4b).
+  for (const step of flow.steps) {
+    if (step.stepType === "code" || step.stepType === "code-decision") continue;
+    const onError = (step as { on_error?: string }).on_error;
+    if (onError && !stepIds.has(onError)) {
+      diagnostics.push({
+        line: stepPropLine(idx, step.id, "on_error"),
+        severity: "error",
+        message: `on_error references unknown step ID "${onError}"`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    }
+  }
+
   // 4b. Code node validation: id, inputs, outputs, references.
   // Covers both `code` and `code-decision` (which shares the handler shape).
   for (const step of flow.steps) {
