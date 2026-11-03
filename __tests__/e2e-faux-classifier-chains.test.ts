@@ -391,8 +391,13 @@ steps:
       t.includes("REVIEW the change")
         ? scriptFinish({ status: "complete", summary: "fine", verdict: "ok" })
         : scriptFinish({ status: "complete", summary: `AGENT-SECRET-${"y".repeat(500)}` });
-    const { r, events } = await run(flow, agents, responder, { entryOverrides: { "typesafe/jev-latest": cls("done", 0.3, seen) } });
+    const agentTasks: string[] = [];
+    const { r, events } = await run(flow, agents, (t: string) => { if (t.includes("is the review clean")) agentTasks.push(t); return responder(t); }, { entryOverrides: { "typesafe/jev-latest": cls("done", 0.3, seen) } });
     expect(seen[0].state).toEqual({ task: "Decide for flow task: is the review clean?" });
+    // The decision agent sees the task plus each branch's `means`; with no `state:` there is no State section.
+    expect(agentTasks.length).toBeGreaterThanOrEqual(1);
+    expect(agentTasks[0]).toContain("Decide for flow task: is the review clean?\n\nBranches (call finish with exactly one of these as `branch`):\n- done: No blocking issues remain\n- fix: A blocking issue was found");
+    expect(agentTasks[0]).not.toContain("State:");
     expect(r.status).toBe("error"); // exhausted: no silent first-branch default
     expect(ran(r, "report")).toBe(false);
     expect(ran(r, "fixer")).toBe(false);
@@ -401,6 +406,91 @@ steps:
     expect(text).not.toContain("AGENT-SECRET");
     expect(text).not.toContain("flow task");
     expect(events[0].attempts.map((a) => [a.entry, a.outcome])).toEqual([["typesafe/jev-latest", "untrusted"], ["agent", "invalid-label"]]);
+  });
+});
+
+describe("e2e faux: the decision agent sees what the classifier saw", () => {
+  const YAML = `name: agent-sees
+description: classifier unsure, agent decides with state + means
+decision_agent: judge
+decider: [typesafe/jev-latest, agent]
+steps:
+  - id: review
+    type: agent
+    agent: reviewer
+    task: "REVIEW the change"
+    outputs:
+      - name: verdict
+  - id: gate
+    type: agent-decision
+    task: "GATE for \${{task}}: is the review clean?"
+    blockedBy: [review]
+    state:
+      review: "\${{result.review.summary}}"
+      verdict: "\${{result.review.verdict}}"
+    branches:
+      done: { to: report, means: "No blocking issues remain" }
+      fix: { to: fixer, means: "A blocking issue was found" }
+    on_error: recover
+  - id: report
+    type: agent
+    agent: worker
+    task: "REPORT"
+  - id: fixer
+    type: agent
+    agent: worker
+    task: "FIXER"
+  - id: recover
+    type: agent
+    agent: worker
+    task: "RECOVER"
+`;
+  const reviewer = `---\nname: reviewer\ndescription: r\nmodel: faux/faux-1\ntools: read\noutputs:\n  - name: verdict\n---\n\nYou review.\n`;
+  const mds = [agentMd("worker"), agentMd("judge"), reviewer];
+  const respond = (judge: () => any, gateTasks: string[]) => (t: string) => {
+    if (t.includes("REVIEW the change")) return scriptFinish({ status: "complete", summary: "REVIEW-TEXT-77 one nit", verdict: "pass-with-nits" });
+    if (t.includes("GATE for")) { gateTasks.push(t); return judge(); }
+    return scriptFinish({ status: "complete", summary: "worked" });
+  };
+
+  it("after an untrusted classifier answer, the agent's task carries the expanded state and every branch's means", async () => {
+    const { flow, agents } = author(YAML, mds);
+    const seen: Asked[] = [];
+    const gateTasks: string[] = [];
+    const { r, events } = await run(flow, agents, respond(() => scriptFinish({ status: "complete", summary: "j", branch: "fix" }), gateTasks), {
+      entryOverrides: { "typesafe/jev-latest": cls("done", 0.2, seen) },
+    });
+    expect(ran(r, "fixer")).toBe(true);
+    expect(skipped(r, "report")).toBe(true);
+    expect(gateTasks).toHaveLength(1);
+    expect(gateTasks[0]).toContain(
+      "GATE for flow task: is the review clean?\n\nBranches (call finish with exactly one of these as `branch`):\n" +
+      "- done: No blocking issues remain\n- fix: A blocking issue was found\n\n" +
+      "State:\n- review: REVIEW-TEXT-77 one nit\n- verdict: pass-with-nits",
+    );
+    // classifier and agent saw the same state
+    expect(seen[0].state).toEqual({ review: "REVIEW-TEXT-77 one nit", verdict: "pass-with-nits" });
+    expect(events[0]).toMatchObject({ routedBy: "agent", label: "fix" });
+    expect(JSON.stringify(events)).not.toContain("REVIEW-TEXT-77");
+  });
+
+  it("an agent that finishes \"blocked\" after an untrusted classifier is a failed attempt; on_error routes", async () => {
+    const { flow, agents } = author(YAML, mds);
+    const gateTasks: string[] = [];
+    const { r, events, started } = await run(flow, agents, respond(() => scriptFinish({ status: "blocked", summary: "need more info", branch: "done" }), gateTasks), {
+      entryOverrides: { "typesafe/jev-latest": cls("done", 0.2) },
+    });
+    expect(ran(r, "recover")).toBe(true);
+    expect(skipped(r, "report")).toBe(true);
+    expect(skipped(r, "fixer")).toBe(true);
+    expect(started.filter((s) => s.step === "gate").map((s) => s.name)).toContain("judge");
+    expect(events).toHaveLength(1);
+    expect(events[0].routedBy).toBeUndefined();
+    expect(events[0].label).toBeUndefined();
+    expect(events[0].attempts.map((a) => [a.entry, a.outcome])).toEqual([["typesafe/jev-latest", "untrusted"], ["agent", "invalid-label"]]);
+    expect(events[0].attempts[1].reason).toBe("the decision agent finished with status blocked");
+    expect(r.results.gate.status).toBe("error");
+    expect(r.results.gate.summary).toContain("the decision agent finished with status blocked");
   });
 });
 
@@ -554,10 +644,12 @@ steps:
     const { flow, agents } = author(LOOP);
     let reviews = 0;
     const implementTasks: string[] = [];
+    const judgeTasks: string[] = [];
     const responder = (t: string) => {
       if (t.includes("IMPLEMENT")) { implementTasks.push(t); return scriptFinish({ status: "complete", summary: "implemented" }); }
       if (t.includes("REVIEW")) return scriptFinish({ status: "complete", summary: ++reviews === 1 ? "BLOCKER: no test" : "clean" });
       if (t.includes("REPORT")) return scriptFinish({ status: "complete", summary: "reported" });
+      judgeTasks.push(t);
       return scriptFinish({ status: "complete", summary: "judged", branch: "fix" });
     };
     const seen: Asked[] = [];
@@ -593,5 +685,9 @@ steps:
     expect(seen.map((q) => Number(q.state.pass))).toEqual(bodyIter);
     for (const n of bodyIter) expect(n).toBeLessThanOrEqual(4);
     expect(r.results.gate.summary).toMatch(/done/);
+    // The judge (pass 1 only) saw this pass's state and the branch means.
+    expect(judgeTasks).toHaveLength(1);
+    expect(judgeTasks[0]).toContain("Is the review clean?\n\nBranches (call finish with exactly one of these as `branch`):\n- done: No blocking issues remain\n- fix: A blocking issue was found");
+    expect(judgeTasks[0]).toContain("State:\n- review: BLOCKER: no test\n- pass: 1");
   });
 });

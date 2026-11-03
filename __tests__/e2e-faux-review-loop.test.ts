@@ -96,8 +96,10 @@ describe("e2e faux: review loop with classifier-first decisions", () => {
 
     const events: DecisionEvent[] = [];
     const started: Array<{ name: string; step: string; model: any; extra: any }> = [];
+    const judgeTasks: string[] = [];
     const result = await runFaux({
-      flow, agents, responder, maxTurns: 48,
+      flow, agents, maxTurns: 48,
+      responder: (t) => { if (t.includes("Is the review clean?")) judgeTasks.push(t); return responder(t); },
       entryOverrides: { "typesafe/jev-latest": jev },
       onDecision: (e) => events.push(e),
       onAgentStarted: (name, step, model, extra) => started.push({ name, step, model, extra }),
@@ -123,6 +125,12 @@ describe("e2e faux: review loop with classifier-first decisions", () => {
     expect(questions[0].state).toEqual({ review: "BLOCKER: missing test" });
     expect(questions[1].state).toEqual({ review: "clean" });
     for (const e of events) expect(JSON.stringify(e)).not.toContain("BLOCKER");
+    // The judge (pass 1) saw the same inputs as the classifier: branch means and the expanded state.
+    expect(judgeTasks).toHaveLength(1);
+    expect(judgeTasks[0]).toContain(
+      "Is the review clean?\n\nBranches (call finish with exactly one of these as `branch`):\n" +
+      "- done: No blocking issues remain\n- fix: A blocking issue was found\n\nState:\n- review: BLOCKER: missing test",
+    );
 
     // @coding / list / no model: all run on the session model without a resolver.
     const coder = started.find((s) => s.step === "implement")!.extra;
@@ -133,6 +141,34 @@ describe("e2e faux: review loop with classifier-first decisions", () => {
     const reviewer = started.find((s) => s.step === "review")!;
     expect(reviewer.extra?.modelFallback).toBeUndefined();
     expect(String(reviewer.model)).toContain("faux-1");
+  });
+
+  it("a judge that finishes \"blocked\" (still naming `fix`) does not loop; the gate's on_error routes to the report", async () => {
+    reviews = 0;
+    const flow = parseFlowYamlString(FLOW_YAML, "<e2e>");
+    const agents = [CODER, REVIEWER, JUDGE].map((m) => parseAgentString(m, "<e2e>"));
+    const events: DecisionEvent[] = [];
+    const started: string[] = [];
+    const result = await runFaux({
+      flow, agents, maxTurns: 48,
+      // the classifier is never trusted, so the judge decides — and reports it cannot
+      entryOverrides: { "typesafe/jev-latest": async () => ({ ok: true, answer: { label: "fix", confidence: 0.3 } }) as EntryResult },
+      responder: (t) => t.includes("Is the review clean?")
+        ? scriptFinish({ status: "blocked", summary: "cannot judge without the test log", branch: "fix" })
+        : responder(t),
+      onDecision: (e) => events.push(e),
+      onAgentStarted: (_n, step) => started.push(step),
+    });
+    expect(result.status).not.toBe("error");
+    // No loop-back: implement and review ran once; on_error took the gate to the report.
+    expect(started.filter((s) => s === "implement")).toHaveLength(1);
+    expect(started.filter((s) => s === "review")).toHaveLength(1);
+    expect(result.results.gate.status).toBe("error");
+    expect(result.results.report?.status).toBe("complete");
+    expect(events).toHaveLength(1);
+    expect(events[0].routedBy).toBeUndefined();
+    expect(events[0].attempts.map((a) => [a.entry, a.outcome])).toEqual([["typesafe/jev-latest", "untrusted"], ["agent", "invalid-label"]]);
+    expect(events[0].attempts[1].reason).toBe("the decision agent finished with status blocked");
   });
 
   it("refuses to start when an authored agent declares a reserved output", async () => {

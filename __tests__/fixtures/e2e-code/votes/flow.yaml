@@ -1,0 +1,50 @@
+name: review-votes
+description: three parallel reviewers vote, a code step tallies, a code-decision routes on the majority
+steps:
+  - id: review-a
+    type: agent
+    agent: reviewer
+    task: "REVIEW-A the change: ${{task}}"
+  - id: review-b
+    type: agent
+    agent: reviewer
+    task: "REVIEW-B the change: ${{task}}"
+  - id: review-c
+    type: agent
+    agent: reviewer
+    task: "REVIEW-C the change: ${{task}}"
+  - id: tally
+    type: code
+    blockedBy: [review-a, review-b, review-c]
+    inputs:
+      a: "${{result.review-a.verdict}}"
+      b: "${{result.review-b.verdict}}"
+      c: "${{result.review-c.verdict}}"
+      confidence_a: "${{result.review-a.confidence}}"
+      confidence_b: "${{result.review-b.confidence}}"
+      confidence_c: "${{result.review-c.confidence}}"
+    outputs:
+      - name: majority
+      - name: counts
+      - name: mean_confidence
+  - id: route
+    type: code-decision
+    blockedBy: [tally]
+    inputs:
+      majority: "${{result.tally.majority}}"
+    branches:
+      approve: ship
+      reject: rework
+      tie: escalate
+  - id: ship
+    type: agent
+    agent: closer
+    task: "SHIP counts=${{result.tally.counts}} confidence=${{result.tally.mean_confidence}}"
+  - id: rework
+    type: agent
+    agent: closer
+    task: "REWORK counts=${{result.tally.counts}}"
+  - id: escalate
+    type: agent
+    agent: closer
+    task: "ESCALATE counts=${{result.tally.counts}}"

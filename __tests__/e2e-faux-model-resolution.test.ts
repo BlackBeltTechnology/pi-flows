@@ -17,6 +17,7 @@ import { parseFlowYamlString } from "../extensions/flow-engine/flow-parser-yaml.
 import { parseAgentString } from "../extensions/flow-engine/agent-parser.js";
 import { validateFlowContent } from "../extensions/flow-engine/tools/flow-validate.js";
 import { validateAgentContent } from "../extensions/flow-engine/tools/agent-validate.js";
+import { makeParentSession, bootExtension, runFlowViaEvent } from "./helpers/parent-session.js";
 
 const agentMd = (name: string, model: string | null) =>
   `---\nname: ${name}\ndescription: ${name} agent\n${model ? `model: ${model}\n` : ""}tools: read\n---\n\nYou are ${name}.\n`;
@@ -453,5 +454,65 @@ steps:
     expect(bad).toHaveLength(1);
     expect(bad[0].message).toContain("extreme");
     expect(JSON.stringify(bad[0])).toMatch(/minimal.*low.*medium.*high/s);
+  });
+});
+
+describe("e2e faux: flow:agent-started carries the whole model: list (production event path)", () => {
+  const FLOW = `name: refs
+description: agents with list, single and no model refs plus a decision agent
+decision_agent: judge
+steps:
+  - id: plan
+    type: agent
+    agent: planner
+    task: "PLAN \${{task}}"
+  - id: build
+    type: agent
+    agent: builder
+    task: "BUILD"
+    blockedBy: [plan]
+  - id: gate
+    type: agent-decision
+    task: "GATE ok?"
+    blockedBy: [build]
+    branches:
+      done: review
+      redo: review
+  - id: review
+    type: agent
+    agent: reviewer
+    task: "REVIEW"
+`;
+
+  it("modelRefs lists every entry in order (list, single @role, literal); absent when no model: is declared", async () => {
+    const parent = await makeParentSession("rtprov", [{ id: "m1" }]);
+    parent.faux.setResponses(Array.from({ length: 12 }, () => (context: any) => {
+      const last = JSON.stringify(context?.messages?.at(-1) ?? "");
+      return /GATE/.test(last)
+        ? scriptFinish({ status: "complete", summary: "judged", branch: "done" })
+        : scriptFinish({ status: "complete", summary: "ok" });
+    }));
+    const host = await bootExtension({ "e2e/refs": FLOW }, {
+      planner: agentMd("planner", "[@missing, rtprov/m1]"),
+      builder: agentMd("builder", "@fast"),
+      judge: agentMd("judge", "rtprov/m1"),
+      reviewer: agentMd("reviewer", null),
+    });
+    const started: any[] = [];
+    host.pi.events.on("flow:agent-started", (e: any) => started.push(e));
+    await host.fire("session_start", { ...parent.ctx, model: parent.registry.find("rtprov", "m1") });
+    const done = await runFlowViaEvent(host, "e2e:refs");
+    expect(JSON.stringify(done)).toMatch(/success/);
+
+    const cfg = (step: string, name: string) => started.find((e) => e.stepId === step && e.agentName === name)?.config;
+    expect(cfg("plan", "planner")).toMatchObject({ name: "planner", model: "@missing", modelRefs: ["@missing", "rtprov/m1"] });
+    expect(cfg("build", "builder")).toMatchObject({ model: "@fast", modelRefs: ["@fast"] });
+    expect(cfg("gate", "judge")).toMatchObject({ name: "judge", modelRefs: ["rtprov/m1"] });
+    const reviewer = cfg("review", "reviewer");
+    expect(reviewer).toBeDefined();
+    expect(reviewer.modelRefs).toBeUndefined();
+    // The card still reports the fallback for the unresolvable role.
+    const builder = started.find((e) => e.stepId === "build" && e.config);
+    expect(builder.modelFallback).toMatchObject({ requested: ["@fast"], used: "rtprov/m1" });
   });
 });

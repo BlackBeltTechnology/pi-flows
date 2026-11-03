@@ -118,8 +118,10 @@ describe("e2e faux: decision agent selection chain", () => {
     const { flow, agents } = author(CHAIN_FLOW, CHAIN_AGENTS);
     const o = observe();
     const events: DecisionEvent[] = [];
+    const decisionTasks: string[] = [];
     const result = await runFaux({
-      flow, agents, responder: chainResponder,
+      flow, agents,
+      responder: (t) => { if (/DECIDE|The user was asked/.test(t)) decisionTasks.push(t); return chainResponder(t); },
       decisionAgent: "settings-router", // lower priority than the flow's decision_agent
       isAutonomous: () => true,
       onAgentStarted: o.onAgentStarted,
@@ -141,6 +143,15 @@ describe("e2e faux: decision agent selection chain", () => {
       ["d2", "agent-decision", "agent", "go"],
       ["fk", "fork", "agent", "ship"],
     ]);
+    // Each decision agent's task is its expanded task followed by the branch list
+    // (labels only: no branch declares `means`); no `state:` → no State section.
+    const HEAD = "Branches (call finish with exactly one of these as `branch`):";
+    expect(decisionTasks).toHaveLength(3);
+    expect(decisionTasks[0]).toContain(`DECIDE-1 go or stop?\n\n${HEAD}\n- go\n- stop`);
+    expect(decisionTasks[1]).toContain(`DECIDE-2 go or stop?\n\n${HEAD}\n- go\n- stop`);
+    expect(decisionTasks[2]).toContain("Ship or hold? FORKQ");
+    expect(decisionTasks[2]).toContain(`${HEAD}\n- ship\n- hold`);
+    for (const t of decisionTasks) expect(t).not.toContain("State:");
   });
 
   it("settings decisionAgent applies when neither step nor flow names one (runFaux decisionAgent option)", async () => {
@@ -321,6 +332,50 @@ describe("e2e faux: agent-decision that finishes without a valid branch", () => 
     expect(started).not.toContain("fallback");
   });
 
+  for (const status of ["blocked", "error"] as const) {
+    it(`a decision agent that finishes with status "${status}" does not route even though it names a branch; on_error routes`, async () => {
+      const { flow, agents } = author(ROUTE_FLOW("decision_agent: judge\n", "", true), [agentMd("worker"), agentMd("judge")]);
+      const events: DecisionEvent[] = [];
+      const started: string[] = [];
+      const result = await runFaux({
+        flow, agents,
+        responder: (t) => /DECIDE/.test(t)
+          ? scriptFinish({ status, summary: "cannot tell from here", branch: "left" })
+          : routeResponder("left")(t),
+        onDecision: (e) => events.push(e),
+        onAgentStarted: (_n, step) => started.push(step),
+      });
+      expect(result.status).toBe("success");
+      expect(result.results.route.status).toBe("error");
+      expect(result.results.route.summary).toContain(`the decision agent finished with status ${status}`);
+      expect(result.results.fallback.summary).toBe("FALLBACK done");
+      // The branch it named is NOT taken.
+      expect(started).not.toContain("left");
+      expect(result.results.left.status).toBe("skipped");
+      expect(result.results.right.status).toBe("skipped");
+      expect(events).toHaveLength(1);
+      expect(events[0].routedBy).toBeUndefined();
+      expect(events[0].label).toBeUndefined();
+      expect(events[0].attempts).toHaveLength(1);
+      expect(events[0].attempts[0].entry).toBe("agent");
+      expect(events[0].attempts[0].outcome).not.toBe("ok");
+      expect(events[0].attempts[0].reason).toBe(`the decision agent finished with status ${status}`);
+    });
+  }
+
+  it("a blocked decision agent without on_error halts the flow; nothing after it runs", async () => {
+    const { flow, agents } = author(ROUTE_FLOW("decision_agent: judge\n", "", false), [agentMd("worker"), agentMd("judge")]);
+    const started: string[] = [];
+    const result = await runFaux({
+      flow, agents,
+      responder: (t) => /DECIDE/.test(t) ? scriptFinish({ status: "blocked", summary: "need input", branch: "right" }) : routeResponder("right")(t),
+      onAgentStarted: (_n, step) => started.push(step),
+    });
+    expect(result.status).toBe("error");
+    expect(result.lastResult.result.summary).toContain("the decision agent finished with status blocked");
+    for (const id of ["left", "right", "fallback"]) expect(started).not.toContain(id);
+  });
+
   it("without on_error an unanswered decision halts the flow; nothing after it runs", async () => {
     const { flow, agents } = author(ROUTE_FLOW("decision_agent: judge\n", "", false), [agentMd("worker"), agentMd("judge")]);
     const started: string[] = [];
@@ -429,10 +484,58 @@ describe("e2e faux: forks", () => {
     expect(o.started.map((s) => s.name)).not.toContain("flow-router");
     expect(decisionTasks).toHaveLength(1);
     expect(decisionTasks[0]).toContain("just a small hotfix please");
+    expect(decisionTasks[0]).toContain("Branches (call finish with exactly one of these as `branch`):\n- Quick fix\n- Full refactor");
     // "small hotfix" mapped to the Quick fix branch; the notes travel with the fork answer.
     expect(result.forks.choose).toEqual({ answer: "Quick fix", notes: "just a small hotfix please" });
     expect(result.results.quick.summary).toBe("QUICK done");
     expect(result.results.refactor.status).toBe("skipped");
+  });
+
+  it("allowCustom with only a flow decision_agent: Other + Auto-decide are offered and the flow agent maps the text", async () => {
+    const { flow, agents } = author(FORK_FLOW("decision_agent: flow-router\n", "", true), [agentMd("worker"), agentMd("flow-router")]);
+    const o = observe();
+    const extras: any[] = [];
+    const result = await runFaux({
+      flow, agents, responder: forkResponder,
+      isAutonomous: () => false,
+      askUser: async (_q, _t, _o, extra) => { extras.push(extra); return { answer: "__custom_decide__", notes: "a tiny patch" }; },
+      onAgentStarted: o.onAgentStarted,
+    });
+    expect(extras).toHaveLength(1);
+    expect(extras[0]).toMatchObject({ hasAutoAgent: true, allowCustom: true });
+    expect(result.status).toBe("success");
+    expect(o.started.filter((s) => s.step === "choose").map((s) => s.name)).toContain("flow-router");
+    expect(result.forks.choose).toEqual({ answer: "Quick fix", notes: "a tiny patch" });
+    expect(result.results.quick.summary).toBe("QUICK done");
+  });
+
+  it("allowCustom with nothing that routes it validates with a warning (not an error) naming flows.decider", () => {
+    const yaml = FORK_FLOW("", "", true);
+    const agents = new Map([agentMd("worker")].map((m) => { const a = parseAgentString(m, "<e2e>"); return [a.name, a]; }));
+    const diags = validateFlowContent(yaml, () => agents, () => true).diagnostics.filter((d) => /allowCustom/.test(d.message));
+    expect(diags).toHaveLength(1);
+    expect(diags[0].severity).toBe("warning");
+    expect(`${diags[0].message} ${diags[0].suggestion ?? ""}`).toMatch(/flows\.decider/);
+    // ... and a flow decision_agent silences it.
+    const withAgent = validateFlowContent(FORK_FLOW("decision_agent: flow-router\n", "", true), () => agents, () => true);
+    expect(withAgent.diagnostics.filter((d) => /allowCustom/.test(d.message))).toEqual([]);
+  });
+
+  it("an autonomous fork whose decision agent finishes \"blocked\" (with a branch) fails instead of routing", async () => {
+    const { flow, agents } = author(FORK_FLOW("decision_agent: flow-router\n", ""), [agentMd("worker"), agentMd("flow-router")]);
+    const events: DecisionEvent[] = [];
+    const result = await runFaux({
+      flow, agents,
+      responder: (t) => /The user was asked/.test(t) ? scriptFinish({ status: "blocked", summary: "unsure", branch: "Quick fix" }) : forkResponder(t),
+      isAutonomous: () => true,
+      onDecision: (e) => events.push(e),
+    });
+    expect(result.status).toBe("error");
+    expect(result.results.quick?.status ?? "skipped").not.toBe("complete");
+    expect(result.results.refactor?.status ?? "skipped").not.toBe("complete");
+    expect(events).toHaveLength(1);
+    expect(events[0].routedBy).toBeUndefined();
+    expect(events[0].attempts[0].reason).toBe("the decision agent finished with status blocked");
   });
 
   it("\"Other\" free text the decider cannot map re-asks the user instead of defaulting a branch", async () => {
@@ -537,6 +640,35 @@ describe("e2e faux: verify/fix loop cap", () => {
       "IMPLEMENT:2", "VERIFY:2", "2/2",  // pass 2: body and decision both observe 2
       "IMPLEMENT:3", "VERIFY:3", "3/2",  // pass 3: still in lock-step; the cap then forces the exit
     ]);
+  });
+
+  it("a judge that finishes \"blocked\" on pass 2 (still naming `fix`) stops the loop: no re-entry, no fall-through", async () => {
+    const { flow, agents } = author(LOOP_FLOW, [agentMd("coder"), agentMd("judge")]);
+    const completed: string[] = [];
+    const gateTasks: string[] = [];
+    const events: DecisionEvent[] = [];
+    const result = await runFaux({
+      flow, agents, maxTurns: 48,
+      responder: (t) => {
+        if (/GATE/.test(t)) {
+          gateTasks.push(t);
+          return gateTasks.length === 1
+            ? scriptFinish({ status: "complete", summary: "needs work", branch: "fix" })
+            : scriptFinish({ status: "blocked", summary: "cannot verify", branch: "fix" });
+        }
+        return scriptFinish({ status: "complete", summary: "ok" });
+      },
+      onDecision: (e) => events.push(e),
+      onAgentComplete: (_a, step) => completed.push(step),
+    });
+    expect(result.status).toBe("error");
+    expect(result.lastResult.result.summary).toContain("the decision agent finished with status blocked");
+    // pass 1 looped; pass 2's blocked "fix" was NOT a loop-back and NOT the cap's fall-through.
+    expect(completed.filter((s) => s === "implement")).toHaveLength(2);
+    expect(completed).not.toContain("report");
+    expect(events.map((e) => [e.label, e.routedBy])).toEqual([["fix", "agent"], [undefined, undefined]]);
+    // The gate task carries the branch list on every pass.
+    for (const t of gateTasks) expect(t).toContain("Branches (call finish with exactly one of these as `branch`):\n- fix\n- done");
   });
 
   it("exits through the done branch as soon as the decider says so (loop not exhausted)", async () => {

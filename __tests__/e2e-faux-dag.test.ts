@@ -11,6 +11,7 @@
  * version of pi-flows (parser, types, docs), so there is nothing to test.
  */
 import { describe, expect, it } from "vitest";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { makeAgent, runFauxFlow, scriptFinish } from "./faux-harness.js";
 import { parseFlowYamlString } from "../extensions/flow-engine/flow-parser-yaml.js";
 
@@ -22,6 +23,10 @@ const AGENTS = [
 
 const ok = (summary: string, extra: Record<string, unknown> = {}) =>
   scriptFinish({ status: "complete", summary, ...extra });
+
+/** Reply prose plus a finish call in one turn: the prose is the step's fullOutput. */
+const reply = (text: string, summary: string, extra: Record<string, unknown> = {}) =>
+  fauxAssistantMessage([fauxText(text), fauxToolCall("finish", { status: "complete", summary, files: [], ...extra })]);
 
 /** Track step lifecycle through onAgentStarted / onAgentComplete. */
 function tracker() {
@@ -112,6 +117,30 @@ steps:
     expect(merged).toContain("result-1(PLANNED)");
     expect(merged).toContain("result-2(PLANNED)");
     expect(merged).toContain("result-3(PLANNED)");
+  });
+
+  it("fan-in of reply text: ${{result.wN.fullOutput}} / bare ${{result.wN}} carry each worker's prose, not its summary", async () => {
+    const yaml = FLOW.replace(
+      'task: "MERGE ${{result.w1.summary}} + ${{result.w2.summary}} + ${{result.w3.summary}}"',
+      'task: "MERGE <${{result.w1.fullOutput}}> <${{result.w2}}> <${{result.w3.fullOutput}}> sums=${{result.w1.summary}}"',
+    );
+    let mergeTask = "";
+    const result = await runFauxFlow({
+      flow: parseFlowYamlString(yaml, "<fan-full>"),
+      agents: AGENTS,
+      responder: (task) => {
+        const w = task.match(/WORK-(\d)/);
+        if (w) return reply(`section ${w[1]} body\nwith two lines`, `wrote section ${w[1]}`);
+        if (/MERGE/.test(task)) { mergeTask = task; return ok("merged"); }
+        return ok("PLANNED");
+      },
+    });
+    expect(result.status).toBe("success");
+    for (const n of [1, 2, 3]) {
+      expect(result.results[`w${n}`].summary).toBe(`wrote section ${n}`);
+      expect(mergeTask).toContain(`<section ${n} body\nwith two lines>`);
+    }
+    expect(mergeTask).toContain("sums=wrote section 1");
   });
 
   it("flow-level max_concurrent: 2 never runs more than 2 of 4 workers at once", async () => {
@@ -232,6 +261,79 @@ steps:
   });
 });
 
+describe("e2e faux DAG: code → agent-decision", () => {
+  const FLOW = `name: judge-score
+description: measure, let a decision agent judge the score
+decision_agent: merger
+steps:
+  - id: measure
+    type: code
+    outputs:
+      - name: score
+      - name: notes
+  - id: judge
+    type: agent-decision
+    blockedBy: [measure]
+    task: "JUDGE the build for \${{task}}"
+    state:
+      score: "\${{result.measure.score}}"
+      notes: "\${{result.measure.notes}}"
+    branches:
+      ship: { to: celebrate, means: "Score is high enough to release" }
+      rework: remediate
+  - id: celebrate
+    type: agent
+    agent: worker
+    task: "CELEBRATE"
+  - id: remediate
+    type: agent
+    agent: worker
+    task: "REMEDIATE"
+`;
+
+  it("the decision agent's task carries branch means and the code outputs as expanded state", async () => {
+    let judgeTask = "";
+    const t = tracker();
+    const result = await runFauxFlow({
+      flow: parseFlowYamlString(FLOW, "<judge-score>"),
+      agents: AGENTS,
+      task: "release 7",
+      codeHandlers: { measure: `export default async () => ({ score: 9, notes: { flaky: ["t1"] } });` },
+      responder: (task) => {
+        if (/JUDGE/.test(task)) { judgeTask = task; return ok("judged", { branch: "ship" }); }
+        return ok(/CELEBRATE/.test(task) ? "celebrated" : "remediated");
+      },
+      onAgentStarted: t.onAgentStarted, onAgentComplete: t.onAgentComplete,
+    });
+    expect(result.status).toBe("success");
+    expect(result.results.celebrate.summary).toBe("celebrated");
+    expect(result.results.remediate.status).toBe("skipped");
+    expect(t.started("remediate")).toBe(false);
+    expect(judgeTask).toContain(
+      "JUDGE the build for release 7\n\nBranches (call finish with exactly one of these as `branch`):\n" +
+      "- ship: Score is high enough to release\n- rework\n\n" +
+      'State:\n- score: 9\n- notes: {"flaky":["t1"]}',
+    );
+  });
+
+  it("a decision agent that finishes blocked (naming a branch) halts the flow: neither branch runs", async () => {
+    const t = tracker();
+    const result = await runFauxFlow({
+      flow: parseFlowYamlString(FLOW, "<judge-score>"),
+      agents: AGENTS,
+      codeHandlers: { measure: `export default async () => ({ score: 9, notes: "" });` },
+      responder: (task) => /JUDGE/.test(task)
+        ? scriptFinish({ status: "blocked", summary: "no baseline", branch: "ship" })
+        : ok("ran"),
+      onAgentStarted: t.onAgentStarted, onAgentComplete: t.onAgentComplete,
+    });
+    expect(result.status).toBe("error");
+    expect(t.started("celebrate")).toBe(false);
+    expect(t.started("remediate")).toBe(false);
+    expect(result.lastResult.result.summary).toContain("the decision agent finished with status blocked");
+  });
+});
+
 describe("e2e faux DAG: code-decision loop with max_iterations", () => {
   it("a handler that never says `done` is forced out by the cap (re-entries == max_iterations)", async () => {
     const yaml = `name: capped
@@ -302,16 +404,18 @@ steps:
   - id: finalize
     type: agent
     agent: merger
-    task: "FINALIZE"
+    task: "FINALIZE last=[\${{result.work.fullOutput}}]"
 `;
     const t = tracker();
     let pass = 0;
+    let finalizeTask = "";
     const result = await runFauxFlow({
       flow: parseFlowYamlString(yaml, "<converges>"),
       agents: AGENTS,
       codeHandlers: { check: `export default async (i) => ({ branch: i.last === "good" ? "done" : "again" });` },
       responder: (task) => {
-        if (/WORK/.test(task)) return ok(++pass >= 2 ? "good" : "bad");
+        if (/WORK/.test(task)) { ++pass; return reply(`prose of pass ${pass}`, pass >= 2 ? "good" : "bad"); }
+        finalizeTask = task;
         return ok("finalized");
       },
       onAgentStarted: t.onAgentStarted, onAgentComplete: t.onAgentComplete,
@@ -319,6 +423,8 @@ steps:
     expect(result.status).toBe("success");
     expect(t.count("work")).toBe(2);
     expect(result.results.finalize.status).toBe("complete");
+    // The body's reply text after the loop is the LAST pass's.
+    expect(finalizeTask).toContain("FINALIZE last=[prose of pass 2]");
   });
 });
 
