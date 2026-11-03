@@ -171,5 +171,5 @@ WRITE discipline — is injected by the `pi-dashboard-kb-extension`. Tune it in
 
 Files in this area. Purposes left for the agent to author.
 
-| `eslint.config.js` | ESLint flat config, ESLint 9+: ignores node_modules/research/openspec/agent-docs/docs; @eslint/js recommended + typescript-eslint recommended; no-explicit-any off, no-unused-vars warn. |
+| `eslint.config.js` | ESLint flat config, ESLint 9+: ignores node_modules/research/openspec/docs; @eslint/js recommended + typescript-eslint recommended; no-explicit-any off, no-unused-vars warn. |
 | `vitest.config.ts` | Vitest config: `configDefaults.exclude` plus `.worktrees/**` so sibling git worktrees' suites are not collected. |

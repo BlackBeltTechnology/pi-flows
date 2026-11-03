@@ -83,11 +83,12 @@ describe("validator: decider", () => {
     const d = diags(flow("decider: [typesafe/jev-latest]\n", ad()), () => true).filter((x) => x.severity === "error");
     expect(d).toEqual([]);
   });
-  it("fork allowCustom without agent is fine when a decider chain exists", () => {
+  it("fork allowCustom without agent: warning alone, fine with a decider chain", () => {
     const fork = "  - id: fk\n    type: fork\n    question: q\n    options: [a, b]\n    allowCustom: true\n    branches:\n      a: next\n      b: other\n";
     const agents = () => new Map([["w", { name: "w" } as any]]);
-    const noChain = validateFlowContent(flow("", fork), agents).diagnostics.filter((x) => x.severity === "error");
-    expect(noChain.some((x) => /allowCustom/.test(x.message))).toBe(true);
+    // Nothing in the flow routes "Other": a warning (the flows.decider setting may still).
+    const noChain = validateFlowContent(flow("", fork), agents).diagnostics.filter((x) => /allowCustom/.test(x.message));
+    expect(noChain.map((x) => x.severity)).toEqual(["warning"]);
     const chain = validateFlowContent(flow("decider: [system-one]\n", fork), agents).diagnostics.filter((x) => x.severity === "error");
     expect(chain.some((x) => /allowCustom/.test(x.message))).toBe(false);
   });

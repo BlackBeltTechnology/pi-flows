@@ -399,13 +399,14 @@ export function validateFlowContent(
               suggestion: "Ensure the agent exists or will be created before the flow runs",
             });
           }
-          // allowCustom requires agent: field for custom answer routing
-          if (s.allowCustom && !s.agent && !s.decider?.entries && !flow.decider?.entries) {
+          // An "Other" answer needs something to route it. The flows.decider
+          // setting also counts at runtime but is invisible here: warn, not error.
+          if (s.allowCustom && !s.agent && !s.decider?.entries && !flow.decider?.entries && !flow.decision_agent) {
             diagnostics.push({
               line: stepPropLine(idx, s.id, "allowCustom"),
-              severity: "error",
-              message: `Fork "${s.id}" has allowCustom: true but no agent: field. An agent is required to route custom freetext answers to branches.`,
-              suggestion: "Add agent: <agent-name> (or a decider: chain) to this fork step",
+              severity: "warning",
+              message: `Fork "${s.id}" has allowCustom: true but nothing in the flow routes a custom answer; "Other" is offered only when the flows.decider setting is set.`,
+              suggestion: "Add agent: <agent-name> or decider: to this fork, or decision_agent: to the flow",
             });
           }
           break;

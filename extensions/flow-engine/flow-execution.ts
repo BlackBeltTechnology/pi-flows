@@ -1007,9 +1007,9 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   return { nextStepId };
 }
 
-/** A fork can be decided without the user when it has an agent or a decider chain. */
+/** A fork can be decided without the user when it has an agent, a decider chain or a flow decision_agent. */
 function hasAutoDecider(step: ForkStep, options: FlowRunOptions): boolean {
-  return !!(step.agent || step.decider?.entries || options.flow.decider?.entries || options.decider?.entries);
+  return !!(step.agent || step.decider?.entries || options.flow.decider?.entries || options.flow.decision_agent || options.decider?.entries);
 }
 
 /**
@@ -1230,6 +1230,12 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
       );
       agentName = name;
       const branch = result.finishParams?.branch;
+      // A decision agent that reports it could not finish has not decided,
+      // even if it also named a branch.
+      const status = result.result?.status;
+      if (result.finishParams && (status === "blocked" || status === "error")) {
+        return { ok: false, outcome: "invalid-label", reason: capReason(`the decision agent finished with status ${status}`), payload: result };
+      }
       if (typeof branch === "string" && branch) {
         return { ok: true, authoritative: true, answer: { label: branch, confidence: 1 }, payload: result };
       }

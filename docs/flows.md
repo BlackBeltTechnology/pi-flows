@@ -150,7 +150,7 @@ Present options to the user (interactive mode) or let a decision agent / decider
 | `question` | ✓ | Question displayed to the user |
 | `options` | ✓ | Comma-separated or YAML list of choices |
 | `branches` | ✓ | Map of option text → step ID |
-| `allowCustom` | | Appends "Other (describe)" to the prompt. The typed text is mapped to a branch by the fork's decider chain (see [Free text](#fork-free-text-other-describe)). Needs the fork's `agent:` or a `decider:` chain (step or flow); otherwise validation fails. |
+| `allowCustom` | | Appends "Other (describe)" to the prompt. The typed text is mapped to a branch by the fork's decider chain (see [Free text](#fork-free-text-other-describe)). Offered when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or the `flows.decider` setting is set; otherwise validation only warns. |
 | `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
 | `agent` | | Decision agent for this fork (autonomous decisions, "Auto-decide", "Other" free text). Optional: without it the agent is picked by [Decision agent selection](#decision-agent-selection). |
 | `decider` | | Decider chain for this fork (see [Decider chain](#decider-chain-classifier-decisions)). |
@@ -181,7 +181,7 @@ When the user picks `Other (describe)` and types text:
 - The agent entry uses the same decision agent selection as above (step `agent:` → flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`).
 - The text is stored as the fork's notes and injected into the branch step. The "Optional notes" prompt is skipped.
 - If every entry fails (no valid branch), the user is told and the fork is asked again with the same options. No branch is chosen by default.
-- Without `agent:` or a `decider:` chain, `Other` has nothing to map the text. Validation rejects `allowCustom` in that case (a flow-level `decision_agent:` alone does not satisfy it).
+- `Other` and Auto-decide are offered when the fork has `agent:`, a `decider:` chain, the flow has `decision_agent:`, or `flows.decider` is set. If none of the flow-visible ones is present, validation only warns, since `flows.decider` may still route it.
 
 ---
 
@@ -329,7 +329,7 @@ Every agent-made decision (autonomous `fork`, a fork's "Other" free text, `agent
 | `provider/model` | A pi-ai classifier model, e.g. `typesafe/jev-latest` (`modelRegistry.classify`). |
 | `agent` | The decision agent (see above). |
 
-The chain is the step's `decider:`, else the flow's top-level `decider:`, else the setting `flows.decider`, else `[agent]` (today's behaviour). The first entry that returns a **trusted, valid** label routes; later entries are not tried.
+The chain is the step's `decider:`, else the flow's top-level `decider:`, else the setting `flows.decider`, else `[agent]` (today's behaviour). The first entry that returns a **trusted, valid** label routes; later entries are not tried. A decision agent that finishes with `status: "blocked"` or `"error"` has its `branch` ignored: it counts as a failed decider attempt (reason "the decision agent finished with status blocked"). If no other entry routes, the step fails and `on_error` routes it, else the flow halts.
 
 ```yaml
 decider:
@@ -570,6 +570,8 @@ Template variables are placeholders in `task`, `inputs`, and `question` fields. 
 | `${{loop.STEP-ID.max}}` | Maximum iterations configured for a loop |
 
 > **Resolution order:** Variables are expanded at dispatch time. `${{result.X}}` is only valid if step `X` has already completed (guaranteed when `X` is in `blockedBy`).
+
+> **`summary` vs `fullOutput` vs declared outputs.** `summary` is the agent's own one-line description of what it did (the `finish` `summary`, e.g. "Wrote a haiku about rain"), not its content. To pass the agent's reply text downstream use `${{result.STEP-ID.fullOutput}}` (or bare `${{result.STEP-ID}}`); a declared output named `fullOutput` takes precedence. For structured content, declare an output (`outputs: [{ name: haiku }]`) and reference `${{result.STEP-ID.haiku}}`. An undeclared `${{result.STEP-ID.foo}}` expands to `""`.
 
 > **Missing values resolve to empty string at runtime.** A reference that survives validation but has no value at dispatch (e.g. an undeclared input) expands to `""`. Reference _correctness_, however, is checked ahead of time — see below.
 

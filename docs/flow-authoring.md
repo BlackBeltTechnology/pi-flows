@@ -493,7 +493,7 @@ Presents a choice to the user and routes to different steps based on the selecti
 | `branches` | Yes | Map of option text → target step ID. Keys must match options **exactly**. |
 | `agent` | No | Decision agent for this fork (autonomous mode, "Auto-decide", `allowCustom` freetext). Without it: flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`. |
 | `task` | No | Context for the auto-deciding agent. Template string. |
-| `allowCustom` | No | Appends an "Other (describe)" option (interactive mode). The decider chain maps the typed text to a branch; if it cannot, the user is asked again. Requires `agent:` or a `decider:` chain (step or flow). |
+| `allowCustom` | No | Appends an "Other (describe)" option (interactive mode). The decider chain maps the typed text to a branch; if it cannot, the user is asked again. Offered when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or `flows.decider` is set; otherwise validation only warns. |
 | `multiSelect` | No | Allow multiple selections. The selected options are joined and passed as context. |
 
 **Fork context injection:** The chosen option, user notes, and decision source (user or agent) are automatically injected into the branch step's system prompt — no manual wiring needed.
@@ -754,7 +754,7 @@ export default async function (input: { valid: string }): Promise<{ branch: Bran
 }
 ```
 
-Typed outputs resolve against the merged typed-output map first, falling back to `fullOutput` only when the key is absent.
+Typed outputs resolve against the merged typed-output map only. An undeclared `${{result.X.foo}}` expands to an empty string; only `${{result.X.fullOutput}}` gives the reply text.
 
 ---
 
@@ -767,7 +767,7 @@ Template expressions `${{...}}` are expanded in `task`, `inputs` values, and `qu
 | `${{task}}` | The original user task string (from command args or `task_required` prompt). |
 | `${{input.NAME}}` | Named input passed to this step via the `inputs:` block. |
 | `${{result.STEP_ID.status}}` | Step result status: `"complete"`, `"error"`, `"blocked"`, `"unknown"`. |
-| `${{result.STEP_ID.summary}}` | Summary string from the step's `finish` call. |
+| `${{result.STEP_ID.summary}}` | Summary string from the step's `finish` call: the agent's description of its work, not its content. |
 | `${{result.STEP_ID.fullOutput}}` | Full raw output text. Use sparingly — can be very large. |
 | `${{result.STEP_ID.OUTPUTNAME}}` | A declared typed output (from an agent's or code step's `outputs:`), held under the result's `outputs`. A produced file path is conveyed this way as a `*_path` output. |
 | `${{flow.input.NAME}}` | A declared flow input (see [Typed flow inputs](#typed-flow-inputs)). |

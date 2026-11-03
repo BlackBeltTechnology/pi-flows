@@ -317,10 +317,13 @@ pi.events.on("flow:agent-started", (data: {
   agentName:     string;
   stepId:        string;
   resolvedModel: string;   // actual model ID after role resolution
+  config?:       { model?: string; modelRefs?: string[] };  // model: entry 1 is config.model; modelRefs is the whole model: list in order
   nodeKind?:     NodeKind;  // the node's TYPE (all node types emit this)
   target?:       string;    // resolved handler path, code / code-decision only
 }) => { ... });
 ```
+
+`config.modelRefs` carries the whole `model:` list in order; `config.model` stays the first entry.
 
 `nodeKind` is now emitted for **every** node type (see [NodeKind taxonomy](#nodekind-taxonomy)), not just code nodes. `target` is the resolved handler path, present only on `code`/`code-decision` started events.
 

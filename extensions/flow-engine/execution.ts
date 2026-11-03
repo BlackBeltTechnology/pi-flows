@@ -77,6 +77,11 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     .replace(/\$\{\{flow\.input\.([\w-]+)\}\}/g, (_, name) => serializeForText(ctx.flowInput?.[name]))
     .replace(/\$\{\{result\.([\w-]+)\.status\}\}/g, (_, id) => ctx.results[id]?.status ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.summary\}\}/g, (_, id) => ctx.results[id]?.summary ?? "")
+    // The agent's reply text; a declared output of the same name wins.
+    .replace(/\$\{\{result\.([\w-]+)\.fullOutput\}\}/g, (_, id) => {
+      const r = ctx.results[id];
+      return r?.outputs?.fullOutput !== undefined ? serializeForText(r.outputs.fullOutput) : r?.fullOutput ?? "";
+    })
     // Catch-all for typed outputs: ${{result.STEP.anyField}} resolves against the
     // typed `outputs` map and is serialized at this text boundary (compact JSON
     // for non-strings). Standard fields above are matched first.

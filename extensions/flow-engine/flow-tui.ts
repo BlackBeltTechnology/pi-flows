@@ -645,6 +645,7 @@ export class EventEmitObserver implements FlowObserver {
             name: config.name,
             description: config.description,
             model: config.model,
+            ...(config.modelRefs?.length ? { modelRefs: config.modelRefs } : {}),
             card: config.card,
             sourcePath: config.source,
           }

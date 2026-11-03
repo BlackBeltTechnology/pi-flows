@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A decision agent that finishes `blocked` or `error` has not decided.** Its `branch` is ignored and the attempt fails, so `on_error` routes (or the flow halts) instead of looping on a branch the agent itself said it could not choose.
+- **`${{result.<id>.fullOutput}}` works in agent task templates.** It expanded to an empty string; it now gives the agent's reply text (a declared output named `fullOutput` wins). `summary` stays the agent's description of its work.
+- **Fork `allowCustom`:** a flow-level `decision_agent:` now routes "Other" answers and offers Auto-decide. Validation warns (no longer errors) when nothing in the flow routes them, since the `flows.decider` setting may.
+- `flow:agent-started` `config` carries `modelRefs`, the whole `model:` list.
+- Removed the stale `agent-docs/` mirror; `docs/` is the only reference.
 - **Decision agents see `state:` and branch `means`.** The agent entry of a decision chain now gets the same inputs as a classifier: its task is followed by the branch list (with `means`) and the expanded `state:` map. Before, it saw only `task:` and decided blind.
 - **Behaviour change:** decision steps no longer fall back silently to the first branch. An invalid or missing label is a failed attempt; when every decider entry fails an `agent-decision` or autonomous `fork` fails the step (hard) with an error listing each attempt, and an interactive fork asks the user again.
 - The resolved `Model` object is passed straight to the agent session (no second registry lookup).

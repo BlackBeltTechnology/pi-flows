@@ -5,7 +5,7 @@ import tseslint from "typescript-eslint";
 
 export default [
   {
-    ignores: ["node_modules/**", "research/**", "openspec/**", "agent-docs/**", "docs/**"],
+    ignores: ["node_modules/**", "research/**", "openspec/**", "docs/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
