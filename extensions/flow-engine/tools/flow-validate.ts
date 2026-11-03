@@ -598,6 +598,14 @@ export function validateFlowContent(
     const templateStrings: Array<{ tpl: string; prop: string }> = [];
     const stepTask = (step as { task?: string }).task;
     if (stepTask) templateStrings.push({ tpl: stepTask, prop: "task" });
+    const stepQuestion = (step as { question?: string }).question;
+    if (typeof stepQuestion === "string") templateStrings.push({ tpl: stepQuestion, prop: "question" });
+    const stepState = (step as { state?: Record<string, string> }).state;
+    if (stepState) {
+      for (const [key, val] of Object.entries(stepState)) {
+        if (typeof val === "string") templateStrings.push({ tpl: val, prop: `state.${key}` });
+      }
+    }
     const stepInputs = (step as { inputs?: Record<string, string> }).inputs;
     if (stepInputs) {
       for (const [key, val] of Object.entries(stepInputs)) {
@@ -905,9 +913,17 @@ function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
     pred.get(to)!.add(from);
   };
 
-  for (const step of flow.steps) {
+  flow.steps.forEach((step, i) => {
     const blockedBy = (step as { blockedBy?: string[] }).blockedBy;
     if (blockedBy) for (const dep of blockedBy) addEdge(dep, step.id);
+
+    // Non-agent steps are "separators": the engine runs them only after every
+    // earlier segment has finished (see splitIntoSegments/runFlow), so every
+    // step EARLIER in file order is ordered before them. Agent steps in a
+    // parallel group get no such guarantee and keep the blockedBy-based rule.
+    if (step.stepType !== "agent") {
+      for (let j = 0; j < i; j++) addEdge(flow.steps[j].id, step.id);
+    }
 
     const onError = (step as { on_error?: string }).on_error;
     if (onError) addEdge(step.id, onError);
@@ -916,7 +932,7 @@ function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
       const branches = (step as ForkStep | AgentDecisionStep | CodeDecisionStep).branches;
       if (branches) for (const target of Object.values(branches)) addEdge(step.id, target);
     }
-  }
+  });
 
   // Transitive closure of predecessors for each step (BFS over pred edges).
   const orderedBefore = new Map<string, Set<string>>();
