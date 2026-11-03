@@ -324,8 +324,7 @@ describe("e2e realistic 8: dependency upgrade driven by typed flow inputs", () =
     expect(spawns()).toBe(0);
   });
 
-  // ENGINE BUG: validateFlowContent reports the documented `${{flow.input.<name>}}` template as an error ("unrecognized prefix \"flow\"").
-  it.fails("a flow using ${{flow.input.*}} references validates without errors", () => {
+  it("a flow using ${{flow.input.*}} references validates without errors", () => {
     const diag = validateFlowContent(UPGRADE_YAML, () => new Map(AGENTS.map((m) => { const a = parseAgentString(m, "<t>"); return [a.name, a]; })), () => true);
     expect(errorsOf(diag.diagnostics)).toEqual([]);
   });

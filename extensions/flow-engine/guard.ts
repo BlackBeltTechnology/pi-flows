@@ -89,9 +89,11 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         );
       }
 
-      // Add declared output parameters. Outputs are string-valued but REQUIRED
-      // by default, and `type`/`pattern` are encoded as string constraints so
+      // Add declared output parameters. Outputs are REQUIRED by default and
       // the SDK rejects a non-conforming finish call (→ followUp retry).
+      // object/array take their JSON type; number/boolean accept the real type
+      // or a string matching the type-derived pattern (coerceDeclaredOutput);
+      // otherwise a string, constrained by `pattern` when given.
       const NUMERIC_PATTERN = "^-?\\d+(\\.\\d+)?$";
       const BOOLEAN_PATTERN = "^(true|false)$";
       const agentOutputs = options.agentOutputs ?? [];
@@ -99,6 +101,12 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         const schemaOpts: Record<string, any> = {
           description: output.description ?? `Output: ${output.name}`,
         };
+        if (output.pattern === undefined && (output.type === "object" || output.type === "array")) {
+          baseParams[output.name] = output.type === "object"
+            ? Type.Object({}, schemaOpts)
+            : Type.Array(Type.Unknown(), schemaOpts);
+          continue;
+        }
         // Explicit pattern wins over the type-derived pattern.
         const pattern = output.pattern
           ?? (output.type === "number" ? NUMERIC_PATTERN
@@ -116,7 +124,15 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
           }
         }
         // Required: no Type.Optional wrapper.
-        baseParams[output.name] = Type.String(schemaOpts);
+        if (output.pattern === undefined && schemaOpts.pattern !== undefined) {
+          const { pattern: typePattern, ...opts } = schemaOpts;
+          baseParams[output.name] = Type.Union([
+            output.type === "number" ? Type.Number() : Type.Boolean(),
+            Type.String({ pattern: typePattern }),
+          ], opts);
+        } else {
+          baseParams[output.name] = Type.String(schemaOpts);
+        }
       }
 
       pi.registerTool({

@@ -449,7 +449,6 @@ steps:
   const GATE = `export default async (i) => ({ branch: typeof i.errors !== "number" ? "not-a-number" : i.errors === 0 ? "clean" : "dirty" });`;
   const cat = catalog([agentMd("fixer", ["fixed"]), agentMd("closer")]);
 
-  // NOTE: parsed without the authoring validator (it rejects ${{flow.input.x}} â see e2e-faux-code-steps.test.ts ENGINE BUG).
   const flow = () => parseFlowYamlString(YAML, "<e2e-code>");
 
   it("converges: 4 issues, the fixer clears 2 then 1 then 1 â three fix passes, then the report", async () => {

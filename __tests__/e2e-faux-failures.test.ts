@@ -231,10 +231,8 @@ describe("e2e faux failures: agent never calls finish", () => {
     expect(result.results.build.status).not.toBe("complete");
   });
 
-  // ENGINE BUG: a no-finish soft failure stores status "unknown" (parsed from free text), so
-  // downstream ${{result.build.status}} reads "unknown"; docs say never status:"unknown" and
-  // that status is one of complete/error/blocked.
-  it.fails("the no-finish soft failure is never status \"unknown\" downstream", async () => {
+  // docs: status is never "unknown"; it is one of complete/error/blocked.
+  it("the no-finish soft failure is never status \"unknown\" downstream", async () => {
     const { result } = await runRescue(() => textOnly("no finish here"));
     expect(result.results.build.status).not.toBe("unknown");
     expect(result.results.rescue.summary).not.toContain("status=unknown");

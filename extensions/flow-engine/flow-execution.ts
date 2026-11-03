@@ -195,6 +195,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
   try {
     while (segmentIndex < segments.length) {
       // Check abort before processing each segment
+      if (userSignal?.aborted) throw new FlowCancelledError();
 
       const segment = segments[segmentIndex];
 
@@ -235,6 +236,34 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
           }
         }
         if (ctx.hardFail) break;
+
+        if (segment.step.stepType === "fork") markUntakenBranchesSkipped(ctx, segment.step, stepResult);
+
+        // Multi-select fork: the selected branches already ran inside the fork.
+        // Continue in the furthest branch segment with only the steps reachable
+        // from them (the selected branches themselves keep their results).
+        if (stepResult.ranBranches) {
+          const ran = stepResult.ranBranches;
+          const idxs = ran.map((id) => findSegmentIndex(segments, id)).filter((i) => i >= 0);
+          if (idxs.length) {
+            const targetIdx = Math.max(...idxs);
+            const targetSeg = segments[targetIdx];
+            if (targetSeg.type === "dag") {
+              const active = new Set<string>();
+              for (const id of ran) {
+                if (targetSeg.steps.some((s) => s.id === id)) {
+                  for (const a of computeActiveSteps(targetSeg.steps, id)) active.add(a);
+                }
+              }
+              for (const id of ran) active.delete(id);
+              targetSeg.activeSteps = active;
+              segmentIndex = targetIdx;
+            } else {
+              segmentIndex = targetIdx + 1;
+            }
+            continue;
+          }
+        }
 
         // Handle routing: jump to target step's segment
         if (stepResult.nextStepId) {
@@ -313,15 +342,11 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     };
   }
 
-  // If aborted, mark any agents that didn't complete as aborted
+  // If aborted, mark any agent steps that didn't complete as aborted
   if (options.signal?.aborted) {
-    const allAgentNames = new Set<string>();
     for (const step of flow.steps) {
-      if (step.stepType === "agent") allAgentNames.add(step.agent);
-    }
-    for (const name of allAgentNames) {
-      if (!ctx.results[name]) {
-        ctx.results[name] = {
+      if (step.stepType === "agent" && !ctx.results[step.id]) {
+        ctx.results[step.id] = {
           fullOutput: "",
           status: "aborted",
           summary: "Aborted by user",
@@ -412,9 +437,12 @@ async function runDagSegment(
     for (const step of steps) {
       if (!activeSteps.has(step.id)) {
         completed.add(step.id);
-        // Store synthetic "skipped" result so blockedBy refs auto-satisfy
-        const skippedResult = { fullOutput: "", status: "skipped" as const, summary: "", outputs: {} };
-        ctx.results[step.id] = skippedResult;
+        // Store synthetic "skipped" result so blockedBy refs auto-satisfy. A
+        // step that already has a result (e.g. completed before a loop
+        // re-entered this segment) keeps it.
+        if (!ctx.results[step.id]) {
+          ctx.results[step.id] = { fullOutput: "", status: "skipped" as const, summary: "", outputs: {} };
+        }
         // Don't emit events for skipped agents — they stay "pending" in the dashboard
       }
     }
@@ -577,6 +605,21 @@ async function runDagSegment(
 interface StepResult {
   agentResult?: AgentResult;
   nextStepId?: string;
+  /** Multi-select fork: branch step ids already run inside the fork. */
+  ranBranches?: string[];
+}
+
+/**
+ * Store a synthetic "skipped" result for every forward branch target of a fork
+ * that was not taken (and has no result yet), whatever the target's step type.
+ */
+function markUntakenBranchesSkipped(ctx: FlowContext, step: ForkStep, stepResult: StepResult): void {
+  if (!stepResult.nextStepId && !stepResult.ranBranches) return;
+  const taken = new Set([stepResult.nextStepId, ...(stepResult.ranBranches ?? [])]);
+  for (const target of Object.values(step.branches ?? {})) {
+    if (taken.has(target) || ctx.results[target] || isBackwardTarget(ctx.steps, step.id, target)) continue;
+    ctx.results[target] = { fullOutput: "", status: "skipped", summary: "", outputs: {} };
+  }
 }
 
 async function executeStep(step: FlowStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
@@ -980,10 +1023,12 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   // Multi-select: execute all selected branches sequentially
   if (step.multiSelect && Array.isArray(response.answer)) {
     let lastResult: StepResult = {};
+    const ranBranches: string[] = [];
     const selectedOptions = response.answer as unknown as string[];
     for (const ans of selectedOptions) {
       const branchStepId = step.branches[ans];
       if (!branchStepId) continue;
+      ranBranches.push(branchStepId);
       // Autowire fork context for each branch (with all selected options)
       storeForkContext(ctx, step, branchStepId, selectedOptions.join(", "), response.notes);
       const branchStep = ctx.steps.find(s => s.id === branchStepId);
@@ -994,7 +1039,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
         }
       }
     }
-    return {};
+    return { ranBranches };
   }
 
   const nextStepId = step.branches[response.answer];

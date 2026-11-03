@@ -240,8 +240,7 @@ describe("e2e faux forks: multiSelect", () => {
     expect(r.forks.which.answer).toEqual(["Security", "Accessibility"]);
   });
 
-  // ENGINE BUG: after a multiSelect fork runs its selected branches it falls through file order and re-runs every branch step (unselected included).
-  it.fails("the unselected branch never runs and each selected branch runs exactly once", async () => {
+  it("the unselected branch never runs and each selected branch runs exactly once", async () => {
     const { flow, agents } = author(AUDIT, ["auditor"]);
     const started: string[] = [];
     const r = await runFaux({
@@ -261,7 +260,7 @@ describe("e2e faux forks: multiSelect", () => {
     const systems: Record<string, string> = {};
     await runSys({
       flow, agents,
-      // first run of each branch (see the ENGINE BUG above for the re-runs)
+      // each branch runs once; keep its first system prompt
       responder: (t, sys) => { systems[marker(t)] ??= sys; return work(t); },
       askUser: async () => ({ answer: ["Security", "Performance"] as any, notes: "release blocker" }),
     });

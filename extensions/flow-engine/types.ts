@@ -69,8 +69,8 @@ export interface ArchitectMeta {
 export interface AgentOutput {
   name: string;
   description?: string;
-  /** Content constraint on the (always string-valued) output. */
-  type?: "string" | "number" | "boolean";
+  /** Declared JSON type of the output (default string). */
+  type?: "string" | "number" | "boolean" | "object" | "array";
   /** Regex the string value MUST match. Explicit pattern wins over type. */
   pattern?: string;
 }

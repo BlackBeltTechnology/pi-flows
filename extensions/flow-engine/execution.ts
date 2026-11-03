@@ -72,7 +72,7 @@ export function loadContextFiles(
 export function expandTemplateVariables(template: string, ctx: TemplateContext): string {
   return template
     // Primary syntax: ${{...}}
-    .replace(/\$\{\{task\}\}/g, ctx.task)
+    .replace(/\$\{\{task\}\}/g, () => ctx.task)
     .replace(/\$\{\{input\.([\w-]+)\}\}/g, (_, name) => ctx.inputs[name] ?? "")
     .replace(/\$\{\{flow\.input\.([\w-]+)\}\}/g, (_, name) => serializeForText(ctx.flowInput?.[name]))
     .replace(/\$\{\{result\.([\w-]+)\.status\}\}/g, (_, id) => ctx.results[id]?.status ?? "")
@@ -135,8 +135,9 @@ export function resolveCodeInput(template: string, ctx: TemplateContext): unknow
     switch (m[2]) {
       case "status": return r.status;
       case "summary": return r.summary;
-      case "fullOutput": return r.fullOutput;
-      default: return r.outputs?.[m[2]] ?? "";
+      // A declared output of the same name wins (as in text expansion).
+      case "fullOutput": return r.outputs?.fullOutput !== undefined ? r.outputs.fullOutput : r.fullOutput;
+      default: { const v = r.outputs?.[m[2]]; return v === undefined ? "" : v; }
     }
   }
   const b = template.match(WHOLE_RESULT_BARE);
@@ -786,7 +787,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   }
 
   // Build AgentResult from accumulated data
-  const parsed = finishParams
+  const parsed: ParsedResult = finishParams
     ? {
         status: finishParams.status as ParsedResult["status"],
         summary: finishParams.summary ?? "",
@@ -820,6 +821,12 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       message: `Agent's finish was rejected ${badFinishCount} time(s): ${badFinishMessage}`,
       source: "agent_finish_invalid",
     };
+  }
+  // No valid finish: a soft failure is status "error" (never "unknown") and
+  // its summary states the reason.
+  if (!finishParams) {
+    parsed.status = "error";
+    parsed.summary = failureInfo?.message || "Agent did not call finish";
   }
 
   return {

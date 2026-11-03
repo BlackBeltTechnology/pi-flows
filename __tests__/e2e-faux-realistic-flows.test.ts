@@ -195,8 +195,7 @@ describe("e2e realistic 1: feature delivery with a review/fix loop", () => {
     expect(result.results.report.summary).toBe("report written");
   });
 
-  // ENGINE BUG: re-entering a DAG segment via a loop marks the segment's non-loop steps "skipped", wiping their earlier results.
-  it.fails("a step before the loop body keeps its result after the loop re-enters (plan summary still wired on pass 2)", async () => {
+  it("a step before the loop body keeps its result after the loop re-enters (plan summary still wired on pass 2)", async () => {
     const { flow, agents } = author(FEATURE_YAML, FEATURE_AGENTS);
     const o = observe();
     const result = await runFaux({ flow, agents, task: "add rate limiting", maxTurns: 48, responder: task(featureResponder(o)) });
@@ -687,8 +686,8 @@ describe("e2e realistic 5: customer import with typed outputs and a validation l
     expect(o.tasks.load[0]).toContain('"email":""');
   });
 
-  // ENGINE BUG: agent-parser drops `type: object` / `type: array` on agent outputs, so finish rejects non-string values ("must be string").
-  it.fails("an extractor declaring `records: array` / `source: object` hands typed values to the transform", async () => {
+  // Pins: `type: object` / `type: array` agent outputs survive parsing and the finish schema.
+  it("an extractor declaring `records: array` / `source: object` hands typed values to the transform", async () => {
     const { result, o } = await run(true, "typed");
     // docs/flow-authoring.md → Outputs: `type` may be object/array; stored in its real JSON type.
     expect(result.status, result.lastResult.result.summary).toBe("success");

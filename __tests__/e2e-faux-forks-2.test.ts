@@ -440,8 +440,7 @@ steps:
     expect(r.results.ship.status).toBe("skipped");
   });
 
-  // ENGINE BUG: when a fork's chosen branch target is another fork, the unselected branch gets no synthetic "skipped" result (it does when the target is an agent).
-  it.fails("the first fork's unselected branch is recorded as skipped even when the chosen target is a fork", async () => {
+  it("the first fork's unselected branch is recorded as skipped even when the chosen target is a fork", async () => {
     const { flow, agents } = author(TWO_FORKS, ["worker"]);
     const r = await runFaux({
       flow, agents, responder: work,

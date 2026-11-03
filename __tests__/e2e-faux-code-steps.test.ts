@@ -104,7 +104,6 @@ steps:
       - name: seen
       - name: ctx_info
 `;
-    // NOTE: not run through the validator — see the ENGINE BUG test below.
     const flow = parseFlowYamlString(yaml, "<e2e-code>");
     const result = await runFauxFlow({
       flow, agents: WORKERS.agents,
@@ -133,8 +132,7 @@ steps:
     expect(info.hasSignal).toBe(true);
   });
 
-  // ENGINE BUG: validateFlowContent rejects ${{flow.input.x}} as "unrecognized prefix \"flow\"" (known: result, input, task, loop) although docs document it.
-  it.fails("the authoring validator accepts a declared ${{flow.input.x}} reference", () => {
+  it("the authoring validator accepts a declared ${{flow.input.x}} reference", () => {
     const yaml = `name: flow-input-ref
 description: flow input into a code step
 inputs:
@@ -237,8 +235,8 @@ steps:
     expect(reportTask).toContain("REPORT n=7 ok=true");
   });
 
-  // ENGINE BUG: the finish schema types every declared output as Type.String, so a `type: object` output emitted as an object is rejected ("meta: must be string") and the step fails.
-  it.fails("a `type: object` agent output emitted as an object is accepted and arrives typed in a code step / compact JSON in text", async () => {
+  // Pins: the finish schema accepts a `type: object` output as a real object.
+  it("a `type: object` agent output emitted as an object is accepted and arrives typed in a code step / compact JSON in text", async () => {
     const yaml = `name: typed-agent-outputs
 description: typed agent outputs into a code step and an agent
 steps:
@@ -290,8 +288,7 @@ steps:
     expect(reportTask).toContain('REPORT n=7 ok=true meta={"lang":"ts","files":["a.ts","b.ts"]}');
   });
 
-  // ENGINE BUG: resolveCodeInput returns the reply text for a whole-value ${{result.X.fullOutput}} even when X declares a `fullOutput` output (text expansion honours the declared output).
-  it.fails("a declared agent output named `fullOutput` takes precedence over the reply text, also for a whole-value code input", async () => {
+  it("a declared agent output named `fullOutput` takes precedence over the reply text, also for a whole-value code input", async () => {
     const yaml = `name: fulloutput-precedence
 description: declared fullOutput wins
 steps:
@@ -387,8 +384,7 @@ steps:
     expect(result.results.consume.outputs.doubled).toBe(84);
   });
 
-  // ENGINE BUG: resolveCodeInput maps a stored null output to "" (`?? ""`) instead of delivering the JSON null unchanged.
-  it.fails("a `null` code output reaches a whole-value code input as null", async () => {
+  it("a `null` code output reaches a whole-value code input as null", async () => {
     const yaml = `name: null-handoff
 description: null output whole-value into code
 steps:

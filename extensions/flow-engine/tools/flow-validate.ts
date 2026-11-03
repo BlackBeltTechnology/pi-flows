@@ -830,6 +830,20 @@ export function validateFlowContent(
           message: `Deprecated: \${{${varPath}}} — fork context is now autowired into branch steps`,
           suggestion: "Remove this reference. The branch step automatically receives fork question, answer, and notes in its system prompt.",
         });
+      } else if (/^flow\.input\.[\w-]+$/.test(varPath)) {
+        // ${{flow.input.<name>}} — only declared flow inputs are referenceable.
+        const name = varPath.slice("flow.input.".length);
+        if (!flow.inputs || !Object.prototype.hasOwnProperty.call(flow.inputs, name)) {
+          const declared = flow.inputs ? Object.keys(flow.inputs) : [];
+          diagnostics.push({
+            line: i + 1,
+            severity: "error",
+            message: `Template variable "\${{${varPath}}}" references undeclared flow input "${name}"`,
+            suggestion: declared.length > 0
+              ? `Declared inputs: ${declared.join(", ")}`
+              : `Declare it under the flow's top-level inputs: block`,
+          });
+        }
       } else if (!knownPrefixes.includes(root)) {
         // Check if the unrecognized root matches a step ID — likely missing "result." prefix
         const suggestion = stepIds.has(root)

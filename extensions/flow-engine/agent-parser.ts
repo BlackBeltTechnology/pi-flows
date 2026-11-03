@@ -377,7 +377,7 @@ function parseOutputsArray(
         currentEntry.description = trimmed.slice(12).trim().replace(/^["']|["']$/g, "");
       } else if (trimmed.startsWith("type:")) {
         const t = trimmed.slice(5).trim().replace(/^["']|["']$/g, "");
-        if (t === "string" || t === "number" || t === "boolean") currentEntry.type = t;
+        if (t === "string" || t === "number" || t === "boolean" || t === "object" || t === "array") currentEntry.type = t;
       } else if (trimmed.startsWith("pattern:")) {
         currentEntry.pattern = trimmed.slice(8).trim().replace(/^["']|["']$/g, "");
       }

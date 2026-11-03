@@ -115,10 +115,8 @@ steps:
     expect(t.starts).toEqual([]);
   });
 
-  // ENGINE BUG: when the signal is already aborted, runFlow skips every segment but returns
-  // status "success" (and writes "aborted" placeholder results keyed by AGENT name, not step id);
   // docs: a cancelled run ends with status "aborted".
-  it.fails("a signal aborted before the run starts ends the flow with status aborted", async () => {
+  it("a signal aborted before the run starts ends the flow with status aborted", async () => {
     const ac = new AbortController();
     ac.abort();
     let calls = 0;

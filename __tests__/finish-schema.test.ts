@@ -47,14 +47,20 @@ describe("finish schema — declared outputs", () => {
     expect(schema.properties.file_path.pattern).toBe("^/.+");
   });
 
-  it("type: number → numeric string pattern", () => {
+  it("type: number → a number or a numeric-pattern string", () => {
     const schema = buildFinishSchema([{ name: "count", type: "number" }]);
-    expect(schema.properties.count.pattern).toBe(NUMERIC_PATTERN);
+    expect(schema.properties.count.anyOf).toEqual([
+      expect.objectContaining({ type: "number" }),
+      expect.objectContaining({ type: "string", pattern: NUMERIC_PATTERN }),
+    ]);
   });
 
-  it("type: boolean → true|false pattern", () => {
+  it("type: boolean → a boolean or a true|false string", () => {
     const schema = buildFinishSchema([{ name: "ok", type: "boolean" }]);
-    expect(schema.properties.ok.pattern).toBe(BOOLEAN_PATTERN);
+    expect(schema.properties.ok.anyOf).toEqual([
+      expect.objectContaining({ type: "boolean" }),
+      expect.objectContaining({ type: "string", pattern: BOOLEAN_PATTERN }),
+    ]);
   });
 
   it("explicit pattern wins over type", () => {

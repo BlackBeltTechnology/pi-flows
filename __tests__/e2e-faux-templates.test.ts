@@ -28,15 +28,12 @@ const BASE_MDS = [
   agentMd("shadow", "outputs:\n  - name: fullOutput\n"),
 ];
 
-const FLOW_INPUT_PREFIX_ERROR = /\$\{\{flow\.input\.[\w-]+\}\}" has unrecognized prefix "flow"/;
-
 function author(yaml: string, mds: string[] = BASE_MDS, check = true) {
   const agents = mds.map((m) => parseAgentString(m, "<tpl>"));
   if (check) {
     const byName = new Map(agents.map((a) => [a.name, a]));
     const diag = validateFlowContent(yaml, () => byName, () => true);
-    // `${{flow.input.x}}` is rejected by the validator (ENGINE BUG, pinned in its own it.fails below).
-    const errors = diag.diagnostics.filter((d) => d.severity === "error" && !FLOW_INPUT_PREFIX_ERROR.test(d.message));
+    const errors = diag.diagnostics.filter((d) => d.severity === "error");
     expect(errors, yaml).toEqual([]);
   }
   return { flow: parseFlowYamlString(yaml, "<tpl>"), agents };
@@ -103,8 +100,7 @@ steps:
     expect(result.results.c.outputs.echo).toEqual({ whole: "build the widget", emb: "about build the widget!" });
   });
 
-  it.fails("a task containing `$` replacement patterns ($&, $$, $1) arrives verbatim", async () => {
-    // ENGINE BUG: ${{task}} is substituted with String.replace(regex, string), so `$&`/`$$` in the task are interpreted as replacement patterns.
+  it("a task containing `$` replacement patterns ($&, $$, $1) arrives verbatim", async () => {
     const raw = "pay $$5 for $& and $1";
     const { task } = await run(YAML, () => ok("done"), { task: raw, codeHandlers: { c: ECHO } });
     expect(task("AAA")).toContain(`do [${raw}]`);
@@ -141,9 +137,9 @@ steps:
       - name: echo
 `;
 
-  it.fails("the validator accepts a declared ${{flow.input.x}} reference", () => {
-    // ENGINE BUG: validateFlowContent reports `${{flow.input.x}}` as an error ("unrecognized prefix \"flow\""), though docs/flows.md documents it.
-    const errs = validateFlowContent(YAML, () => new Map(), () => true).diagnostics.filter((d) => d.severity === "error");
+  it("the validator accepts a declared ${{flow.input.x}} reference", () => {
+    const byName = new Map(BASE_MDS.map((m) => { const a = parseAgentString(m, "<tpl>"); return [a.name, a]; }));
+    const errs = validateFlowContent(YAML, () => byName, () => true).diagnostics.filter((d) => d.severity === "error");
     expect(errs).toEqual([]);
   });
 
@@ -300,8 +296,7 @@ steps:
     expect(task("BBB")).toContain("bare=[the prose reply]");
   });
 
-  it.fails("a declared output named fullOutput also wins as a whole-value code input", async () => {
-    // ENGINE BUG: resolveCodeInput's whole-value `${{result.X.fullOutput}}` returns the reply text, ignoring the declared output that wins in task text.
+  it("a declared output named fullOutput also wins as a whole-value code input", async () => {
     const yaml = `name: t-shadow-code
 description: declared fullOutput into code
 steps:
