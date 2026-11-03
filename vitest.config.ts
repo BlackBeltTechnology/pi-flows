@@ -5,5 +5,9 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, ".worktrees/**"],
+    // Faux e2e suites spawn sessions and code handlers; a loaded 2-core CI
+    // runner can take ~10s where a laptop takes <0.5s.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });
