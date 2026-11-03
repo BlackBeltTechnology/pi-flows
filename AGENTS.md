@@ -49,7 +49,7 @@ There is **no compile / bundle / dist step**. TypeScript runs straight from `ext
 Grep `docs/<file>.md` (and `README.md`) before reading source:
 
 - `README.md` — overview, install, quick start, command list.
-- `flows.md` — step types (agent, fork, conditional, agent-loop-decision, flow-ref) with syntax.
+- `flows.md` — step types (agent, agent-decision, code, code-decision, fork) with syntax.
 - `agents.md` — agent frontmatter schema, model tiers, card types.
 - `flow-authoring.md` — full format reference for agent + flow files.
 - `architecture.md` — DAG execution, agent isolation, sub-extensions.
