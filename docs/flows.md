@@ -126,7 +126,7 @@ steps:
 
 ### Fork Step
 
-Pause execution and present options to the user. The selected option determines which branch runs.
+Present options to the user (interactive mode) or let a decision agent / decider chain choose (autonomous mode). The selected option determines which branch runs.
 
 **Syntax:**
 
@@ -150,18 +150,38 @@ Pause execution and present options to the user. The selected option determines 
 | `question` | ✓ | Question displayed to the user |
 | `options` | ✓ | Comma-separated or YAML list of choices |
 | `branches` | ✓ | Map of option text → step ID |
-| `allowCustom` | | Appends "Other (describe)" option. Custom freetext routes through the fork's `agent`. Requires `agent`. |
+| `allowCustom` | | Appends "Other (describe)" to the prompt. The typed text is mapped to a branch by the fork's decider chain (see [Free text](#fork-free-text-other-describe)). Needs the fork's `agent:` or a `decider:` chain (step or flow); otherwise validation fails. |
 | `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
-| `agent` | | Agent for autonomous decisions (alt+a) and custom freetext routing. Required when `allowCustom` is set. |
+| `agent` | | Decision agent for this fork (autonomous decisions, "Auto-decide", "Other" free text). Optional: without it the agent is picked by [Decision agent selection](#decision-agent-selection). |
+| `decider` | | Decider chain for this fork (see [Decider chain](#decider-chain-classifier-decisions)). |
 | `task` | | Task description for the decision agent. Defaults to question + options. |
 
 **Behavior:**
 
 - **Single-select:** Routes to one branch. Unselected branches are skipped (synthetic "skipped" results stored).
-- **Multi-select:** Multiple branches run in parallel.
+- **Multi-select:** All selected branches run sequentially.
 - **After selection:** User is prompted for optional notes (Enter to skip). Fork context is **automatically injected** into the branch step's system prompt.
 
-**Autonomous mode:** When alt+a is active, fork steps with an `agent:` field skip the user prompt and let the agent decide automatically. Forks without `agent:` always prompt the user.
+**Autonomous mode:** When alt+a is active, every fork skips the user prompt and is decided by its [decider chain](#decider-chain-classifier-decisions). Entries are tried in order; the first trusted, valid label routes (so listed classifiers run before `agent`). The `agent` entry (the default chain is `[agent]`) runs the decision agent: the step's `agent:`, else the flow's `decision_agent:`, else the setting `flows.decisionAgent`, else the built-in `flow-decision` (see [Decision agent selection](#decision-agent-selection)). An `agent:` on the fork is not required. If every entry fails, the step fails (routed by `on_error` when set); there is no default branch.
+
+**Interactive mode:** The user is prompted. The prompt adds:
+
+| Extra option | Offered when | Result |
+|---|---|---|
+| `Other (describe)` | `allowCustom: true` | User types free text. The decider chain maps it to a branch. |
+| `Auto-decide (let AI choose)` | The fork has `agent:` or a `decider:` chain (step, flow, or setting `flows.decider`) | Decided as in autonomous mode. Autonomous mode is switched on. |
+
+A flow-level `decision_agent:` or the setting `flows.decisionAgent` alone does not add `Auto-decide`.
+
+#### Fork free text (Other / describe)
+
+When the user picks `Other (describe)` and types text:
+
+- The text goes to the same decider chain as an autonomous fork. The agent entry sees it appended to the task; a classifier sees it as `userText` in its state.
+- The agent entry uses the same decision agent selection as above (step `agent:` → flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`).
+- The text is stored as the fork's notes and injected into the branch step. The "Optional notes" prompt is skipped.
+- If every entry fails (no valid branch), the user is told and the fork is asked again with the same options. No branch is chosen by default.
+- Without `agent:` or a `decider:` chain, `Other` has nothing to map the text. Validation rejects `allowCustom` in that case (a flow-level `decision_agent:` alone does not satisfy it).
 
 ---
 
@@ -195,7 +215,7 @@ Run a TypeScript handler exactly like a [Code Step](#code-step), then route on a
 | `outputs` | | Optional data outputs the handler must return. **Never include `branch`** — it is reserved. |
 | `target` | | Override the handler file path. When set, no `.ts.default` scaffold is generated. |
 | `blockedBy` | | Array of step IDs that must complete before this step runs. |
-| `max_iterations` | | Required only when a branch target points to an earlier step (a loop). See [Loops](#loops). |
+| `max_iterations` | | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#loops). |
 | `timeout` | | Soft deadline in milliseconds. On expiry the engine aborts `ctx.signal` and the step soft-fails. |
 
 **Handler contract:**
@@ -264,7 +284,7 @@ Delegate a routing decision to an agent. The agent analyzes the context and call
 | `agent` | | Agent name — must call `finish` with a valid `branch`. May be omitted: see [Decision agent selection](#decision-agent-selection). |
 | `task` | ✓ | Task for the decision agent. Supports template variables. |
 | `branches` | ✓ | Map of branch names → step IDs |
-| `max_iterations` | | Required only when a branch target points to an earlier step (a loop). See [Loops](#loops). |
+| `max_iterations` | | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#loops). |
 
 **Agent finish call:**
 
@@ -351,7 +371,9 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
 **Rules:**
 
 - A `*-decision` node with a branch target pointing to an earlier step **MUST** declare `max_iterations`.
-- The engine tracks per-node iteration counts and forces exit when the cap is reached — control falls through to the next step.
+- `max_iterations: N` caps the number of loop-backs (backward branch edges taken), not total passes. The body runs at most N + 1 times: the first pass plus N re-entries (`max_iterations: 3` → up to 4 passes).
+- When the cap is reached and the decision again picks the backward branch, the engine does not loop; control falls through to the next step in file order.
+- `${{loop.<id>.iteration}}` is the 1-based number of the current pass (pass N shows N) in both the body and the decision; `${{loop.<id>.max}}` is N.
 - A `*-decision` node whose branches all point forward needs no `max_iterations`.
 - The dashboard ↻ iteration badge is driven by the `flow:loop-iteration` event, emitted only when a backward edge is actually taken — not inferred from the presence of `max_iterations`.
 

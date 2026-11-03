@@ -464,7 +464,7 @@ The primary step type. Dispatches a named agent with an optional task and inputs
 
 #### 2. Fork step
 
-Presents a choice to the user and routes to different steps based on the selection. In autonomous mode, the `agent:` field provides an agent to decide automatically.
+Presents a choice to the user and routes to different steps based on the selection. In autonomous mode no prompt is shown: the fork is decided by its decider chain, and the `agent` entry uses the step `agent:`, else the flow `decision_agent:`, else `flows.decisionAgent`, else the built-in `flow-decision`.
 
 ```yaml
 - id: choose-strategy
@@ -478,7 +478,7 @@ Presents a choice to the user and routes to different steps based on the selecti
     Fast path (minimal change): fast-impl
     Full refactor: refactor-impl
     Workaround: workaround-impl
-  agent: flow-decision    # used in autonomous mode
+  agent: flow-decision    # optional — decision agent for this fork
   task: >
     Choose the best strategy based on: ${{result.analyzer.summary}}
   allowCustom: false      # optional — adds "Other (describe)" option
@@ -491,9 +491,9 @@ Presents a choice to the user and routes to different steps based on the selecti
 | `question` | Yes | Question shown to the user (or agent in autonomous mode). Template string. |
 | `options` | Yes | List of choice strings. |
 | `branches` | Yes | Map of option text → target step ID. Keys must match options **exactly**. |
-| `agent` | No | Agent for autonomous mode decisions and `allowCustom` freetext routing. |
+| `agent` | No | Decision agent for this fork (autonomous mode, "Auto-decide", `allowCustom` freetext). Without it: flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`. |
 | `task` | No | Context for the auto-deciding agent. Template string. |
-| `allowCustom` | No | Appends an "Other (describe)" option. Requires `agent:` — the agent interprets freetext and routes to the closest branch. |
+| `allowCustom` | No | Appends an "Other (describe)" option (interactive mode). The decider chain maps the typed text to a branch; if it cannot, the user is asked again. Requires `agent:` or a `decider:` chain (step or flow). |
 | `multiSelect` | No | Allow multiple selections. The selected options are joined and passed as context. |
 
 **Fork context injection:** The chosen option, user notes, and decision source (user or agent) are automatically injected into the branch step's system prompt — no manual wiring needed.
@@ -526,7 +526,7 @@ Run a TypeScript handler exactly like a [code step](#7-code-step), then route on
 | `outputs` | No | Optional data outputs the handler must return. **Never include `branch`** — it is reserved. |
 | `target` | No | Override the handler file path. Skips scaffold generation. |
 | `blockedBy` | No | Step IDs that must complete before this step runs. |
-| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). See [Loops](#5-loops). |
+| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#5-loops). |
 | `timeout` | No | Soft deadline in milliseconds. |
 
 **Handler contract.** Identical to a [code step](#7-code-step) — same handler path (`<flow-dir>/<id>.ts` co-located beside `flow.yaml`, or explicit `target:`), same `inputs`/`outputs`, same soft/hard failure model and value coercion. The handler ADDITIONALLY returns a reserved `branch: string` key:
@@ -588,7 +588,7 @@ An agent evaluates options and calls `finish({ branch: "chosen" })` to select th
 | `agent` | Yes | Agent that makes the decision. |
 | `task` | Yes | Context for the decision agent. Template string. |
 | `branches` | Yes | Map of branch name → target step ID. |
-| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). See [Loops](#5-loops). |
+| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#5-loops). |
 
 The guard injects the branch names into the `finish` tool parameters as a union type. The agent must pick one of the declared branch names. A `branch` not in `branches:` hard-fails the flow. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#5-loops).
 
@@ -599,7 +599,9 @@ The guard injects the branch names into the `finish` tool parameters as a union 
 A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — whose branch target points to an **earlier** step, re-entering the graph to form a cycle. There is no dedicated loop step type; a loop is just a backward branch edge.
 
 - A `*-decision` node with a branch target pointing to an earlier step **MUST** declare `max_iterations`.
-- The engine tracks per-node iteration counts and forces exit when the cap is reached — control falls through to the next step.
+- `max_iterations: N` caps the number of loop-backs (backward branch edges taken), not total passes. The body runs at most N + 1 times: the first pass plus N re-entries (`max_iterations: 3` → up to 4 passes).
+- When the cap is reached and the decision again picks the backward branch, the engine does not loop; control falls through to the next step in file order.
+- `${{loop.<id>.iteration}}` is the 1-based number of the current pass (pass N shows N) in both the body and the decision; `${{loop.<id>.max}}` is N.
 - A `*-decision` node whose branches all point forward needs no `max_iterations`.
 - The dashboard ↻ iteration badge is driven by the `flow:loop-iteration` event, emitted only when a backward edge is actually taken — not inferred from the presence of `max_iterations`.
 
