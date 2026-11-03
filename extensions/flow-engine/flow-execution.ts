@@ -10,7 +10,7 @@ import { parseResult, hasArtifactElement } from "./result-parser.js";
 import { raceWithAbort } from "./abort-utils.js";
 import { reservedOutputProblems } from "./reserved-outputs.js";
 import { decide, describeAttempts, resolveDecider } from "./decider/chain.js";
-import { buildQuestion } from "./decider/question.js";
+import { buildQuestion, decisionAgentContext } from "./decider/question.js";
 import { makeEntryRunner } from "./decider/runtime.js";
 import { systemOneConsumerId } from "./decider/system-one.js";
 import type { ClassifierEntry, DecisionOutcome, EntryResult } from "./decider/types.js";
@@ -888,7 +888,7 @@ async function decideForkBranch(
     step, ctx, options, nodeKind: "fork", templateCtx,
     task: step.task ? baseTask : step.question,
     fork: { question: step.question, options: step.options, userText: customText },
-    runAgent: async () => {
+    runAgent: async (context) => {
       const pick = pickDecisionAgent(step, ctx, options);
       if (!pick.ok) return { result: decisionAgentMissing(pick), agentName: pick.name };
       const agentConfig = pick.agent;
@@ -897,7 +897,7 @@ async function decideForkBranch(
       options.onAgentStarted?.(agentName, step.id, pre.resolvedModelId, { nodeKind: "fork", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
       const result = await spawnAgent({
         agent: agentConfig,
-        task: decisionTask,
+        task: `${decisionTask}\n\n${context}`,
         templateContext: templateCtx,
         pi: options.pi,
         cwd: options.cwd,
@@ -1097,7 +1097,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
 
   const run = await runDecision({
     step, ctx, options, nodeKind: "agent-decision", templateCtx, task: decisionTask,
-    runAgent: async () => {
+    runAgent: async (context) => {
       const pick = pickDecisionAgent(step, ctx, options);
       if (!pick.ok) {
         const failed = decisionAgentMissing(pick);
@@ -1119,7 +1119,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
 
       const result = await spawnAgent({
         agent: decisionConfig,
-        task: decisionTask,
+        task: `${decisionTask}\n\n${context}`,
         templateContext: templateCtx,
         skills,
         pi: options.pi,
@@ -1178,7 +1178,8 @@ interface RunDecisionArgs {
   task: string;
   fork?: { question: string; options: string[]; userText?: string };
   /** Spawns the decision agent — the `agent` chain entry. */
-  runAgent: () => Promise<{ result: AgentResult; agentName: string }>;
+  /** Spawn the decision agent; `context` lists the branches (with `means`) and the declared state. */
+  runAgent: (context: string) => Promise<{ result: AgentResult; agentName: string }>;
 }
 
 interface DecisionRun {
@@ -1224,7 +1225,9 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
     branchCount: labels.length,
     question,
     agentEntry: async (): Promise<EntryResult> => {
-      const { result, agentName: name } = await a.runAgent();
+      const { result, agentName: name } = await a.runAgent(
+        decisionAgentContext(labels, step.branchMeans, declaredState),
+      );
       agentName = name;
       const branch = result.finishParams?.branch;
       if (typeof branch === "string" && branch) {

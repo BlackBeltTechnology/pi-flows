@@ -56,6 +56,19 @@ A classifier entry SHALL receive one `choice` question whose criteria map each b
 - **WHEN** a decision step whose decider chain contains a classifier entry has a branch without `means`
 - **THEN** flow validation SHALL report a warning naming the branch
 
+### Requirement: The decision agent receives the classifier inputs
+
+When the `agent` entry decides an `agent-decision` or `fork`, the agent's task SHALL be the expanded `task` followed by a list of every branch label with its `means` (when given) and, when `state:` is declared, every expanded `state:` entry. An agent-routed decision SHALL NOT have less context than a classifier-routed one.
+
+#### Scenario: State and means reach the decision agent
+- **GIVEN** `state: { review: "${{result.work.summary}}" }` and branches with `means`
+- **WHEN** the decision agent is spawned
+- **THEN** its task SHALL contain the expanded `review` value, each branch label and each branch's `means`
+
+#### Scenario: No state declared
+- **WHEN** a decision step declares no `state:` and no `means`
+- **THEN** the decision agent's task SHALL contain the expanded `task` and the branch labels, and no state section
+
 ### Requirement: Trust policy decides whether a classifier answer routes
 
 A classifier answer SHALL route only when trusted under `trust` (default `auto`) and `min_confidence` (default `0.75`). `calibrated` SHALL require System One mode `enforce`; `confidence` SHALL require confidence ≥ `min_confidence`; `auto` SHALL act as `calibrated` when a System One calibration record exists for that backend and decision point, else as `confidence`. An untrusted answer SHALL be recorded as shadow and the chain SHALL continue.

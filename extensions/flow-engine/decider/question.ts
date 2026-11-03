@@ -19,6 +19,25 @@ export interface QuestionInput {
   userText?: string;
 }
 
+/**
+ * The decision agent's view of the same inputs a classifier gets: every branch
+ * with its `means`, and the expanded `state:` map when declared. Appended to the
+ * agent's task so an agent-routed decision is not made blind.
+ */
+export function decisionAgentContext(
+  labels: string[],
+  branchMeans: Record<string, string> | undefined,
+  declaredState: Record<string, string> | undefined,
+): string {
+  const lines = ["Branches (call finish with exactly one of these as `branch`):"];
+  for (const l of labels) lines.push(branchMeans?.[l] ? `- ${l}: ${branchMeans[l]}` : `- ${l}`);
+  if (declaredState && Object.keys(declaredState).length > 0) {
+    lines.push("", "State:");
+    for (const [k, v] of Object.entries(declaredState)) lines.push(`- ${k}: ${v}`);
+  }
+  return lines.join("\n");
+}
+
 export function buildQuestion(input: QuestionInput): DecisionQuestion {
   const criteria: Record<string, string> = {};
   if (input.options) {

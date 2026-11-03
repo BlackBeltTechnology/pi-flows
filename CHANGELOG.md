@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Decision agents see `state:` and branch `means`.** The agent entry of a decision chain now gets the same inputs as a classifier: its task is followed by the branch list (with `means`) and the expanded `state:` map. Before, it saw only `task:` and decided blind.
 - **Behaviour change:** decision steps no longer fall back silently to the first branch. An invalid or missing label is a failed attempt; when every decider entry fails an `agent-decision` or autonomous `fork` fails the step (hard) with an error listing each attempt, and an interactive fork asks the user again.
 - The resolved `Model` object is passed straight to the agent session (no second registry lookup).
 - Agent validation no longer knows role names; it only checks ref syntax and `:thinking` levels. `AgentConfig.model` is optional; new `AgentConfig.modelRefs`.

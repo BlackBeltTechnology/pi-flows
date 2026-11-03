@@ -340,7 +340,7 @@ steps:
   - id: gate
     type: agent-decision
     task: "Review result: ${{result.review.summary}}"
-    state:                 # what the classifier sees; default { task }
+    state:                 # what the classifier and decision agent see; default { task }
       review: "${{result.review.summary}}"
     branches:
       done: { to: report, means: "No blocking issues" }
@@ -351,6 +351,10 @@ steps:
 `decider:` may also be a plain list (`decider: [system-one, agent]`). `trust` and `min_confidence` resolve field by field (step → flow → setting).
 
 **Question.** A classifier receives one `choice` question. Criteria are each branch's `means` (else its label); for a fork each option is its own criterion. Instructions are the expanded `task` (a fork without `task:` uses its `question`). The state is the expanded `state:` map, else `{ task }`; for a fork "Other" answer it also holds `question` and `userText`. A branch may be written `label: step` or `label: { to: step, means: "…" }`; both route identically.
+
+**Decision agent.** When the `agent` entry decides, its task is the expanded `task:`, followed by the branch list (each branch's `means`, or its label if none) and, when `state:` is declared, a `State:` section with the expanded values. The agent must call `finish` with exactly one branch label.
+
+**Tip.** Put context the decider needs in `state:` rather than only in `task:`, since both the classifier and the decision agent see it.
 
 **Trust.** `calibrated` accepts a System One answer only in `enforce` mode. `confidence` accepts confidence ≥ `min_confidence`. `auto` behaves as `calibrated` when a System One calibration record exists for that backend and decision point (the dashboard writes these), else as `confidence`. An untrusted answer is a *shadow* answer: it is recorded and the chain continues.
 
