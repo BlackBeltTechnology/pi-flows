@@ -624,13 +624,17 @@ function routeDecisionBranch(
   // Backward (loop) edge. max_iterations is required by validation; default to
   // the value captured in loopMaxIterations as a backstop.
   const max = step.max_iterations ?? ctx.loopMaxIterations[step.id];
-  const taken = ctx.loopCounters[step.id] ?? 0;
+  // `loopCounters[id]` holds the 1-based number of the pass now running (what
+  // `${{loop.<id>.iteration}}` expands to), so the pass count is already
+  // visible to the loop body: pass N observes N. Loop-backs taken = pass - 1.
+  const pass = ctx.loopCounters[step.id] ?? 1;
+  const taken = pass - 1;
   if (max !== undefined && taken >= max) {
     // Cap reached: stop looping, force exit (fall through to the next segment).
     return { nextStepId: undefined };
   }
-  const iteration = taken + 1;
-  ctx.loopCounters[step.id] = iteration;
+  const iteration = taken + 1; // loop-backs taken including this one (event payload)
+  ctx.loopCounters[step.id] = pass + 1;
 
   // Dashboard cards are keyed by agent name; resolve the loop target's name.
   const loopTargetStep = ctx.steps.find((s) => s.id === target);
