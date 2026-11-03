@@ -20,9 +20,10 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
+import type { ModelFallbackInfo } from "./types.js";
 
 type ThinkingLevelString = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "off";
-const VALID_THINKING_LEVELS: readonly ThinkingLevelString[] = [
+export const VALID_THINKING_LEVELS: readonly ThinkingLevelString[] = [
   "minimal",
   "low",
   "medium",
@@ -54,6 +55,18 @@ interface ModelResolveProbe {
     roles?: Record<string, string>;
     models?: string[];
   };
+}
+
+/**
+ * Thrown for an `@`-ref that cannot be resolved (no resolver answered, or the
+ * resolver reported an error). `resolveAgentModel` skips these; literals never
+ * produce it.
+ */
+export class UnresolvableRefError extends Error {
+  constructor(message: string, public readonly reason: "no-resolver" | "resolver-error", public readonly ref: string) {
+    super(message);
+    this.name = "UnresolvableRefError";
+  }
 }
 
 /** Cap on the size of the `available.models` hint baked into error
@@ -182,7 +195,8 @@ export function resolveModel(
       };
     }
     if (typeof probe.error === "string" && probe.error.length > 0) {
-      throw new Error(probe.error + formatAvailable(probe.available));
+      const msg = probe.error + formatAvailable(probe.available);
+      throw ref.startsWith("@") ? new UnresolvableRefError(msg, "resolver-error", ref) : new Error(msg);
     }
     // Silent emit — fall through to in-process fallback.
   }
@@ -191,12 +205,13 @@ export function resolveModel(
   // The fallback intentionally does NOT read `~/.pi/agent/providers.json`
   // — role storage policy belongs to the handler. `@role` fails here.
   if (ref.startsWith("@")) {
-    throw new Error(
+    throw new UnresolvableRefError(
       `Cannot resolve role "${ref}": no "model:resolve" handler is registered.\n` +
-        `Role aliasing requires pi-agent-dashboard (or a package that registers a ` +
-        `model:resolve handler) to be loaded.\n` +
-        `Fix: install/enable pi-agent-dashboard, or replace the "@role" reference ` +
-        `with a literal "provider/model-id" or bare model id.`,
+        `\`@\`-refs need a model:resolve resolver (e.g. pi-agent-dashboard) to be loaded.\n` +
+        `Fix: install/enable a resolver, use a literal "provider/model-id" or bare model id, ` +
+        `or leave flows.modelFallback at "session" to run on the session model.`,
+      "no-resolver",
+      ref,
     );
   }
 
@@ -246,5 +261,92 @@ export function resolveModel(
     modelId,
     thinking: thinking || thinkingLevel,
     model,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Agent-level resolution chain: ordered refs → session-model fallback.
+// ---------------------------------------------------------------------------
+
+export interface ResolvedAgentModel {
+  model: Model<any>;
+  modelId: string;
+  thinking?: string;
+  fallback?: ModelFallbackInfo;
+}
+
+/** Session model snapshot taken at flow start. */
+export interface ParentModelSnapshot {
+  model: Model<any>;
+  thinking?: string;
+}
+
+export interface ResolveAgentModelOptions {
+  registry?: unknown;
+  parentModel?: ParentModelSnapshot;
+  /** `flows.modelFallback`; default "session". */
+  modelFallback?: "session" | "error";
+}
+
+function modelIdOf(m: Model<any>): string {
+  const mm = m as { provider?: string; id?: string };
+  return mm.provider && mm.id ? `${mm.provider}/${mm.id}` : mm.id ?? "unknown";
+}
+
+/**
+ * Resolve an agent's `model:` entries in order. The first entry that resolves
+ * wins. An unresolvable `@`-ref is skipped; a literal that is not found throws
+ * (never skipped). When nothing resolves (or no model is declared) the session
+ * model is used unless `modelFallback` is "error".
+ */
+export function resolveAgentModel(
+  pi: ExtensionAPI,
+  agent: { name: string; source?: string; model?: string; modelRefs?: string[]; thinking?: string },
+  options: ResolveAgentModelOptions = {},
+): ResolvedAgentModel {
+  const refs = agent.modelRefs ?? (agent.model ? [agent.model] : []);
+  const skipped: UnresolvableRefError[] = [];
+
+  for (const ref of refs) {
+    try {
+      const r = resolveModel(pi, ref, agent.thinking, options.registry);
+      return { model: r.model as Model<any>, modelId: r.modelId, thinking: r.thinking };
+    } catch (err) {
+      if (err instanceof UnresolvableRefError) {
+        skipped.push(err);
+        continue;
+      }
+      throw new Error(
+        `${(err as Error).message}\n(agent "${agent.name}"${agent.source ? `, defined in ${agent.source}` : ""})`,
+        { cause: err },
+      );
+    }
+  }
+
+  const where = `agent "${agent.name}"${agent.source ? ` (${agent.source})` : ""}`;
+  const reason: ModelFallbackInfo["reason"] =
+    refs.length === 0 ? "no-model-declared" : skipped[0]?.reason ?? "no-resolver";
+  const requestedText = refs.length > 0 ? refs.join(", ") : "(no model declared)";
+
+  const detail = skipped.map((s) => s.message).join("\n");
+  if (options.modelFallback === "error") {
+    throw new Error(
+      `No model entry resolved for ${where}: ${requestedText}, and flows.modelFallback is "error".` +
+        (detail ? `\n${detail}` : ""),
+    );
+  }
+  const parent = options.parentModel;
+  if (!parent?.model) {
+    throw new Error(
+      `Cannot run ${where}: no model entry resolved (${requestedText}) and no session model was captured to fall back on.` +
+        (detail ? `\n${detail}` : ""),
+    );
+  }
+  const used = modelIdOf(parent.model);
+  return {
+    model: parent.model,
+    modelId: used,
+    thinking: agent.thinking ?? parent.thinking,
+    fallback: { requested: refs, used, reason },
   };
 }

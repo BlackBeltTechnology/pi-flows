@@ -199,7 +199,7 @@ Step B references:
 All sub-extensions are loaded through a single entry point (`extensions/index.ts`) so they share one `jiti` module graph. This eliminates module identity issues where dynamic imports between extensions would create separate module instances. Activation order:
 
 ```
-1. provider-register  — Model roles (@coding, @planning, etc.) and provider management
+1. provider-register  — Provider management (and, in pi-agent-dashboard, model roles)
 2. file-tracker       — Tracks file edits/writes in the main session for footer stats
 3. flow-engine        — Discovery, DAG execution, agent spawning, tool registration
 4. flow-dashboard     — TUI card grid, navigation, workflow breadcrumbs

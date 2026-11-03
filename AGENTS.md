@@ -29,7 +29,7 @@ If grep finds nothing, then read source.
 | Watch tests | `npm run test:watch` | |
 | CI | — | `.github/workflows/ci.yml` runs `lint + typecheck + test` on Node 22/24 for every push to `develop` and every PR. |
 | Publish | Trigger `Release` workflow in GitHub Actions UI with version input, OR push a `v*` tag | `.github/workflows/publish.yml`. Trusted Publishing via OIDC (`--provenance`), gated by `npm-publish` GH environment. Drafts GitHub Release from CHANGELOG section. See `docs/releasing.md`. |
-| Use flows in a session | `/flows`, `/flows:delete`, `/skill:manage-flows`, `/roles`, `alt+a`, `alt+x`, `alt+o` | Each flow is a self-contained dir `.pi/flows/flows/<namespace>/<name>/` with `flow.yaml`; auto-registers as `/<namespace>:<name>`. Authoring via `flow_agents`/`flow_write` (gated by `flows.editFlow`). |
+| Use flows in a session | `/flows`, `/flows:delete`, `/skill:manage-flows`, `alt+a`, `alt+x`, `alt+o` | Each flow is a self-contained dir `.pi/flows/flows/<namespace>/<name>/` with `flow.yaml`; auto-registers as `/<namespace>:<name>`. Authoring via `flow_agents`/`flow_write` (gated by `flows.editFlow`). |
 
 There is **no compile / bundle / dist step**. TypeScript runs straight from `extensions/` via pi's loader. Treat `extensions/index.ts` as the entrypoint.
 
@@ -49,7 +49,7 @@ There is **no compile / bundle / dist step**. TypeScript runs straight from `ext
 Grep `docs/<file>.md` (and `README.md`) before reading source:
 
 - `README.md` — overview, install, quick start, command list.
-- `flows.md` — step types (agent, fork, conditional, agent-loop-decision, flow-ref) with syntax.
+- `flows.md` — step types (agent, agent-decision, code, code-decision, fork) with syntax.
 - `agents.md` — agent frontmatter schema, model tiers, card types.
 - `flow-authoring.md` — full format reference for agent + flow files.
 - `architecture.md` — DAG execution, agent isolation, sub-extensions.
@@ -171,4 +171,5 @@ WRITE discipline — is injected by the `pi-dashboard-kb-extension`. Tune it in
 
 Files in this area. Purposes left for the agent to author.
 
-| `eslint.config.js` | ESLint flat config, ESLint 9+: ignores node_modules/research/openspec/agent-docs/docs; @eslint/js recommended + typescript-eslint recommended; no-explicit-any off, no-unused-vars warn. |
+| `eslint.config.js` | ESLint flat config, ESLint 9+: ignores node_modules/research/openspec/docs; @eslint/js recommended + typescript-eslint recommended; no-explicit-any off, no-unused-vars warn. |
+| `vitest.config.ts` | Vitest config: `configDefaults.exclude` plus `.worktrees/**` so sibling git worktrees' suites are not collected. |

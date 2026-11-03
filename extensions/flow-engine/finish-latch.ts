@@ -53,3 +53,31 @@ export function createFinishLatch(): FinishLatch {
     },
   };
 }
+
+/**
+ * Describe why a rejected `finish` call was rejected, naming the problem.
+ * A decision branch problem is reported first (`invalid branch "x" (valid: a, b)`
+ * / `missing branch (valid: a, b)`); otherwise any declared outputs absent from
+ * the args; otherwise the tool's own error text (capped).
+ */
+export function describeBadFinish(
+  args: unknown,
+  opts: { decisionBranches?: string[]; outputNames?: string[]; errorText?: string },
+): string {
+  const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+  const problems: string[] = [];
+  if (opts.decisionBranches) {
+    const valid = `valid: ${opts.decisionBranches.join(", ")}`;
+    const b = a.branch;
+    if (b === undefined || b === null || b === "") problems.push(`missing branch (${valid})`);
+    else if (typeof b !== "string" || !opts.decisionBranches.includes(b)) problems.push(`invalid branch ${JSON.stringify(b)} (${valid})`);
+  }
+  // Declared outputs are required only on a "complete" finish.
+  const missing = a.status === "error" || a.status === "blocked"
+    ? []
+    : (opts.outputNames ?? []).filter((n) => a[n] === undefined);
+  if (missing.length) problems.push(`missing required output${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`);
+  if (problems.length) return problems.join("; ");
+  const text = (opts.errorText ?? "").trim().replace(/\s+/g, " ");
+  return text ? text.slice(0, 200) : "finish arguments failed validation";
+}

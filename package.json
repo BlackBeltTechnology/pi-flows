@@ -36,6 +36,7 @@
     "LICENSE"
   ],
   "dependencies": {
+    "@blackbelt-technology/pi-system-one": "^0.11.0",
     "yaml": "^2.8.0"
   },
   "peerDependencies": {

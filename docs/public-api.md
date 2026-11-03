@@ -62,7 +62,8 @@ Parsed agent definition (from a `.md` file).
 interface AgentConfig {
   name:         string;
   description:  string;
-  model:        string;             // e.g., "@planning", "claude-sonnet-4:high"
+  model?:       string;             // first declared ref, e.g. "claude-sonnet-4:high"; undefined when omitted
+  modelRefs?:   string[];           // full ordered `model:` list ([] when omitted)
   thinking?:    string;             // "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
   tools:        string[];           // e.g., ["read", "grep", "bash"]
   skills?:      string[];           // e.g., ["my-backend-docs"]
@@ -550,9 +551,6 @@ function resolveModel(
 ```
 
 ```typescript
-resolveModel("@planning", undefined, (r) => roles.get(r));
-// → { modelId: "claude-opus-4-20250514", thinking: undefined }
-
 resolveModel("claude-sonnet-4:high");
 // → { modelId: "claude-sonnet-4", thinking: "high" }
 

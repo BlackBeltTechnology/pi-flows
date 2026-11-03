@@ -16,6 +16,7 @@ import type {
   AgentDecisionStep,
 } from "./types.js";
 import { readFileSync } from "node:fs";
+import { parseDeciderSpec } from "./decider/chain.js";
 import { parse as parseYaml } from "yaml";
 
 // ---- Public API ------------------------------------------------------------
@@ -59,6 +60,8 @@ export function parseFlowYamlString(content: string, source: string): FlowConfig
     ...(task_required ? { task_required } : {}),
     ...(task_prompt ? { task_prompt } : {}),
     ...(inputs ? { inputs } : {}),
+    ...(doc.decision_agent ? { decision_agent: String(doc.decision_agent) } : {}),
+    ...(doc.decider !== undefined ? { decider: parseDecider(doc.decider, source) } : {}),
     steps,
     source,
   };
@@ -169,54 +172,53 @@ function parseForkStep(raw: any, source: string): ForkStep {
     branches: {},
   };
 
-  if (raw.branches && typeof raw.branches === "object") {
-    for (const [k, v] of Object.entries(raw.branches)) {
-      step.branches[k] = String(v);
-    }
-  }
+  const fb = parseBranches(raw.branches, raw.id, source);
+  step.branches = fb.branches;
+  if (fb.branchMeans) step.branchMeans = fb.branchMeans;
+  if (raw.decider !== undefined) step.decider = parseDecider(raw.decider, source);
+  const forkState = parseState(raw.state, raw.id, source);
+  if (forkState) step.state = forkState;
 
   if (raw.allowCustom === true || raw.allowCustom === "true") step.allowCustom = true;
   if (raw.multiSelect === true || raw.multiSelect === "true") step.multiSelect = true;
   if (raw.agent) step.agent = String(raw.agent);
   if (raw.task) step.task = String(raw.task);
+  if (raw.on_error) step.on_error = String(raw.on_error);
 
   return step;
 }
 
 function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
-  const branches: Record<string, string> = {};
-  if (raw.branches && typeof raw.branches === "object") {
-    for (const [k, v] of Object.entries(raw.branches)) {
-      branches[k] = String(v);
-    }
-  }
+  const { branches, branchMeans } = parseBranches(raw.branches, raw.id, source);
 
   const step: AgentDecisionStep = {
     stepType: "agent-decision",
     id: raw.id,
-    agent: requireString(raw, "agent", source),
     task: requireString(raw, "task", source),
     branches,
   };
+  if (branchMeans) step.branchMeans = branchMeans;
+  if (raw.agent) step.agent = String(raw.agent);
+  if (raw.on_error) step.on_error = String(raw.on_error);
+  if (raw.decider !== undefined) step.decider = parseDecider(raw.decider, source);
+  const state = parseState(raw.state, raw.id, source);
+  if (state) step.state = state;
   if (raw.max_iterations !== undefined) step.max_iterations = toInt(raw.max_iterations, source);
   return step;
 }
 
 function parseCodeDecisionStep(raw: any, source: string): CodeDecisionStep {
-  const branches: Record<string, string> = {};
-  if (raw.branches && typeof raw.branches === "object") {
-    for (const [k, v] of Object.entries(raw.branches)) {
-      branches[k] = String(v);
-    }
-  }
+  const { branches, branchMeans } = parseBranches(raw.branches, raw.id, source);
 
   const step: CodeDecisionStep = {
     stepType: "code-decision",
     id: raw.id,
     branches,
   };
+  if (branchMeans) step.branchMeans = branchMeans;
 
   if (raw.target) step.target = String(raw.target);
+  if (raw.on_error) step.on_error = String(raw.on_error);
   if (raw.max_iterations !== undefined) step.max_iterations = toInt(raw.max_iterations, source);
   if (raw.timeout !== undefined) step.timeout = toInt(raw.timeout, source);
 
@@ -272,6 +274,52 @@ function parseCodeStep(raw: any, source: string): CodeStep {
   }
 
   return step;
+}
+
+// ---- Decision helpers (classifier-decisions) -------------------------------
+
+/** Branch values: a target stepId string, or `{ to, means }` (normalised). */
+function parseBranches(
+  raw: any,
+  stepId: string,
+  source: string,
+): { branches: Record<string, string>; branchMeans?: Record<string, string> } {
+  const branches: Record<string, string> = {};
+  const means: Record<string, string> = {};
+  if (raw && typeof raw === "object") {
+    for (const [k, v] of Object.entries(raw)) {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        const to = (v as any).to;
+        if (to === undefined || to === null || String(to) === "") {
+          throw new Error(`Step "${stepId}": branch "${k}" object form needs a "to" target ({ to: <step>, means: <text> }): ${source}`);
+        }
+        branches[k] = String(to);
+        const m = (v as any).means;
+        if (m !== undefined && m !== null && String(m) !== "") means[k] = String(m);
+      } else {
+        branches[k] = String(v);
+      }
+    }
+  }
+  return { branches, ...(Object.keys(means).length ? { branchMeans: means } : {}) };
+}
+
+function parseDecider(raw: any, source: string) {
+  try {
+    return parseDeciderSpec(raw);
+  } catch (err) {
+    throw new Error(`${err instanceof Error ? err.message : String(err)}: ${source}`, { cause: err });
+  }
+}
+
+function parseState(raw: any, stepId: string, source: string): Record<string, string> | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`Step "${stepId}": "state" must be a mapping of name -> value: ${source}`);
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) out[k] = String(v);
+  return out;
 }
 
 // ---- Utility ---------------------------------------------------------------

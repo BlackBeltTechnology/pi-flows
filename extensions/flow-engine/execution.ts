@@ -1,6 +1,6 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
 import { classifyAgentOutcome } from "./failure.js";
-import { createFinishLatch } from "./finish-latch.js";
+import { createFinishLatch, describeBadFinish } from "./finish-latch.js";
 import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ModelRuntime, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -17,7 +17,7 @@ import {
   createEventBus,
 } from "@earendil-works/pi-coding-agent";
 import type { ModelRegistry, Skill } from "@earendil-works/pi-coding-agent";
-import { resolveModel } from "./model-roles.js";
+import { resolveAgentModel, type ParentModelSnapshot } from "./model-roles.js";
 import { parseResult } from "./result-parser.js";
 import type { GuardOptions } from "./guard.js";
 import { createGuardExtension } from "./guard.js";
@@ -72,11 +72,16 @@ export function loadContextFiles(
 export function expandTemplateVariables(template: string, ctx: TemplateContext): string {
   return template
     // Primary syntax: ${{...}}
-    .replace(/\$\{\{task\}\}/g, ctx.task)
+    .replace(/\$\{\{task\}\}/g, () => ctx.task)
     .replace(/\$\{\{input\.([\w-]+)\}\}/g, (_, name) => ctx.inputs[name] ?? "")
     .replace(/\$\{\{flow\.input\.([\w-]+)\}\}/g, (_, name) => serializeForText(ctx.flowInput?.[name]))
     .replace(/\$\{\{result\.([\w-]+)\.status\}\}/g, (_, id) => ctx.results[id]?.status ?? "")
     .replace(/\$\{\{result\.([\w-]+)\.summary\}\}/g, (_, id) => ctx.results[id]?.summary ?? "")
+    // The agent's reply text; a declared output of the same name wins.
+    .replace(/\$\{\{result\.([\w-]+)\.fullOutput\}\}/g, (_, id) => {
+      const r = ctx.results[id];
+      return r?.outputs?.fullOutput !== undefined ? serializeForText(r.outputs.fullOutput) : r?.fullOutput ?? "";
+    })
     // Catch-all for typed outputs: ${{result.STEP.anyField}} resolves against the
     // typed `outputs` map and is serialized at this text boundary (compact JSON
     // for non-strings). Standard fields above are matched first.
@@ -130,8 +135,9 @@ export function resolveCodeInput(template: string, ctx: TemplateContext): unknow
     switch (m[2]) {
       case "status": return r.status;
       case "summary": return r.summary;
-      case "fullOutput": return r.fullOutput;
-      default: return r.outputs?.[m[2]] ?? "";
+      // A declared output of the same name wins (as in text expansion).
+      case "fullOutput": return r.outputs?.fullOutput !== undefined ? r.outputs.fullOutput : r.fullOutput;
+      default: { const v = r.outputs?.[m[2]]; return v === undefined ? "" : v; }
     }
   }
   const b = template.match(WHOLE_RESULT_BARE);
@@ -186,8 +192,14 @@ export interface SpawnOptions {
   onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void;
   decisionBranches?: string[];
   signal?: AbortSignal;
-  /** Pre-resolved model ID — when provided, skips resolveModel() call. */
+  /** Pre-resolved model ID — when provided, skips model resolution. */
   resolvedModelId?: string;
+  /** Pre-resolved Model object — used directly (no registry re-lookup by id). */
+  resolvedModel?: any;
+  /** Session model snapshot (flow start) for the fallback chain. */
+  parentModel?: ParentModelSnapshot;
+  /** `flows.modelFallback` (default "session"). */
+  modelFallback?: "session" | "error";
   /** Thinking level from the same pre-resolution (frontmatter > ref level). */
   resolvedThinking?: string;
 }
@@ -280,9 +292,36 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   }
 
   // Resolve model (skip if pre-resolved)
-  const { modelId, thinking } = options.resolvedModelId
-    ? { modelId: options.resolvedModelId, thinking: options.resolvedThinking ?? agent.thinking }
-    : resolveModel(pi, agent.model, agent.thinking, options.modelRegistry);
+  let modelId: string;
+  let thinking: string | undefined;
+  let preModel: any = options.resolvedModel;
+  if (options.resolvedModelId) {
+    modelId = options.resolvedModelId;
+    thinking = options.resolvedThinking ?? agent.thinking;
+  } else {
+    try {
+      const r = resolveAgentModel(pi, agent, {
+        registry: options.modelRegistry,
+        parentModel: options.parentModel,
+        modelFallback: options.modelFallback,
+      });
+      modelId = r.modelId;
+      thinking = r.thinking;
+      preModel = r.model;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
+        output: `Failed to resolve model: ${msg}`,
+        stderr: msg,
+        exitCode: null,
+        result: { status: "error" as const, summary: `Failed to resolve model: ${msg}`, files: [], artifacts: "" },
+        toolCalls,
+        duration: Date.now() - startTime,
+        tokens: { input: 0, output: 0 },
+      };
+    }
+  }
 
   // Build system prompt: expand template variables in agent body
   let systemPrompt = expandTemplateVariables(agent.systemPrompt, templateContext);
@@ -304,9 +343,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Resolve Model object from modelId
   // modelId may be "provider/model-id" or just "model-id"
-  let model: any;
+  let model: any = preModel;
   try {
-    if (options.modelRegistry) {
+    if (!model && options.modelRegistry) {
       const parts = modelId.split("/");
       if (parts.length >= 2) {
         // Explicit provider/model format
@@ -555,6 +594,13 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Cap for the stop-gate reminder loop (below). Exhaustion ends in a clean
   // SOFT failure via classifyAgentOutcome. See node-failure-model D4.
   const MAX_FINISH_RETRIES = 2;
+  // The same cap applies to finish calls that are REJECTED (invalid/missing
+  // branch, missing declared output): the initial attempt + MAX_FINISH_RETRIES
+  // reminders. The 3rd rejected finish aborts the session; the step then
+  // fails SOFT naming the problem. See node-failure-model "Capped no-finish reminder".
+  const finishArgsById = new Map<string, unknown>();
+  let badFinishCount = 0;
+  let badFinishMessage: string | undefined;
   let lastAssistantText = "";
   let lastApiError: string | undefined;
   let accumulatedTokens = { input: 0, output: 0 };
@@ -564,6 +610,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       case "tool_execution_start": {
         if (event.toolName === finishToolName) {
           finishLatch.start(event.toolCallId, event.args);
+          finishArgsById.set(event.toolCallId, event.args);
         }
         const tc: ToolCallRecord = {
           toolName: event.toolName,
@@ -601,6 +648,18 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
         // retry on the returned error tool result, with the stop-gate as backstop.
         if (finishLatch.end(event.toolCallId, !!event.isError)) {
           session.abort();
+        } else if (
+          event.toolName === finishToolName && event.isError && !finishLatch.latched &&
+          finishArgsById.has(event.toolCallId)
+        ) {
+          // Rejected finish: count it against the same cap as a missing finish.
+          badFinishCount++;
+          badFinishMessage = describeBadFinish(finishArgsById.get(event.toolCallId), {
+            decisionBranches: options.decisionBranches,
+            outputNames: (agent.outputs ?? []).map((o) => o.name),
+            errorText: typeof output === "string" ? output : rawResult?.content?.[0]?.text,
+          });
+          if (badFinishCount > MAX_FINISH_RETRIES) session.abort();
         }
         break;
       }
@@ -655,7 +714,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     // Stop-gate: remind (≤MAX) only while no correct finish has been latched;
     // then stop and classify. Keyed on the latch, not finishParams, so a
     // duplicate/blocked finish can never spuriously trigger a reminder. (D4)
-    while (!finishLatch.latched && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
+    while (!finishLatch.latched && badFinishCount <= MAX_FINISH_RETRIES && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
       finishRetries++;
       await session.prompt(
         `You did not call the \`${finishToolName}\` tool. You MUST call \`${finishToolName}\` to submit your result.\n\n` +
@@ -669,6 +728,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     // prompt() may throw on catastrophic errors
     if (!lastApiError) lastApiError = err.message;
   }
+
+  // Our own cap-abort surfaces as a provider "aborted" error; it is not an API failure.
+  if (!finishLatch.latched && badFinishCount > MAX_FINISH_RETRIES) lastApiError = undefined;
 
   // Cleanup abort listener
   options.signal?.removeEventListener("abort", onAbort);
@@ -725,7 +787,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   }
 
   // Build AgentResult from accumulated data
-  const parsed = finishParams
+  const parsed: ParsedResult = finishParams
     ? {
         status: finishParams.status as ParsedResult["status"],
         summary: finishParams.summary ?? "",
@@ -751,7 +813,21 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Structural outcome classification (success | soft | hard). The DAG
   // scheduler routes on `outcome`, not on `parsed.status === "complete"`.
-  const { outcome, failureInfo } = classifyAgentOutcome(finishParams ?? undefined, lastApiError);
+  let { outcome, failureInfo } = classifyAgentOutcome(finishParams ?? undefined, lastApiError);
+  if (!finishParams && badFinishCount > 0 && outcome === "soft") {
+    // The agent DID call finish but never with a valid payload: name the problem.
+    failureInfo = {
+      outcome: "soft",
+      message: `Agent's finish was rejected ${badFinishCount} time(s): ${badFinishMessage}`,
+      source: "agent_finish_invalid",
+    };
+  }
+  // No valid finish: a soft failure is status "error" (never "unknown") and
+  // its summary states the reason.
+  if (!finishParams) {
+    parsed.status = "error";
+    parsed.summary = failureInfo?.message || "Agent did not call finish";
+  }
 
   return {
     success: parsed.status === "complete",

@@ -2,28 +2,30 @@
 
 Files in this area. Purposes left for the agent to author.
 
-| `abort-utils.ts` | Expose `signalRejection` and `raceWithAbort`; reject pending work with `FlowCancelledError` when `AbortSignal` fires. |
-| `agent-parser.ts` | Parse agent Markdown via `parseAgentFile`/`parseAgentString`; map YAML frontmatter, access rules, outputs, and prompt body into `AgentConfig`. |
-| `discovery.ts` | Discover bundled, project, and extra agent/flow directories via `discoverAll`; parse `.md` agents and `flow.yaml`; return configs plus warnings. |
-| `edit-flow-config.ts` | Resolve and persist `flows.editFlow` in `.pi/settings.json`; expose `readEditFlowFlag`, `isEditFlowEnabled`, `setEditFlowFlag`, `parseEditModeArg`. |
-| `edit-flow-reconcile.ts` | `makeEditFlowToolReconciler`: change-gated `flow_agents`/`flow_write` activation; `applyManageFlowsVisibility`: per-turn, in-memory `manage-flows` prompt-visibility. |
-| `execute-code-step.ts` | Execute `CodeStep`/`CodeDecisionStep` handlers via `executeCodeStep`; resolve typed inputs, timeout/abort work, validate outputs, classify failures. |
-| `execution.ts` | Plan and spawn isolated agent sessions via `spawnAgent`; resolve models, context, skills, guards, finish latch, tools, templates, typed outputs, retries. |
-| `failure.ts` | Classify agent and thrown failures with `classifyAgentOutcome`/`classifyThrownError`; apply `on_error` routing through `resolveRouteOutcome`. |
-| `finish-latch.ts` | Create `FinishLatch`; pair finish tool start/end events by tool-call id and latch first successful finish parameters exactly once. |
-| `flow-execution.ts` | Run flow DAGs via `runFlow`; schedule segments, agents, forks, decisions, loops, and code nodes; route branches/failures; validate inputs; handle aborts. |
-| `flow-generate.ts` | Generate `.ts.default` code-node scaffolds with `generateCodeHandlers`; compare real `Input`/`Output` interfaces and return drift `Diagnostic`s. |
-| `flow-io-tui.ts` | Implement `TuiFlowIOAdapter` prompt queues, overlays, notes, custom and auto decisions; implement `HeadlessFlowIOAdapter` deterministic fallback responses. |
-| `flow-io.ts` | Define `FlowIOAdapter`, `FlowObserver`, `AskUserExtra`, and `AskUserResult` contracts for prompts, extension UI, notifications, and lifecycle events. |
-| `flow-manager.ts` | Coordinate one active run in `FlowManager`; mint `runId`, wire `FlowIOAdapter` and `FlowObserver`s to `runFlow`, dispatch events, abort, and clean up. |
-| `flow-parser-yaml.ts` | Parse files or strings with `parseFlowYamlFile`/`parseFlowYamlString`; validate flow inputs and agent, fork, decision, loop, and code step shapes. |
-| `flow-persist.ts` | Persist `flow:*` events as `flow-event` session entries via `FlowEventPersister`; map event names, find orphaned runs, and project run/node state. |
-| `flow-prompt.ts` | Emit `flow:prompt-request` through `emitPromptAndAwait`; accept first matching `flow:prompt-response` or PromptBus result; cancel on timeout. |
-| `flow-tui.ts` | Wire flow dashboard and summary TUI via `setupFlowTui`; observe/render lifecycle, emit and persist `flow:*` events, handle navigation and orphaned runs. |
-| `guard.ts` | Build `createGuardExtension`; enforce allowed tools, `ask_user`, read/write/bash access, `finish` schema, declared outputs, and post-finish lockout. |
-| `index.ts` | Activate flow engine; discover/register flows, agents, tools, skills, gates, commands, and `flow:*` event handlers; dispatch runs through `FlowManager`. |
-| `model-roles.ts` | Resolve `@role`, `provider/model-id`, and thinking suffixes via `resolveModel`; use `model:resolve` first, then `pi.modelRegistry` literal fallback. |
-| `prompt-bus-access.ts` | Cache PromptBus request function from `prompt:set-bus-request`; expose `setPromptBusRequest`, `hasPromptBus`, `promptBusRequest`, `listenForPromptBus`. |
-| `result-parser.ts` | Parse agent `<result>` XML into `ParsedResult` via `parseResult`; detect nested artifact tags by dotted path through `hasArtifactElement`. |
-| `testing.ts` | Expose zero-network faux harness: script finish/tool/error responses, register faux `ModelRuntime`, run `spawnFaux`, `runFaux`, and `runFauxFlow`. |
-| `types.ts` | Define flow-engine contracts: configs, steps, results, events, typed I/O, code handlers, diagnostics, `FailureOutcome`, `FailureInfo`, and `FlowHardError`. |
+| `abort-utils.ts` | `signalRejection`, `raceWithAbort`: reject pending work with `FlowCancelledError` when `AbortSignal` fires. |
+| `agent-parser.ts` | `parseAgentFile`/`parseAgentString`: frontmatter, access rules, outputs, body → `AgentConfig`; `model:` is a ref, list or omitted (`modelRefs`). |
+| `discovery.ts` | `discoverAll`: merge built-in<package<user<project agent/flow dirs; `classifySource` labels project|user|package|built-in. Returns configs, warnings. |
+| `edit-flow-config.ts` | Resolve/persist `flows.editFlow` in `.pi/settings.json`: `readEditFlowFlag`, `isEditFlowEnabled`, `setEditFlowFlag`, `parseEditModeArg`. |
+| `edit-flow-reconcile.ts` | `makeEditFlowToolReconciler`: change-gated `flow_agents`/`flow_write` activation; `applyManageFlowsVisibility`: per-turn `manage-flows` prompt visibility. |
+| `execute-code-step.ts` | `executeCodeStep`: run `CodeStep`/`CodeDecisionStep` handlers; typed inputs, timeout/abort, output validation, failure classification. |
+| `execution.ts` | `spawnAgent`: isolated agent session; resolves models (`resolvedModel` used directly, else `resolveAgentModel`), context, skills, guards, finish latch, typed outputs, retries. |
+| `failure.ts` | `classifyAgentOutcome`/`classifyThrownError`; `resolveRouteOutcome` applies `on_error` routing. |
+| `finish-latch.ts` | `FinishLatch`: pair finish tool start/end by tool-call id; latch first successful finish params once. |
+| `flow-execution.ts` | `runFlow`: schedules DAG segments, forks, loops, code nodes; `pickDecisionAgent`; `runDecision` routes via the decider chain; exhausted = soft, `on_error` routes. |
+| `flow-generate.ts` | `generateCodeHandlers`: write `.ts.default` code-node scaffolds; report `Input`/`Output` drift `Diagnostic`s. |
+| `flow-io-tui.ts` | `TuiFlowIOAdapter` prompt queues/overlays/auto decisions; `HeadlessFlowIOAdapter` deterministic fallback responses. |
+| `flow-io.ts` | `FlowIOAdapter`, `FlowObserver` (incl. `onDecision`), `AskUserExtra`, `AskUserResult` contracts for prompts, notifications and lifecycle events. |
+| `flow-manager.ts` | `FlowManager`: one active run; mints `runId`, wires adapter/observers to `runFlow`, snapshots session model, flows settings, `projectTrusted`; forwards `onDecision`. |
+| `flow-parser-yaml.ts` | `parseFlowYamlFile`/`parseFlowYamlString`: validate inputs and step shapes; `decision_agent`, `decider`, `state`, `on_error`, `{ to, means }` branches. |
+| `flow-persist.ts` | `FlowEventPersister`: persist `flow:*` events as session entries (`flow:decision` → `flow_decision`); find orphaned runs; project run/node state. |
+| `flow-prompt.ts` | `emitPromptAndAwait`: emit `flow:prompt-request`; first `flow:prompt-response` or PromptBus result wins; cancel on timeout. |
+| `flow-tui.ts` | `setupFlowTui`, `TuiFlowObserver`, `EventEmitObserver`: render lifecycle, emit/persist `flow:*` events (`agent-started` has `modelFallback`; `flow:decision`); `formatDecisionLine`. |
+| `flows-settings.ts` | `readFlowsSettings`: `flows.modelFallback` (default `session`), `flows.decisionAgent`, `flows.decider`; project over global. |
+| `guard.ts` | `createGuardExtension`: enforce allowed tools, `ask_user`, read/write/bash access, `finish` schema, declared outputs, post-finish lockout. |
+| `index.ts` | Activate engine: rediscovers per flow start; flow commands, tools, skills, gates, `flow:*` handlers; tracks `sessionModel`, `isProjectTrusted`; `FlowManager`; `userFlowsRoot`. |
+| `model-roles.ts` | `resolveModel`: `@role`/literal/thinking suffix via `model:resolve`, then registry; `resolveAgentModel`: ordered refs → session-model fallback; errors keep resolver detail. |
+| `prompt-bus-access.ts` | Cache PromptBus request fn from `prompt:set-bus-request`: `setPromptBusRequest`, `hasPromptBus`, `promptBusRequest`, `listenForPromptBus`. |
+| `result-parser.ts` | `parseResult`: agent `<result>` XML → `ParsedResult`; `hasArtifactElement` detects nested artifact tags by dotted path. |
+| `reserved-outputs.ts` | `RESERVED_FINISH_OUTPUTS`, `reservedOutputsOf`, `reservedOutputProblems`: finish-field output names; discovery warns, `runFlow` refuses to start. |
+| `testing.ts` | Faux harness: `scriptFinish`/`scriptError`, `registerFauxOnRuntime`, `spawnFaux`, `runFaux`, `runFauxFlow`; options: parent model, fallback, decider, `entryOverrides`, `onDecision`. |
+| `types.ts` | Flow-engine contracts: configs, steps, results, events, `FailureInfo`, `FlowHardError`, `modelRefs`, `ModelFallbackInfo`, `DeciderSpec`, `DecisionEvent`. |

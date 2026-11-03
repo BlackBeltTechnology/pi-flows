@@ -313,3 +313,84 @@ describe("resolveModel — thinking levels incl. max (fallback)", () => {
     expect(calls).toEqual([["anthropic", "claude-opus-4:ultra"]]);
   });
 });
+
+// ── resolveAgentModel — chain with session-model fallback ───────────────
+
+import { resolveAgentModel } from "../extensions/flow-engine/model-roles.js";
+
+const PARENT = { id: "parent", provider: "prov" };
+const parentModel = { model: PARENT as any, thinking: "low" };
+
+describe("resolveAgentModel", () => {
+  const agent = (refs: string[], extra: Record<string, unknown> = {}) => ({
+    name: "ag", source: "test://ag.md", model: refs[0], modelRefs: refs, ...extra,
+  });
+
+  it("legacy @coding with handler resolves as before", () => {
+    const coder = { id: "coder", provider: "prov" };
+    const pi = mkPi({ resolveHandler: (p) => { p.model = coder; p.resolved = "prov/coder"; } });
+    const out = resolveAgentModel(pi, agent(["@coding"]), { parentModel });
+    expect(out.model).toBe(coder);
+    expect(out.modelId).toBe("prov/coder");
+    expect(out.fallback).toBeUndefined();
+  });
+
+  it("list skips unresolvable @fast and uses literal from registry", () => {
+    const haiku = { id: "claude-haiku-4-5", provider: "anthropic" };
+    const pi = mkPi({});
+    const registry = { find: (p: string, i: string) => (p === "anthropic" && i === haiku.id ? haiku : undefined) };
+    const out = resolveAgentModel(pi, agent(["@fast", "anthropic/claude-haiku-4-5"]), { registry, parentModel });
+    expect(out.model).toBe(haiku);
+    expect(out.fallback).toBeUndefined();
+  });
+
+  it("literal miss fails naming it and does not try later entries", () => {
+    const emitted: string[] = [];
+    const pi = mkPi({ resolveHandler: (p) => { emitted.push(p.ref); } });
+    const registry = { find: () => undefined, getAll: () => [] };
+    expect(() =>
+      resolveAgentModel(pi, agent(["anthropic/claude-haku", "@fast"]), { registry, parentModel }),
+    ).toThrow(/anthropic\/claude-haku/);
+    expect(emitted).toEqual(["anthropic/claude-haku"]);
+  });
+
+  it("no resolver → parent model with no-resolver fallback", () => {
+    const out = resolveAgentModel(mkPi({}), agent(["@fast"]), { parentModel });
+    expect(out.model).toBe(PARENT);
+    expect(out.modelId).toBe("prov/parent");
+    expect(out.fallback).toEqual({ requested: ["@fast"], used: "prov/parent", reason: "no-resolver" });
+  });
+
+  it("resolver probe.error on @-ref → parent, reason resolver-error", () => {
+    const pi = mkPi({ resolveHandler: (p) => { p.error = 'Role "@fast" is not assigned'; } });
+    const out = resolveAgentModel(pi, agent(["@fast"]), { parentModel });
+    expect(out.model).toBe(PARENT);
+    expect(out.fallback?.reason).toBe("resolver-error");
+  });
+
+  it("omitted model → parent model, no-model-declared", () => {
+    const out = resolveAgentModel(mkPi({}), agent([], { model: undefined }), { parentModel });
+    expect(out.model).toBe(PARENT);
+    expect(out.fallback).toEqual({ requested: [], used: "prov/parent", reason: "no-model-declared" });
+  });
+
+  it("strict mode fails naming @fast and 'no entry resolved'", () => {
+    expect(() =>
+      resolveAgentModel(mkPi({}), agent(["@fast"]), { parentModel, modelFallback: "error" }),
+    ).toThrow(/@fast[\s\S]*no .*entry resolved|no .*entry resolved[\s\S]*@fast/i);
+  });
+
+  it("no session model fails naming the agent", () => {
+    expect(() => resolveAgentModel(mkPi({}), agent(["@fast"]), {})).toThrow(/ag[\s\S]*session model/);
+  });
+
+  it("handler error on a literal fails with handler message", () => {
+    const pi = mkPi({ resolveHandler: (p) => { p.error = "made-up is not a model"; } });
+    expect(() => resolveAgentModel(pi, agent(["vendor/made-up"]), { parentModel })).toThrow(/made-up is not a model/);
+  });
+
+  it("thinking = agent.thinking ?? parent thinking on fallback", () => {
+    expect(resolveAgentModel(mkPi({}), agent(["@fast"]), { parentModel }).thinking).toBe("low");
+    expect(resolveAgentModel(mkPi({}), agent(["@fast"], { thinking: "high" }), { parentModel }).thinking).toBe("high");
+  });
+});

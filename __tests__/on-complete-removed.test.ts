@@ -60,19 +60,21 @@ steps:
 
   it("a reference satisfied only by an on_complete chain no longer validates", () => {
     // b references a's output; ordering was previously proven by a.on_complete=b.
+    // b is listed BEFORE a: a code step is a separator and runs after every
+    // earlier step, so only a reference to a LATER step is unordered.
     const yaml = `
 name: f
 description: d
 steps:
+  - id: b
+    type: code
+    inputs:
+      t: \${{result.a.token}}
   - id: a
     type: code
     on_complete: b
     outputs:
       - name: token
-  - id: b
-    type: code
-    inputs:
-      t: \${{result.a.token}}
 `;
     const { diagnostics } = validateFlowContent(yaml);
     // The on_complete removal error fires; and ordering is NOT satisfied via on_complete.

@@ -5,7 +5,7 @@
 // lifecycle observation. Enables TUI, web, headless, and test adapters.
 // ---------------------------------------------------------------------------
 
-import type { AgentConfig, AgentResult, FlowConfig, FlowResult, NodeKind } from "./types.js";
+import type { AgentConfig, AgentResult, DecisionEvent, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
 
 // ---- FlowIOAdapter --------------------------------------------------------
 
@@ -69,14 +69,16 @@ export interface FlowIOAdapter {
  */
 export interface FlowObserver {
   onFlowStarted?(runId: string, flowName: string, flow: FlowConfig, task: string): void;
-  onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }): void;
+  onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string, extra?: AgentStartedExtra): void;
   onAgentComplete?(agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }): void;
   onToolCall?(agentName: string, stepId: string, toolName: string, input: any): void;
   onToolResult?(agentName: string, stepId: string, toolName: string, output: any, isError: boolean): void;
   onAssistantText?(agentName: string, stepId: string, text: string): void;
   onThinkingText?(agentName: string, stepId: string, text: string): void;
   onLoopIteration?(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void;
-  onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void;
+  onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string, detail?: { confidence?: number }): void;
+  /** One call per decision with every decider attempt (change: classifier-decisions). */
+  onDecision?(event: DecisionEvent): void;
   // Step-level (message-level) agent failure, distinct from a tool result with
   // isError:true (which travels via onToolResult). Surfaces as a discrete
   // {kind:"error"} timeline entry.

@@ -75,7 +75,7 @@ Agents are Markdown files with YAML frontmatter in the `agents/` directory:
 ---
 name: my-agent                     # Unique identifier (used in flows)
 description: Brief description     # Shown in agent catalog
-model: @coding                     # AI model tier
+model: anthropic/claude-sonnet-4-5    # optional: ref, [list], or omitted
 tools: read, write, edit, grep, bash  # Allowed tools
 skills: my-skill                   # Skills this agent can reference
 inputs:                            # Named inputs from upstream steps
@@ -131,14 +131,9 @@ Call `finish` with your structured results when done.
 4. **Clear boundaries** — `access:` patterns prevent agents from stepping on each other
 5. **Structured output** — agents call `finish` to submit structured results for downstream steps
 
-### Model Tier Selection
+### Model Selection
 
-| Tier | When to Use | Cost | Capability |
-|------|-------------|------|------------|
-| `@coding` | Writing code, complex implementation | High | Best code generation |
-| `@planning` | Orchestration, analysis, verification | Medium | Strong reasoning |
-| `@research` | Read-only exploration, documentation | Medium | Good comprehension |
-| `@compact` | Simple tasks, formatting, summarization | Low | Basic capability |
+`model:` is optional. Declare a literal model, an optional `@name` alias (resolved by a `model:resolve` resolver such as pi-agent-dashboard), an ordered list, or nothing (session model). Do not rely on specific `@name` aliases existing — unresolvable aliases fall back to the session model unless `flows.modelFallback` is `"error"`. See `docs/agents.md`.
 
 ### Dashboard Card Types
 

@@ -30,11 +30,13 @@ Both tools perform validation and write to discoverable locations (no raw `path`
 
 ### Model field guidance
 
-The `model:` field in agent frontmatter accepts three forms:
+The `model:` field is optional and accepts:
 
-1. **Role alias (preferred):** `@coding`, `@planning`, `@fast`, `@architect`. Resolved via active role-to-model mapping set with `/roles`.
-2. **Model ID with thinking:** `claude-sonnet-4-20250514:high`. Explicit model; `:high` sets thinking level unless overridden by `thinking:` field.
-3. **Bare model ID:** `claude-haiku-3-5-20241022`. Used as-is; thinking comes from `thinking:` field or none.
+1. **A single ref:** `claude-sonnet-4-20250514:high` (explicit model; `:high` sets thinking unless `thinking:` overrides), a bare `claude-haiku-3-5-20241022`, or an optional `@name` alias.
+2. **An ordered list:** `[@my-alias, anthropic/claude-haiku-4-5]` — the first entry that resolves is used.
+3. **Nothing:** the agent runs on the session model.
+
+`@name` is resolved by an installed `model:resolve` resolver (e.g. pi-agent-dashboard); pi-flows defines no role names. Unresolvable `@name` entries are skipped, and when none resolves the agent falls back to the session model (`flows.modelFallback: "session"`, the default; `"error"` fails instead). A literal ref that does not exist is an error.
 
 The `manage-flows` skill documents these forms in detail for interactive guidance.
 
@@ -50,7 +52,7 @@ Agent files are Markdown documents with YAML frontmatter. The frontmatter config
 ---
 name: my-agent
 description: A one-line description of what this agent does
-model: @coding
+model: anthropic/claude-sonnet-4-5
 thinking: medium
 tools: read, grep, bash
 skills: my-docs
@@ -130,15 +132,17 @@ Target file: ${{input.target_file}}
 
 ### Model references
 
-The `model` field accepts three formats:
+The `model` field accepts a single ref, an ordered list, or can be omitted:
 
 | Format | Example | Description |
 |--------|---------|-------------|
-| Role alias | `@planning` | Resolved via the active role-to-model mapping (set with `/roles` command). |
 | Model ID with thinking | `claude-sonnet-4-20250514:high` | Explicit model ID; `:high` sets thinking level unless `thinking:` field overrides it. |
 | Plain model ID | `claude-haiku-3-5-20241022` | Used as-is; thinking from `thinking:` field or none. |
+| `@name` alias | `@my-alias` | Optional; needs a `model:resolve` resolver, otherwise falls back to the session model per `flows.modelFallback`. |
+| List | `[@my-alias, anthropic/claude-haiku-4-5]` | First entry that resolves wins; unresolvable `@name` entries are skipped. |
+| Omitted | *(none)* | Runs on the session model. |
 
-**Available built-in roles:** `@planning`, `@coding`, `@fast`, `@architect`. Custom roles can be added via the `/roles` command.
+Agent validation treats refs as opaque: it checks only that refs are non-empty and that any `:thinking` suffix is a valid level (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `off`).
 
 ---
 
@@ -222,7 +226,7 @@ outputs:
 - `type` — one of `string`, `number`, `boolean`, `object`, or `array`. The output is **stored in its real JSON type** under the result's `outputs`, never coerced to a string. When the declared `type` is non-string, the `finish` schema accepts that type and validates the emitted value against it before storing it.
 - `pattern` — a regex the value (as text) must match. Explicit `pattern` wins over `type`. An invalid regex degrades to an unconstrained required string.
 
-**Required by default:** declared outputs are required. Missing or `type`/`pattern`-violating outputs cause the `finish` call to be rejected and the agent re-prompted via the existing finish retry loop; the step fails after `MAX_FINISH_RETRIES`. Enforced at the finish-tool schema level.
+**Required by default:** declared outputs are required. Missing or `type`/`pattern`-violating outputs cause the `finish` call to be rejected and the agent re-prompted via the existing finish retry loop; the step fails after `MAX_FINISH_RETRIES` (status `error`, summary stating the reason). Enforced at the finish-tool schema level. Outputs are required only for `status: "complete"`; `finish(status:"error"|"blocked")` may omit them, and its summary reaches the `on_error` target as `${{result.X.summary}}`.
 
 Declared outputs become parameters on the `finish` tool. The agent sets them when calling `finish`:
 ```
@@ -387,7 +391,7 @@ steps: [A, B, C, fork, D, E, agent-decision, F]
 
 - **DAG segments** — consecutive `agent` steps. Executed as a parallel wave, respecting `blockedBy` dependencies. All steps in a wave that have no unsatisfied `blockedBy` entries fire concurrently, up to `max_concurrent`.
 - **Separator steps** — `fork`, `agent-decision`, `code-decision`. Execute one at a time and control routing.
-- **Cross-segment routing** — `on_error` on agent steps can jump to any step ID, including steps in different segments. On success a step falls through to the next step in file order; forward path selection (including skipping steps) is expressed with a `fork` or `code-decision` node.
+- **Cross-segment routing** — `on_error` can jump to any step later in file order (a backward `on_error` is a validation error), including steps in different segments. The target implicitly waits for its source to settle and sees its result without `blockedBy`; on success it still runs if it is on the normal path. On success a step falls through to the next step in file order; forward path selection (including skipping steps) is expressed with a `fork` or `code-decision` node.
 
 ---
 
@@ -434,7 +438,7 @@ The primary step type. Dispatches a named agent with an optional task and inputs
 | `task` | No | Task override. Template string. If omitted, agent uses its default system prompt with `${{task}}` expanded. |
 | `blockedBy` | No | Array of step IDs that must complete before this step runs. Enforces DAG ordering. |
 | `inputs` | No | Named inputs wired from template expressions. Each key becomes `${{input.KEY}}` in the agent's prompt. |
-| `on_error` | No | Step ID to route to on error. |
+| `on_error` | No | Step ID to route to on error. Must be later in file order (not itself). |
 | `output` | No | Output file path hint. |
 
 > On success a step **falls through** to the next step in file order — there is no success-routing field. Order a later step after this one with `blockedBy`; select a forward path (including skipping steps) with a `fork` or `code-decision` node.
@@ -460,7 +464,7 @@ The primary step type. Dispatches a named agent with an optional task and inputs
 
 #### 2. Fork step
 
-Presents a choice to the user and routes to different steps based on the selection. In autonomous mode, the `agent:` field provides an agent to decide automatically.
+Presents a choice to the user and routes to different steps based on the selection. In autonomous mode no prompt is shown: the fork is decided by its decider chain, and the `agent` entry uses the step `agent:`, else the flow `decision_agent:`, else `flows.decisionAgent`, else the built-in `flow-decision`.
 
 ```yaml
 - id: choose-strategy
@@ -474,7 +478,7 @@ Presents a choice to the user and routes to different steps based on the selecti
     Fast path (minimal change): fast-impl
     Full refactor: refactor-impl
     Workaround: workaround-impl
-  agent: flow-decision    # used in autonomous mode
+  agent: flow-decision    # optional — decision agent for this fork
   task: >
     Choose the best strategy based on: ${{result.analyzer.summary}}
   allowCustom: false      # optional — adds "Other (describe)" option
@@ -487,10 +491,10 @@ Presents a choice to the user and routes to different steps based on the selecti
 | `question` | Yes | Question shown to the user (or agent in autonomous mode). Template string. |
 | `options` | Yes | List of choice strings. |
 | `branches` | Yes | Map of option text → target step ID. Keys must match options **exactly**. |
-| `agent` | No | Agent for autonomous mode decisions and `allowCustom` freetext routing. |
+| `agent` | No | Decision agent for this fork (autonomous mode, "Auto-decide", `allowCustom` freetext). Without it: flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`. |
 | `task` | No | Context for the auto-deciding agent. Template string. |
-| `allowCustom` | No | Appends an "Other (describe)" option. Requires `agent:` — the agent interprets freetext and routes to the closest branch. |
-| `multiSelect` | No | Allow multiple selections. The selected options are joined and passed as context. |
+| `allowCustom` | No | Appends an "Other (describe)" option (interactive mode). The decider chain maps the typed text to a branch; if it cannot, the user is asked again. Offered when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or `flows.decider` is set; otherwise validation only warns. |
+| `multiSelect` | No | Allow multiple selections. Each selected branch runs exactly once, sequentially; unselected branches get synthetic skipped results; execution continues after the branches. The selected options are joined and passed as context. |
 
 **Fork context injection:** The chosen option, user notes, and decision source (user or agent) are automatically injected into the branch step's system prompt — no manual wiring needed.
 
@@ -522,8 +526,9 @@ Run a TypeScript handler exactly like a [code step](#7-code-step), then route on
 | `outputs` | No | Optional data outputs the handler must return. **Never include `branch`** — it is reserved. |
 | `target` | No | Override the handler file path. Skips scaffold generation. |
 | `blockedBy` | No | Step IDs that must complete before this step runs. |
-| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). See [Loops](#5-loops). |
+| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#5-loops). |
 | `timeout` | No | Soft deadline in milliseconds. |
+| `on_error` | No | Step ID to route to on soft failure (later in file order). Halts the flow when unset. |
 
 **Handler contract.** Identical to a [code step](#7-code-step) — same handler path (`<flow-dir>/<id>.ts` co-located beside `flow.yaml`, or explicit `target:`), same `inputs`/`outputs`, same soft/hard failure model and value coercion. The handler ADDITIONALLY returns a reserved `branch: string` key:
 
@@ -553,8 +558,9 @@ export default async function (
 |-----------|---------|
 | Fewer than 2 `branches` | Validation error — use a plain `code` step. |
 | `branch` declared in `outputs:` | Validation error — `branch` is reserved. |
-| Handler return omits `branch` | Soft failure naming the reserved `branch` output. |
-| Returned `branch` not in `branches:` | **Hard** failure — halts the flow (consistent with `agent-decision`). |
+| Handler return omits `branch`, or `branch` is not a string | Soft failure naming the reserved `branch` output. |
+| Handler throw, timeout, or return-contract violation | Soft failure — routes to `on_error`, or halts when unset. |
+| Returned `branch` not in `branches:` | **Hard** failure — halts the flow even with `on_error`. |
 
 **Type-safe scaffold.** `/flows:generate` emits a `type Branch = "auto_approve" | "needs_human" | "park";` union per `code-decision` and types the return as `Promise<{ branch: Branch } & Output>`, so an off-map label is a compile-time error. Scaffolds write a `.ts.default` and never overwrite an implemented handler.
 
@@ -584,9 +590,9 @@ An agent evaluates options and calls `finish({ branch: "chosen" })` to select th
 | `agent` | Yes | Agent that makes the decision. |
 | `task` | Yes | Context for the decision agent. Template string. |
 | `branches` | Yes | Map of branch name → target step ID. |
-| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). See [Loops](#5-loops). |
+| `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#5-loops). |
 
-The guard injects the branch names into the `finish` tool parameters as a union type. The agent must pick one of the declared branch names. A `branch` not in `branches:` hard-fails the flow. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#5-loops).
+The guard injects the branch names into the `finish` tool parameters as a union type. The agent must pick one of the declared branch names. A missing or invalid `branch` soft-fails the step: `on_error` routes it, else the flow halts. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#5-loops).
 
 ---
 
@@ -595,7 +601,11 @@ The guard injects the branch names into the `finish` tool parameters as a union 
 A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — whose branch target points to an **earlier** step, re-entering the graph to form a cycle. There is no dedicated loop step type; a loop is just a backward branch edge.
 
 - A `*-decision` node with a branch target pointing to an earlier step **MUST** declare `max_iterations`.
-- The engine tracks per-node iteration counts and forces exit when the cap is reached — control falls through to the next step.
+- `max_iterations: N` caps the number of loop-backs (backward branch edges taken), not total passes. The body runs at most N + 1 times: the first pass plus N re-entries (`max_iterations: 3` → up to 4 passes).
+- When the cap is reached and the decision again picks the backward branch, the engine does not loop; control falls through to the next step in file order.
+- On re-entry only the loop body re-runs (target .. decision, plus steps reachable from the target); steps outside it keep their completed results.
+- Retries use a decision step with a backward branch and `max_iterations` — `on_error` cannot point backward.
+- `${{loop.<id>.iteration}}` is the 1-based number of the current pass (pass N shows N) in both the body and the decision; `${{loop.<id>.max}}` is N.
 - A `*-decision` node whose branches all point forward needs no `max_iterations`.
 - The dashboard ↻ iteration badge is driven by the `flow:loop-iteration` event, emitted only when a backward edge is actually taken — not inferred from the presence of `max_iterations`.
 
@@ -637,7 +647,7 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
 
 The agent calls `finish({ branch: "fixer" })` to loop or `finish({ branch: "done" })` to exit. A `code-decision` loops the same way — return `{ branch: "fixer" }` from the handler.
 
-**Routing node semantics.** A routing node (`fork`, `agent-decision`, `code-decision`) always executes, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches not taken receive synthetic `skipped` results; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
+**Routing node semantics.** A routing node (`fork`, `agent-decision`, `code-decision`) always executes, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches not taken receive synthetic `skipped` results, whatever the chosen target's step type; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
 
 > **Migrating from `agent-loop-decision`.** Replace `type: agent-loop-decision` with `type: agent-decision`. Move `loop_target` and `exit_target` into `branches:` (e.g. `branches: { rework: <loop_target>, done: <exit_target> }`) and keep `max_iterations`. The agent calls `finish({ branch: "rework" })` or `finish({ branch: "done" })`.
 
@@ -668,7 +678,7 @@ Run a TypeScript handler function in-process. Use for deterministic logic that d
 | `outputs` | No | List of `{ name }` objects. Each name must be a valid JS identifier, unique within the step. The handler return object must contain exactly these keys. |
 | `target` | No | Override the handler file path. Skips scaffold generation; the author owns the file. |
 | `blockedBy` | No | Step IDs that must complete before this step runs. |
-| `on_error` | No | Step ID to route to on soft failure. |
+| `on_error` | No | Step ID to route to on soft failure. Must be later in file order. |
 | `timeout` | No | Soft deadline in milliseconds. When exceeded the engine aborts `ctx.signal` and the step soft-fails. |
 
 **Handler contract**
@@ -748,7 +758,7 @@ export default async function (input: { valid: string }): Promise<{ branch: Bran
 }
 ```
 
-Typed outputs resolve against the merged typed-output map first, falling back to `fullOutput` only when the key is absent.
+Typed outputs resolve against the merged typed-output map only. An undeclared `${{result.X.foo}}` expands to an empty string; only `${{result.X.fullOutput}}` gives the reply text.
 
 ---
 
@@ -760,11 +770,11 @@ Template expressions `${{...}}` are expanded in `task`, `inputs` values, and `qu
 |----------|------------|
 | `${{task}}` | The original user task string (from command args or `task_required` prompt). |
 | `${{input.NAME}}` | Named input passed to this step via the `inputs:` block. |
-| `${{result.STEP_ID.status}}` | Step result status: `"complete"`, `"error"`, `"blocked"`, `"unknown"`. |
-| `${{result.STEP_ID.summary}}` | Summary string from the step's `finish` call. |
+| `${{result.STEP_ID.status}}` | Step result status: `"complete"`, `"error"`, `"blocked"`. |
+| `${{result.STEP_ID.summary}}` | Summary string from the step's `finish` call: the agent's description of its work, not its content. |
 | `${{result.STEP_ID.fullOutput}}` | Full raw output text. Use sparingly — can be very large. |
 | `${{result.STEP_ID.OUTPUTNAME}}` | A declared typed output (from an agent's or code step's `outputs:`), held under the result's `outputs`. A produced file path is conveyed this way as a `*_path` output. |
-| `${{flow.input.NAME}}` | A declared flow input (see [Typed flow inputs](#typed-flow-inputs)). |
+| `${{flow.input.NAME}}` | A declared flow input (see [Typed flow inputs](#typed-flow-inputs)). Validation error unless `inputs:` declares `NAME`. |
 | `${{loop.STEP_ID.iteration}}` | Current iteration count of a loop decision step. |
 | `${{loop.STEP_ID.max}}` | Max iterations configured for a loop decision step. |
 
@@ -860,13 +870,22 @@ Rules:
 |---------|----------|---------|
 | Built-in agents | `pi-flows/agents/` | `*.md` (non-recursive) |
 | Project-local agents | `.pi/flows/agents/` | `*.md` (non-recursive) |
+| User agents | `<agentDir>/flows/agents/` (default `~/.pi/agent`, honours `PI_CODING_AGENT_DIR`) | `*.md` (non-recursive) |
 | Package agents | Registered via `flow:register-agents-dir` | `*.md` |
 | Built-in flows | `pi-flows/flows/` | `<namespace>/<name>/flow.yaml` |
 | Project-local flows | `.pi/flows/flows/` | `<namespace>/<name>/flow.yaml` |
+| User flows | `<agentDir>/flows/flows/` | `<namespace>/<name>/flow.yaml` |
 | Package flows | Registered via `flow:register-flows-dir` | `<namespace>/<name>/flow.yaml` |
 | Skills | Registered via `flow:register-skills-dir` | `<name>/SKILL.md` |
 
 **Override priority (highest to lowest):**
 1. Project-local (`.pi/flows/`)
-2. Package (registered via events)
-3. pi-flows built-ins
+2. User (`<agentDir>/flows/`)
+3. Package (registered via events)
+4. pi-flows built-ins
+
+**User flows.** Flows and agents in `<agentDir>/flows/` are available in every project and load without a trust prompt. Code handlers load from the flow's own directory, while `ctx.cwd`, the agents' working directory and run results stay in the project the flow started in. Keep run state under `ctx.cwd`, not next to the flow file, or projects will share it. `/flows` and `flow_agents` `list` label each item `project`, `user`, `package` or `built-in`. `flow_write` and `flow_agents` (`op: write`) accept `scope: "project" | "user"` (default `project`). `/flows:delete` removes a flow from the directory it was found in, names that path in its confirmation, and refuses package and built-in flows.
+
+## Decider chains
+
+Decision steps (`agent-decision`, `fork`) accept `decider:` (list or `{ chain, trust, min_confidence }`) and `state:`; branches accept `{ to, means }`. The flow may set a top-level `decider:`; the setting `flows.decider` is the system-wide default. Full reference: [flows.md](flows.md#decider-chain-classifier-decisions).

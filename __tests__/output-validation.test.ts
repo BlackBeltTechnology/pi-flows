@@ -4,7 +4,8 @@
  *
  * The SDK validates finish args against this schema; a failed check is what
  * drives the existing followUp retry in spawnAgent. We assert the contract
- * directly via TypeBox's Value.Check.
+ * directly via TypeBox's Value.Check. Required presence is enforced only on
+ * status "complete", by the guard's tool_call hook (not the schema).
  */
 
 import { describe, expect, it } from "vitest";
@@ -26,6 +27,14 @@ function buildFinishSchema(agentOutputs?: AgentOutput[]): any {
 
 const base = { status: "complete", summary: "done", files: [] as unknown[] };
 
+/** Run a finish call through a fresh guard's tool_call hooks; true when blocked. */
+function finishBlocked(agentOutputs: AgentOutput[], input: Record<string, unknown>): boolean {
+  const hooks: Array<(e: any) => any> = [];
+  const pi: any = { on: (ev: string, h: any) => { if (ev === "tool_call") hooks.push(h); }, registerTool: () => {} };
+  createGuardExtension({ requireFinish: true, agentOutputs })(pi);
+  return hooks.some((h) => h({ toolName: "finish", input })?.block === true);
+}
+
 describe("output validation — required presence", () => {
   const schema = buildFinishSchema([{ name: "verdict" }]);
 
@@ -33,8 +42,13 @@ describe("output validation — required presence", () => {
     expect(Value.Check(schema, { ...base, verdict: "pass" })).toBe(true);
   });
 
-  it("fails when the declared output is missing", () => {
-    expect(Value.Check(schema, { ...base })).toBe(false);
+  it("fails when the declared output is missing on a complete finish", () => {
+    expect(finishBlocked([{ name: "verdict" }], { ...base })).toBe(true);
+  });
+
+  it("passes without the declared output on an error/blocked finish", () => {
+    expect(Value.Check(schema, { ...base, status: "error" })).toBe(true);
+    expect(finishBlocked([{ name: "verdict" }], { ...base, status: "blocked" })).toBe(false);
   });
 });
 

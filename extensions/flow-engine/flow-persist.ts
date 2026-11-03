@@ -30,6 +30,7 @@ export const FLOW_EVENT_NAME_MAP: Record<string, string> = {
   "flow:subagent-tool-call": "flow_tool_call",
   "flow:subagent-tool-result": "flow_tool_result",
   "flow:auto-decision": "flow_auto_decision",
+  "flow:decision": "flow_decision",
   "flow:loop-iteration": "flow_loop_iteration",
   "flow:agent-error": "flow_agent_error",
   "flow:complete": "flow_complete",

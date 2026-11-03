@@ -8,6 +8,8 @@
 // ---------------------------------------------------------------------------
 
 import type { Diagnostic } from "../types.js";
+import { VALID_THINKING_LEVELS } from "../model-roles.js";
+import { parseAgentString } from "../agent-parser.js";
 export type { Diagnostic };
 
 // ---- Known constants ------------------------------------------------------
@@ -31,16 +33,18 @@ const BASE_TOOLS = new Set([
   "bash",
 ]);
 
-// Well-known model roles. Unknown roles produce a warning (not error) since
-// domain packages may define custom roles resolved at runtime.
-const KNOWN_MODEL_ROLES = new Set([
-  "@planning",
-  "@coding",
-  "@compact",
-  "@fast",
-  "@vision",
-  "@research",
-]);
+import { RESERVED_FINISH_OUTPUTS } from "../reserved-outputs.js";
+export { RESERVED_FINISH_OUTPUTS };
+
+/** Error text for a reserved output name; `kind` is the reason it is reserved. */
+export function reservedOutputMessage(name: string, kind: "finish" | "branch"): { message: string; suggestion: string } {
+  return {
+    message: kind === "finish"
+      ? `Output "${name}" is reserved (finish tool field)`
+      : `Output "${name}" is reserved for routing on a decision agent`,
+    suggestion: `Use a different output name, e.g. "outcome"`,
+  };
+}
 
 // ---- Public validation function -------------------------------------------
 
@@ -158,7 +162,9 @@ export function validateAgentContent(
 
   if (fields.has("tools")) {
     const toolsEntry = fields.get("tools")!;
-    const toolNames = toolsEntry.value.split(",").map((t) => t.trim()).filter(Boolean);
+    // `tools: []` is the explicit "no tools" form (e.g. the built-in flow-decision agent).
+    const rawTools = toolsEntry.value.trim() === "[]" ? "" : toolsEntry.value;
+    const toolNames = rawTools.split(",").map((t) => t.trim()).filter(Boolean);
     for (const tool of toolNames) {
       if (!allTools.has(tool)) {
         diagnostics.push({
@@ -171,38 +177,66 @@ export function validateAgentContent(
     }
   }
 
-  // ---- 4. Model role validation -------------------------------------------
+  // ---- 4. Model ref syntax (refs are opaque: no role list) ----------------
+  // `model:` is optional; a single ref, an inline `[a, b]` list or a block
+  // list. Only syntax is checked: non-empty refs and a valid `:thinking` suffix.
 
-  if (fields.has("model")) {
-    const modelEntry = fields.get("model")!;
-    let modelValue = modelEntry.value;
-
-    // Strip quotes — YAML may preserve them: "@coding" → @coding
-    if ((modelValue.startsWith('"') && modelValue.endsWith('"')) ||
-        (modelValue.startsWith("'") && modelValue.endsWith("'"))) {
-      diagnostics.push({
-        line: modelEntry.line,
-        severity: "warning",
-        message: `Model value has unnecessary quotes: ${modelValue}`,
-        suggestion: `Use model: ${modelValue.slice(1, -1)} without quotes`,
-      });
-      modelValue = modelValue.slice(1, -1);
-    }
-
-    // Only role aliases (@role) are allowed — not bare model IDs.
-    // Roles are resolved at runtime via the `model:resolve` event bus.
-    if (modelValue.startsWith("@")) {
-      const role = modelValue.split(":")[0]; // strip thinking suffix if present
-      if (!KNOWN_MODEL_ROLES.has(role)) {
+  {
+    const refs: Array<{ ref: string; line: number }> = [];
+    const modelEntry = fields.get("model");
+    if (modelEntry) {
+      let v = modelEntry.value;
+      const quoted = (x: string) =>
+        (x.startsWith('"') && x.endsWith('"')) || (x.startsWith("'") && x.endsWith("'"));
+      if (quoted(v)) {
         diagnostics.push({
           line: modelEntry.line,
           severity: "warning",
-          message: `Unknown model role "${role}" (not in base set — may be defined by a domain package)`,
-          suggestion: `Base roles: ${[...KNOWN_MODEL_ROLES].join(", ")}`,
+          message: `Model value has unnecessary quotes: ${v}`,
+          suggestion: `Use model: ${v.slice(1, -1)} without quotes`,
         });
+        v = v.slice(1, -1);
+      }
+      if (v.startsWith("[") && v.endsWith("]")) {
+        for (const part of v.slice(1, -1).split(",")) {
+          refs.push({ ref: part.trim().replace(/^["']|["']$/g, ""), line: modelEntry.line });
+        }
+      } else {
+        refs.push({ ref: v, line: modelEntry.line });
+      }
+    } else {
+      // Block list:  model:\n  - a\n  - b
+      const idx = lines.findIndex((l) => /^model:\s*$/.test(l));
+      if (idx !== -1) {
+        for (let i = idx + 1; i < lines.length; i++) {
+          const t = lines[i].trim();
+          if (!t) continue;
+          if (!t.startsWith("- ")) break;
+          refs.push({ ref: t.slice(2).trim().replace(/^["']|["']$/g, ""), line: i + 1 });
+        }
       }
     }
-    // Explicit model IDs and model:thinking combos are allowed as-is
+    for (const { ref, line } of refs) {
+      if (!ref) {
+        diagnostics.push({ line, severity: "error", message: "Empty model reference" });
+        continue;
+      }
+      const colon = ref.lastIndexOf(":");
+      if (colon > 0) {
+        const level = ref.slice(colon + 1).toLowerCase();
+        // `@role:<bad>` can only be a thinking suffix → error. A literal id may
+        // legitimately carry a colon (`ollama/llama3:8b`); runtime only strips
+        // valid levels, so a non-level suffix is part of the id → no diagnostic.
+        if (ref.startsWith("@") && !VALID_THINKING_LEVELS.includes(level as never)) {
+          diagnostics.push({
+            line,
+            severity: "error",
+            message: `Invalid thinking level "${ref.slice(colon + 1)}" in model "${ref}"`,
+            suggestion: `Valid levels: ${VALID_THINKING_LEVELS.join(", ")}`,
+          });
+        }
+      }
+    }
   }
 
   // ---- 5. Input identifier validation -------------------------------------
@@ -237,6 +271,29 @@ export function validateAgentContent(
           message: `Invalid output identifier "${cleanName}"`,
           suggestion: "Output names must be alphanumeric with hyphens/underscores, starting with a letter or digit",
         });
+      }
+    }
+  }
+
+  // ---- 5c. Reserved output names (finish-tool fields) ---------------------
+
+  {
+    let declared: string[] = [];
+    try {
+      declared = (parseAgentString(content, "<validate>").outputs ?? []).map((o) => o.name);
+    } catch {
+      // malformed frontmatter is reported elsewhere
+    }
+    // Inline form (`outputs: [a, b]`) is not produced by the block parser.
+    const inline = fields.get("outputs")?.value.replace(/^\[|\]$/g, "") ?? "";
+    for (const part of inline.split(",")) {
+      const n = part.trim().replace(/^name:\s*/, "").replace(/^["']|["']$/g, "");
+      if (n) declared.push(n);
+    }
+    const line = (fields.get("outputs")?.line) ?? frontmatterStartLine + 1;
+    for (const name of new Set(declared)) {
+      if (RESERVED_FINISH_OUTPUTS.includes(name)) {
+        diagnostics.push({ line, severity: "error", ...reservedOutputMessage(name, "finish") });
       }
     }
   }

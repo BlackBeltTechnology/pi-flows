@@ -40,7 +40,7 @@ pi-flows does no Anthropic-specific prompt or wire handling. Flow agents get pi'
    ---
    name: reviewer
    description: Reviews code for quality issues
-   model: @coding
+   model: anthropic/claude-sonnet-4-5
    tools: read, grep, find
    inputs:
      - target_path
@@ -83,7 +83,6 @@ pi-flows does no Anthropic-specific prompt or wire handling. Flow agents get pi'
 | `/flows` | List and manage flows (run, delete) |
 | `/skill:manage-flows` | Load the flow/agent create-and-edit reference skill |
 | `/flows:delete` | Delete a flow |
-| `/roles` | Assign models to role tiers (@coding, @planning, etc.) |
 | `alt+a` | Toggle auto-routing (agents decide fork branches autonomously) |
 | `alt+x` | Abort running flow / dismiss flow summary |
 | `alt+o` | Inspect agents (enter dashboard/summary navigate mode) |
@@ -98,18 +97,19 @@ Flows also register as slash commands based on directory path: `.pi/flows/flows/
 - **Agents** — Markdown files with YAML frontmatter (config) and body (system prompt). Run in isolated sessions with scoped tools and file access.
 - **Flows** — YAML files defining a DAG of steps connected via `blockedBy`. The engine schedules independent steps in parallel, up to `max_concurrent`.
 - **Template variables** — `${{task}}`, `${{result.step-id.summary}}`, `${{input.name}}` wire data between steps at dispatch time.
-- **Model roles** — `@coding`, `@planning`, `@research`, `@compact` map to concrete models via `/roles`. Each agent declares which tier it needs.
+- **Models** — `model:` is optional: a literal model, an optional `@name` alias (resolved by an installed `model:resolve` resolver such as pi-agent-dashboard), an ordered list, or nothing. Unresolvable aliases fall back to the session model.
+- **Settings** (`.pi/settings.json`, project overrides global) — `flows.modelFallback`: `"session"` (default) or `"error"`; `flows.decisionAgent`: agent used for decision steps without their own `agent:` (flow-level `decision_agent:` wins over it); `flows.decider`: default decider chain, e.g. `["system-one", "agent"]` (see `docs/flows.md`).
 - **Edit flow** — Create and edit flows/agents conversationally in the main session using the `flow_agents` and `flow_write` tools. These tools are off by default; enable them per project (`/flows:edit-mode on`, or `flows.editFlow: true` in `.pi/settings.json`) or globally (`~/.pi/agent/settings.json`). The setting is re-read every turn and also controls whether the model sees the packaged `manage-flows` skill. pi-flows never writes into the repo unless you toggle edit mode explicitly. Load `/skill:manage-flows` for the format reference.
 
 ## Writing Agents
 
-Agents are `.md` files in `.pi/flows/agents/` (project-local) or a package's `agents/` directory.
+Agents are `.md` files in `.pi/flows/agents/` (project-local), `~/.pi/agent/flows/agents/` (user-level, all projects; flows go in `~/.pi/agent/flows/flows/`; project overrides user) or a package's `agents/` directory.
 
 ```markdown
 ---
 name: backend-dev
 description: Implements backend changes
-model: @coding
+model: anthropic/claude-sonnet-4-5
 thinking: high
 tools: read, write, edit, grep, bash
 inputs:

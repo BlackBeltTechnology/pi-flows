@@ -1,13 +1,19 @@
-import type { FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue } from "./types.js";
+import type { DeciderSpec, DecisionEvent, AgentStartedExtra, FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
 import { resolveRouteOutcome } from "./failure.js";
-import type { FailureInfo } from "./types.js";
-import { resolveModel } from "./model-roles.js";
+import type { FailureInfo, ModelFallbackInfo } from "./types.js";
+import { resolveAgentModel, type ParentModelSnapshot } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 
 import { raceWithAbort } from "./abort-utils.js";
+import { reservedOutputProblems } from "./reserved-outputs.js";
+import { decide, describeAttempts, resolveDecider } from "./decider/chain.js";
+import { buildQuestion, decisionAgentContext } from "./decider/question.js";
+import { makeEntryRunner } from "./decider/runtime.js";
+import { systemOneConsumerId } from "./decider/system-one.js";
+import type { ClassifierEntry, DecisionOutcome, EntryResult } from "./decider/types.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -67,6 +73,20 @@ export interface FlowRunOptions {
   modelRegistry?: any;
   /** Parent session's providers/keys runtime, shared with every agent session. */
   modelRuntime?: any;
+  /** Session model (+ thinking) snapshot taken at flow start — the fallback target. */
+  parentModel?: ParentModelSnapshot;
+  /** `flows.modelFallback` (default "session"), frozen for the run. */
+  modelFallback?: "session" | "error";
+  /** `flows.decisionAgent`, frozen for the run. */
+  decisionAgent?: string;
+  /** `flows.decider`, frozen for the run. */
+  decider?: DeciderSpec;
+  /** pi's project-trust decision for `cwd` (gates project System One config). */
+  projectTrusted?: boolean;
+  /** Test seam: replace a decider entry (`system-one` or `provider/model`). */
+  entryOverrides?: Record<string, ClassifierEntry>;
+  /** One call per decision, with every attempt (change: classifier-decisions). */
+  onDecision?: (event: DecisionEvent) => void;
   /** Operator's live SessionManager — forked into agents declaring `fork_session`. */
   mainSessionManager?: any;
   extraAgentExtensions?: any[];
@@ -78,7 +98,7 @@ export interface FlowRunOptions {
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkill?: (name: string) => Skill | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
-  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: { nodeKind?: NodeKind; target?: string }) => void;
+  onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }) => void;
   onToolCall?: (agentName: string, stepId: string, toolName: string, input: any) => void;
   onToolResult?: (agentName: string, stepId: string, toolName: string, output: any, isError: boolean) => void;
@@ -87,7 +107,7 @@ export interface FlowRunOptions {
   onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void) => void;
   onLoopIteration?: (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => void;
   isAutonomous?: () => boolean;
-  onAutoDecision?: (forkId: string, agentName: string, chosenBranch: string, targetStepId: string) => void;
+  onAutoDecision?: (forkId: string, agentName: string, chosenBranch: string, targetStepId: string, detail?: { confidence?: number }) => void;
   onNotify?: (message: string) => void;
   signal?: AbortSignal;
 }
@@ -113,6 +133,20 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
       result: { status: "error" as const, summary: inputError, files: [], artifacts: "" },
       toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
       outcome: "hard", failureInfo: { outcome: "hard", message: inputError, source: "flow_input_invalid" },
+    };
+    return { lastResult: errResult, results: {}, forks: {}, flowName: flow.name, stepCount: 0, totalDuration: 0, status: "error" };
+  }
+
+  // Agents declaring a reserved output name (finish-tool fields, or `branch` on
+  // a decision agent) would silently misroute; refuse the run before any step.
+  const reserved = reservedOutputProblems(flow, options.getAgent);
+  if (reserved.length) {
+    const msg = `Flow "${flow.name}" not started: ${reserved.join("; ")}`;
+    const errResult: AgentResult = {
+      success: false, output: msg, stderr: "", exitCode: null,
+      result: { status: "error" as const, summary: msg, files: [], artifacts: "" },
+      toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+      outcome: "hard", failureInfo: { outcome: "hard", message: msg, source: "reserved_output" },
     };
     return { lastResult: errResult, results: {}, forks: {}, flowName: flow.name, stepCount: 0, totalDuration: 0, status: "error" };
   }
@@ -161,6 +195,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
   try {
     while (segmentIndex < segments.length) {
       // Check abort before processing each segment
+      if (userSignal?.aborted) throw new FlowCancelledError();
 
       const segment = segments[segmentIndex];
 
@@ -201,6 +236,34 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
           }
         }
         if (ctx.hardFail) break;
+
+        if (segment.step.stepType === "fork") markUntakenBranchesSkipped(ctx, segment.step, stepResult);
+
+        // Multi-select fork: the selected branches already ran inside the fork.
+        // Continue in the furthest branch segment with only the steps reachable
+        // from them (the selected branches themselves keep their results).
+        if (stepResult.ranBranches) {
+          const ran = stepResult.ranBranches;
+          const idxs = ran.map((id) => findSegmentIndex(segments, id)).filter((i) => i >= 0);
+          if (idxs.length) {
+            const targetIdx = Math.max(...idxs);
+            const targetSeg = segments[targetIdx];
+            if (targetSeg.type === "dag") {
+              const active = new Set<string>();
+              for (const id of ran) {
+                if (targetSeg.steps.some((s) => s.id === id)) {
+                  for (const a of computeActiveSteps(targetSeg.steps, id)) active.add(a);
+                }
+              }
+              for (const id of ran) active.delete(id);
+              targetSeg.activeSteps = active;
+              segmentIndex = targetIdx;
+            } else {
+              segmentIndex = targetIdx + 1;
+            }
+            continue;
+          }
+        }
 
         // Handle routing: jump to target step's segment
         if (stepResult.nextStepId) {
@@ -279,15 +342,11 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     };
   }
 
-  // If aborted, mark any agents that didn't complete as aborted
+  // If aborted, mark any agent steps that didn't complete as aborted
   if (options.signal?.aborted) {
-    const allAgentNames = new Set<string>();
     for (const step of flow.steps) {
-      if (step.stepType === "agent") allAgentNames.add(step.agent);
-    }
-    for (const name of allAgentNames) {
-      if (!ctx.results[name]) {
-        ctx.results[name] = {
+      if (step.stepType === "agent" && !ctx.results[step.id]) {
+        ctx.results[step.id] = {
           fullOutput: "",
           status: "aborted",
           summary: "Aborted by user",
@@ -373,14 +432,24 @@ async function runDagSegment(
   // are already satisfied (the preceding separator/segment completed before us).
   const segmentStepIds = new Set(steps.map(s => s.id));
 
+  // An on_error source is an implicit dependency of its target: the target
+  // waits for the source to settle (so it sees the failed step's result).
+  const depsOf = new Map<string, string[]>(steps.map(s => [s.id, [...(s.blockedBy ?? [])]]));
+  for (const s of steps) {
+    if (s.on_error && segmentStepIds.has(s.on_error)) depsOf.get(s.on_error)!.push(s.id);
+  }
+
   // If activeSteps is set (branch exclusivity), skip inactive steps immediately
   if (activeSteps) {
     for (const step of steps) {
       if (!activeSteps.has(step.id)) {
         completed.add(step.id);
-        // Store synthetic "skipped" result so blockedBy refs auto-satisfy
-        const skippedResult = { fullOutput: "", status: "skipped" as const, summary: "", outputs: {} };
-        ctx.results[step.id] = skippedResult;
+        // Store synthetic "skipped" result so blockedBy refs auto-satisfy. A
+        // step that already has a result (e.g. completed before a loop
+        // re-entered this segment) keeps it.
+        if (!ctx.results[step.id]) {
+          ctx.results[step.id] = { fullOutput: "", status: "skipped" as const, summary: "", outputs: {} };
+        }
         // Don't emit events for skipped agents — they stay "pending" in the dashboard
       }
     }
@@ -396,8 +465,7 @@ async function runDagSegment(
     // Deps outside this segment are treated as satisfied (cross-segment ordering)
     const unblocked = steps.filter(s => {
       if (completed.has(s.id)) return false;
-      if (!s.blockedBy) return true;
-      return s.blockedBy.every(dep => completed.has(dep) || !segmentStepIds.has(dep));
+      return depsOf.get(s.id)!.every(dep => completed.has(dep) || !segmentStepIds.has(dep));
     });
 
     // Deadlock detection
@@ -543,6 +611,21 @@ async function runDagSegment(
 interface StepResult {
   agentResult?: AgentResult;
   nextStepId?: string;
+  /** Multi-select fork: branch step ids already run inside the fork. */
+  ranBranches?: string[];
+}
+
+/**
+ * Store a synthetic "skipped" result for every forward branch target of a fork
+ * that was not taken (and has no result yet), whatever the target's step type.
+ */
+function markUntakenBranchesSkipped(ctx: FlowContext, step: ForkStep, stepResult: StepResult): void {
+  if (!stepResult.nextStepId && !stepResult.ranBranches) return;
+  const taken = new Set([stepResult.nextStepId, ...(stepResult.ranBranches ?? [])]);
+  for (const target of Object.values(step.branches ?? {})) {
+    if (taken.has(target) || ctx.results[target] || isBackwardTarget(ctx.steps, step.id, target)) continue;
+    ctx.results[target] = { fullOutput: "", status: "skipped", summary: "", outputs: {} };
+  }
 }
 
 async function executeStep(step: FlowStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
@@ -590,13 +673,17 @@ function routeDecisionBranch(
   // Backward (loop) edge. max_iterations is required by validation; default to
   // the value captured in loopMaxIterations as a backstop.
   const max = step.max_iterations ?? ctx.loopMaxIterations[step.id];
-  const taken = ctx.loopCounters[step.id] ?? 0;
+  // `loopCounters[id]` holds the 1-based number of the pass now running (what
+  // `${{loop.<id>.iteration}}` expands to), so the pass count is already
+  // visible to the loop body: pass N observes N. Loop-backs taken = pass - 1.
+  const pass = ctx.loopCounters[step.id] ?? 1;
+  const taken = pass - 1;
   if (max !== undefined && taken >= max) {
     // Cap reached: stop looping, force exit (fall through to the next segment).
     return { nextStepId: undefined };
   }
-  const iteration = taken + 1;
-  ctx.loopCounters[step.id] = iteration;
+  const iteration = taken + 1; // loop-backs taken including this one (event payload)
+  ctx.loopCounters[step.id] = pass + 1;
 
   // Dashboard cards are keyed by agent name; resolve the loop target's name.
   const loopTargetStep = ctx.steps.find((s) => s.id === target);
@@ -648,6 +735,62 @@ function filterExtensionTools(allTools: any[] | undefined, agentTools: string[])
   return allTools.filter(t => agentTools.includes(t.name));
 }
 
+/**
+ * Resolve an agent's model before spawning (so observers see it and spawn
+ * receives the resolved Model object). Failure is deferred: spawnAgent
+ * re-resolves and reports the error on the step.
+ */
+function preResolveModel(agentConfig: any, options: FlowRunOptions): {
+  resolvedModelId?: string;
+  fallback?: ModelFallbackInfo;
+  spawn: Record<string, unknown>;
+} {
+  const spawn: Record<string, unknown> = { parentModel: options.parentModel, modelFallback: options.modelFallback };
+  try {
+    // Keep the thinking level too (frontmatter `thinking:` > ref level from
+    // role/suffix) — dropping it lets pi's defaultThinkingLevel take over.
+    const r = resolveAgentModel(options.pi, agentConfig, {
+      registry: options.modelRegistry,
+      parentModel: options.parentModel,
+      modelFallback: options.modelFallback,
+    });
+    return {
+      resolvedModelId: r.modelId,
+      fallback: r.fallback,
+      spawn: { ...spawn, resolvedModel: r.model, resolvedModelId: r.modelId, resolvedThinking: r.thinking },
+    };
+  } catch {
+    return { spawn };
+  }
+}
+
+type DecisionAgentPick =
+  | { ok: true; agent: any; name: string }
+  | { ok: false; name: string; source: string };
+
+/** Decision agent: step agent → flow decision_agent → flows.decisionAgent → flow-decision. */
+function pickDecisionAgent(step: { agent?: string }, ctx: FlowContext, options: FlowRunOptions): DecisionAgentPick {
+  let name: string;
+  let source: string;
+  if (step.agent) { name = step.agent; source = "the step's agent:"; }
+  else if (options.flow.decision_agent) { name = options.flow.decision_agent; source = "the flow's decision_agent:"; }
+  else if (options.decisionAgent) { name = options.decisionAgent; source = "flows.decisionAgent"; }
+  else { name = "flow-decision"; source = "the built-in default"; }
+  const agent = options.getAgent(name);
+  return agent ? { ok: true, agent, name } : { ok: false, name, source };
+}
+
+function decisionAgentMissing(pick: { name: string; source: string }): AgentResult {
+  const msg = `Decision agent not found: "${pick.name}" (configured via ${pick.source}). Ensure the agent exists in the catalog.`;
+  return {
+    success: false, output: msg, stderr: msg, exitCode: 1,
+    result: { status: "error" as const, files: [], artifacts: "", summary: msg },
+    toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+    outcome: "soft",
+    failureInfo: { outcome: "soft", message: msg, source: "decision_agent_missing" },
+  };
+}
+
 async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: FlowRunOptions): Promise<AgentResult | null> {
   const agentConfig = options.getAgent(step.agent);
   if (!agentConfig) {
@@ -667,19 +810,8 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
   }
 
   // Resolve model early so it's available for onAgentStarted observers
-  let resolvedModelId: string | undefined;
-  let resolvedThinking: string | undefined;
-  try {
-    // Keep the thinking level too (frontmatter `thinking:` > ref level from
-    // role/suffix) — dropping it lets pi's defaultThinkingLevel take over.
-    const { modelId, thinking } = resolveModel(options.pi, agentConfig.model, agentConfig.thinking, options.modelRegistry);
-    resolvedModelId = modelId;
-    resolvedThinking = thinking;
-  } catch {
-    // Model resolution failed — will be caught again inside spawnAgent
-  }
-
-  options.onAgentStarted?.(step.agent, step.id, resolvedModelId, { nodeKind: "agent" });
+  const pre = preResolveModel(agentConfig, options);
+  options.onAgentStarted?.(step.agent, step.id, pre.resolvedModelId, { nodeKind: "agent", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
 
   // Resolve step inputs at dispatch time via plain template expansion (strings).
   // File-backed data is passed as a PATH and read just-in-time by the agent's
@@ -765,8 +897,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond)
       : undefined,
     signal: options.signal,
-    resolvedModelId,
-    resolvedThinking,
+    ...pre.spawn,
   });
 
   options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent" });
@@ -774,34 +905,18 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
 }
 
 /**
- * Spawn the fork's decision agent to choose a branch.
- * Used by autonomous mode, __auto_decide__, and __custom_decide__ paths.
- * When the fork has no agent: field, uses the built-in `flow-decision` agent.
+ * Decide a fork branch through the decider chain (autonomous mode,
+ * `__auto_decide__`, and `__custom_decide__` paths). The `agent` entry spawns
+ * the fork's decision agent (the built-in `flow-decision` when the fork has no
+ * `agent:`). When every entry fails, `exhausted` is set and the step result is
+ * a failed AgentResult — never a default branch.
  */
-async function spawnForkDecisionAgent(
+async function decideForkBranch(
   step: ForkStep,
   ctx: FlowContext,
   options: FlowRunOptions,
   customText?: string,
-): Promise<StepResult> {
-  const agentConfig = step.agent
-    ? options.getAgent(step.agent)
-    : options.getAgent("flow-decision");
-  if (!agentConfig) {
-    return {
-      agentResult: {
-        success: false,
-        output: `Decision agent not found: "${step.agent || 'flow-decision'}". Ensure the agent exists in the catalog.`,
-        stderr: `Decision agent "${step.agent || 'flow-decision'}" not found`,
-        exitCode: 1,
-        result: { status: "error" as const, files: [], artifacts: "", summary: "" },
-        toolCalls: [],
-        duration: 0,
-        tokens: { input: 0, output: 0 },
-      },
-    };
-  }
-
+): Promise<{ stepResult: StepResult; exhausted: boolean }> {
   const branchNames = Object.keys(step.branches);
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
@@ -809,51 +924,57 @@ async function spawnForkDecisionAgent(
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   };
 
-  let decisionTask = step.task
+  const baseTask = step.task
     ? expandTemplateVariables(step.task, templateCtx)
     : `The user was asked: "${step.question}"\nOptions: ${step.options.join(", ")}\nChoose the best option.`;
-
+  let decisionTask = baseTask;
   // Enhance task with custom freetext context when provided
   if (customText) {
     decisionTask += `\n\nThe user typed a custom answer instead of picking an option: "${customText}"\nBased on their intent, choose the closest matching branch.`;
   }
 
-  const agentName = step.agent || agentConfig.name;
-  options.onAgentStarted?.(agentName, step.id, undefined, { nodeKind: "fork" });
-
-  const result = await spawnAgent({
-    agent: agentConfig,
-    task: decisionTask,
-    templateContext: templateCtx,
-    pi: options.pi,
-    cwd: options.cwd,
-    modelRegistry: options.modelRegistry,
-      modelRuntime: options.modelRuntime,
-    extraAgentExtensions: options.extraAgentExtensions,
-    extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
-    decisionBranches: branchNames,
-    onToolCall: (name, input) => options.onToolCall?.(agentName, step.id, name, input),
-    onToolResult: (name, output, err) => options.onToolResult?.(agentName, step.id, name, output, err),
-    onAssistantText: (text) => options.onAssistantText?.(agentName, step.id, text),
-    onThinkingText: (text) => options.onThinkingText?.(agentName, step.id, text),
-    signal: options.signal,
+  const run = await runDecision({
+    step, ctx, options, nodeKind: "fork", templateCtx,
+    task: step.task ? baseTask : step.question,
+    fork: { question: step.question, options: step.options, userText: customText },
+    runAgent: async (context) => {
+      const pick = pickDecisionAgent(step, ctx, options);
+      if (!pick.ok) return { result: decisionAgentMissing(pick), agentName: pick.name };
+      const agentConfig = pick.agent;
+      const agentName = pick.name;
+      const pre = preResolveModel(agentConfig, options);
+      options.onAgentStarted?.(agentName, step.id, pre.resolvedModelId, { nodeKind: "fork", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
+      const result = await spawnAgent({
+        agent: agentConfig,
+        task: `${decisionTask}\n\n${context}`,
+        templateContext: templateCtx,
+        pi: options.pi,
+        cwd: options.cwd,
+        modelRegistry: options.modelRegistry,
+        modelRuntime: options.modelRuntime,
+        extraAgentExtensions: options.extraAgentExtensions,
+        extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
+        decisionBranches: branchNames,
+        onToolCall: (name, input) => options.onToolCall?.(agentName, step.id, name, input),
+        onToolResult: (name, output, err) => options.onToolResult?.(agentName, step.id, name, output, err),
+        onAssistantText: (text) => options.onAssistantText?.(agentName, step.id, text),
+        onThinkingText: (text) => options.onThinkingText?.(agentName, step.id, text),
+        signal: options.signal,
+        ...pre.spawn,
+      });
+      options.onAgentComplete?.(agentName, step.id, result, { nodeKind: "fork" });
+      return { result, agentName };
+    },
   });
 
-  options.onAgentComplete?.(agentName, step.id, result, { nodeKind: "fork" });
-
-  const branch = result.finishParams?.branch;
-  if (branch && step.branches[branch]) {
-    ctx.forks[step.id] = { answer: branch, notes: customText };
-    storeForkContext(ctx, step, step.branches[branch], branch, customText, step.agent);
-    options.onAutoDecision?.(step.id, step.agent || agentConfig.name, branch, step.branches[branch]);
-    return { nextStepId: step.branches[branch], agentResult: result };
+  if (run.label === undefined) {
+    return { stepResult: routeExhaustedDecision(run.result, step.on_error), exhausted: true };
   }
-
-  // Fallback: first branch if agent fails
-  const firstKey = Object.keys(step.branches)[0];
-  ctx.forks[step.id] = { answer: firstKey, notes: customText };
-  storeForkContext(ctx, step, step.branches[firstKey], firstKey, customText, step.agent);
-  return { nextStepId: step.branches[firstKey], agentResult: result };
+  const branch = run.label;
+  ctx.forks[step.id] = { answer: branch, notes: customText };
+  storeForkContext(ctx, step, step.branches[branch], branch, customText, run.decidedBy);
+  options.onAutoDecision?.(step.id, run.decidedBy, branch, step.branches[branch], run.confidence !== undefined ? { confidence: run.confidence } : undefined);
+  return { stepResult: { nextStepId: step.branches[branch], agentResult: run.result }, exhausted: false };
 }
 
 async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
@@ -865,7 +986,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
 
   // ── Autonomous mode: auto-decide via agent (named agent, or built-in flow-decision) ──
   if (options.isAutonomous?.()) {
-    return spawnForkDecisionAgent(step, ctx, options);
+    return (await decideForkBranch(step, ctx, options)).stepResult;
   }
 
   // Signal that the fork step is active (waiting for user input)
@@ -877,7 +998,8 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   if (step.allowCustom) extra.allowCustom = true;
   // Pass branch mapping and agent info for UI enhancement
   if (step.branches) extra.branches = step.branches;
-  if (step.agent) extra.hasAutoAgent = true;
+  const canAutoDecide = hasAutoDecider(step, options);
+  if (canAutoDecide) extra.hasAutoAgent = true;
 
   const response = await options.askUser(expandedQuestion, "select", step.options, extra);
 
@@ -888,15 +1010,15 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   });
 
   // Handle auto-decide: user chose to let the agent decide this fork
-  if (response.answer === "__auto_decide__" && step.agent) {
+  if (response.answer === "__auto_decide__" && canAutoDecide) {
     options.onAgentComplete?.(forkAgentName, step.id, makeForkResult("Auto-decide"), { nodeKind: "fork" });
-    return spawnForkDecisionAgent(step, ctx, options);
+    return askAgainIfExhausted(step, ctx, options, await decideForkBranch(step, ctx, options));
   }
 
   // Handle custom-decide: user typed freetext via "Other (describe)"
-  if (response.answer === "__custom_decide__" && step.agent) {
+  if (response.answer === "__custom_decide__" && canAutoDecide) {
     options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(response.notes || "Custom"), { nodeKind: "fork" });
-    return spawnForkDecisionAgent(step, ctx, options, response.notes);
+    return askAgainIfExhausted(step, ctx, options, await decideForkBranch(step, ctx, options, response.notes));
   }
 
   // User selected an option directly
@@ -907,10 +1029,12 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   // Multi-select: execute all selected branches sequentially
   if (step.multiSelect && Array.isArray(response.answer)) {
     let lastResult: StepResult = {};
+    const ranBranches: string[] = [];
     const selectedOptions = response.answer as unknown as string[];
     for (const ans of selectedOptions) {
       const branchStepId = step.branches[ans];
       if (!branchStepId) continue;
+      ranBranches.push(branchStepId);
       // Autowire fork context for each branch (with all selected options)
       storeForkContext(ctx, step, branchStepId, selectedOptions.join(", "), response.notes);
       const branchStep = ctx.steps.find(s => s.id === branchStepId);
@@ -921,7 +1045,7 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
         }
       }
     }
-    return {};
+    return { ranBranches };
   }
 
   const nextStepId = step.branches[response.answer];
@@ -932,6 +1056,27 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
   }
 
   return { nextStepId };
+}
+
+/** A fork can be decided without the user when it has an agent, a decider chain or a flow decision_agent. */
+function hasAutoDecider(step: ForkStep, options: FlowRunOptions): boolean {
+  return !!(step.agent || step.decider?.entries || options.flow.decider?.entries || options.flow.decision_agent || options.decider?.entries);
+}
+
+/**
+ * Interactive fork whose decider chain was exhausted: tell the user and ask
+ * again with the same options (never a silent default branch).
+ */
+async function askAgainIfExhausted(
+  step: ForkStep,
+  ctx: FlowContext,
+  options: FlowRunOptions,
+  decided: { stepResult: StepResult; exhausted: boolean },
+): Promise<StepResult> {
+  if (!decided.exhausted) return decided.stepResult;
+  if (options.signal?.aborted) throw new FlowCancelledError();
+  options.onNotify?.(`Fork "${step.id}": no decider produced a valid answer — please choose an option.`);
+  return executeForkStep(step, ctx, options);
 }
 
 /** Store fork context so the branch step receives it as autowired context */
@@ -956,16 +1101,17 @@ function storeForkContext(
 /**
  * A `code-decision` runs its handler exactly like a `code` node (reusing
  * executeCodeStep) then routes on the reserved `branch` output resolved against
- * `branches:`. An execution failure (missing handler, throw, timeout, missing
- * declared/reserved output) has no `on_error` to fall back to, so it escalates
- * to a hard flow halt. An off-map `branch` is likewise a hard failure.
+ * `branches:`. An execution failure (throw, timeout, missing/non-string
+ * `branch`, return-contract violation) is a soft failure: it routes to
+ * `on_error` when set and halts the flow otherwise, exactly like a `code` node.
+ * An off-map `branch` label is a hard failure that halts even with `on_error`.
  */
 async function executeCodeDecisionStep(step: CodeDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   const result = await executeCodeStep(step, ctx, options, options.flow.name, options.flow.source);
 
-  // Execution failure: code-decision has no on_error edge, so any soft/hard
-  // failure halts the flow (mirrors a soft failure with no on_error).
+  // Execution failure: soft -> on_error; hard (or soft without on_error) halts.
   if (result.outcome !== "success") {
+    if (resolveRouteOutcome(result, step.on_error) === "soft") return { agentResult: result, nextStepId: step.on_error };
     result.outcome = "hard";
     result.failureInfo = {
       outcome: "hard",
@@ -993,66 +1139,223 @@ async function executeCodeDecisionStep(step: CodeDecisionStep, ctx: FlowContext,
 }
 
 async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
-  const agentConfig = options.getAgent(step.agent);
-  if (!agentConfig) return {};
-
-  const decisionConfig = { ...agentConfig };
   const branchNames = Object.keys(step.branches);
-
-  const decisionTask = expandTemplateVariables(step.task, {
-    task: ctx.task, inputs: {},
-    results: ctx.results,
-    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
-  });
-
   const templateCtx: TemplateContext = {
     task: ctx.task, inputs: {},
     results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   };
+  const decisionTask = expandTemplateVariables(step.task, templateCtx);
 
-  const skills: Skill[] = [];
-  if (decisionConfig.skills) {
-    for (const name of decisionConfig.skills) {
-      const s = options.getSkill?.(name);
-      if (s) skills.push(s);
-    }
+  const run = await runDecision({
+    step, ctx, options, nodeKind: "agent-decision", templateCtx, task: decisionTask,
+    runAgent: async (context) => {
+      const pick = pickDecisionAgent(step, ctx, options);
+      if (!pick.ok) {
+        const failed = decisionAgentMissing(pick);
+        options.onAgentStarted?.(pick.name, step.id, undefined, { nodeKind: "agent-decision" });
+        options.onAgentComplete?.(pick.name, step.id, failed, { nodeKind: "agent-decision" });
+        return { result: failed, agentName: pick.name };
+      }
+      const decisionConfig = { ...pick.agent };
+      const agentName = pick.name;
+      const skills: Skill[] = [];
+      if (decisionConfig.skills) {
+        for (const name of decisionConfig.skills) {
+          const s = options.getSkill?.(name);
+          if (s) skills.push(s);
+        }
+      }
+      const pre = preResolveModel(decisionConfig, options);
+      options.onAgentStarted?.(agentName, step.id, pre.resolvedModelId, { nodeKind: "agent-decision", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
+
+      const result = await spawnAgent({
+        agent: decisionConfig,
+        task: `${decisionTask}\n\n${context}`,
+        templateContext: templateCtx,
+        skills,
+        pi: options.pi,
+        cwd: options.cwd,
+        modelRegistry: options.modelRegistry,
+        modelRuntime: options.modelRuntime,
+        extraAgentExtensions: options.extraAgentExtensions,
+        extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
+        decisionBranches: branchNames,
+        onToolCall: (name, input) => options.onToolCall?.(agentName, step.id, name, input),
+        onToolResult: (name, output, err) => options.onToolResult?.(agentName, step.id, name, output, err),
+        onAssistantText: (text) => options.onAssistantText?.(agentName, step.id, text),
+        onThinkingText: (text) => options.onThinkingText?.(agentName, step.id, text),
+        signal: options.signal,
+        ...pre.spawn,
+      });
+      options.onAgentComplete?.(agentName, step.id, result, { nodeKind: "agent-decision" });
+      return { result, agentName };
+    },
+  });
+
+  if (run.label === undefined) return routeExhaustedDecision(run.result, step.on_error);
+
+  // A backward branch target loops (bounded by max_iterations); a forward target exits.
+  const { nextStepId } = routeDecisionBranch(step, ctx, options, run.label);
+  return { nextStepId, agentResult: run.result };
+}
+
+// ---- Decider chain (change: classifier-decisions) ---------------------------
+
+const MAX_REASON_CHARS = 200;
+const capReason = (s: string): string => (s.length > MAX_REASON_CHARS ? `${s.slice(0, MAX_REASON_CHARS - 1)}…` : s);
+
+/**
+ * Route an exhausted decision. Soft + `on_error` → jump there; anything else
+ * (hard, or soft without `on_error`) escalates to a flow halt, like code steps.
+ */
+function routeExhaustedDecision(result: AgentResult, onError: string | undefined): StepResult {
+  if (resolveRouteOutcome(result, onError) === "soft") return { agentResult: result, nextStepId: onError };
+  result.outcome = "hard";
+  result.failureInfo = {
+    outcome: "hard",
+    message: result.failureInfo?.message ?? result.output ?? "Hard failure",
+    source: result.failureInfo?.source ?? "decision_exhausted",
+  };
+  return { agentResult: result, nextStepId: undefined };
+}
+
+interface RunDecisionArgs {
+  step: ForkStep | AgentDecisionStep;
+  ctx: FlowContext;
+  options: FlowRunOptions;
+  nodeKind: NodeKind;
+  templateCtx: TemplateContext;
+  /** Expanded task (a fork without `task:` passes its question). */
+  task: string;
+  fork?: { question: string; options: string[]; userText?: string };
+  /** Spawns the decision agent — the `agent` chain entry. */
+  /** Spawn the decision agent; `context` lists the branches (with `means`) and the declared state. */
+  runAgent: (context: string) => Promise<{ result: AgentResult; agentName: string }>;
+}
+
+interface DecisionRun {
+  /** Routed label; undefined when the chain was exhausted. */
+  label?: string;
+  /** Result to report for the step (agent result, synthetic classifier result, or failure). */
+  result: AgentResult;
+  /** Agent name or classifier entry that decided (for fork context / auto-decision). */
+  decidedBy: string;
+  /** Confidence of a classifier answer that routed (absent for the agent). */
+  confidence?: number;
+}
+
+/**
+ * One decision point through `resolveDecider` → `decide()`. Emits
+ * `onDecision`, and a lifecycle pair when a classifier (not the agent) routed.
+ */
+async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
+  const { step, options } = a;
+  const labels = Object.keys(step.branches);
+  const resolved = resolveDecider(step.decider, options.flow.decider, options.decider);
+
+  let declaredState: Record<string, string> | undefined;
+  if (step.state) {
+    declaredState = {};
+    for (const [k, v] of Object.entries(step.state)) declaredState[k] = expandTemplateVariables(v, a.templateCtx);
   }
-  options.onAgentStarted?.(step.agent, step.id, undefined, { nodeKind: "agent-decision" });
+  const question = buildQuestion({
+    branches: step.branches,
+    branchMeans: step.branchMeans,
+    options: a.fork?.options,
+    question: a.fork?.question,
+    task: a.task,
+    declaredState,
+    userText: a.fork?.userText,
+  });
 
-  const result = await spawnAgent({
-    agent: decisionConfig,
-    task: decisionTask,
-    templateContext: templateCtx,
-    skills,
-    pi: options.pi,
-    cwd: options.cwd,
-    modelRegistry: options.modelRegistry,
-      modelRuntime: options.modelRuntime,
-    extraAgentExtensions: options.extraAgentExtensions,
-    extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
-    decisionBranches: branchNames,
-    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
-    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
-    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text),
-    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text),
+  let agentName = "";
+  const run = makeEntryRunner({
+    env: options,
+    flowName: options.flow.name,
+    stepId: step.id,
+    branchCount: labels.length,
+    question,
+    agentEntry: async (): Promise<EntryResult> => {
+      const { result, agentName: name } = await a.runAgent(
+        decisionAgentContext(labels, step.branchMeans, declaredState),
+      );
+      agentName = name;
+      const branch = result.finishParams?.branch;
+      // A decision agent that reports it could not finish has not decided,
+      // even if it also named a branch.
+      const status = result.result?.status;
+      if (result.finishParams && (status === "blocked" || status === "error")) {
+        return { ok: false, outcome: "invalid-label", reason: capReason(`the decision agent finished with status ${status}`), payload: result };
+      }
+      if (typeof branch === "string" && branch) {
+        return { ok: true, authoritative: true, answer: { label: branch, confidence: 1 }, payload: result };
+      }
+      // Never echo the agent's output/summary: the reason lands in `flow:decision`.
+      const why = result.success === false
+        ? capReason(`the decision agent failed: ${result.failureInfo?.message ?? "no usable result"}`)
+        : "the decision agent finished without a branch";
+      return { ok: false, outcome: "invalid-label", reason: why, payload: result };
+    },
+  });
+
+  const outcome: DecisionOutcome = await decide({
+    ...resolved,
+    labels,
+    run: (entry, signal) => run(entry, signal),
     signal: options.signal,
   });
 
-  options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent-decision" });
+  options.onDecision?.({
+    flowName: options.flow.name,
+    stepId: step.id,
+    nodeKind: a.nodeKind,
+    consumerId: systemOneConsumerId(options.flow.name, step.id),
+    chain: resolved.entries,
+    attempts: outcome.attempts,
+    ...(outcome.ok ? { routedBy: outcome.routedBy, label: outcome.label } : {}),
+  });
 
-  // Route via finish tool's branch parameter. A backward branch target loops
-  // (bounded by max_iterations); a forward target exits.
-  const branch = result.finishParams?.branch;
-  if (branch && step.branches[branch]) {
-    const { nextStepId } = routeDecisionBranch(step, ctx, options, branch);
-    return { nextStepId, agentResult: result };
+  if (!outcome.ok && outcome.aborted) throw new FlowCancelledError();
+
+  const payload = outcome.payload as AgentResult | undefined;
+  if (!outcome.ok) {
+    const msg = `${step.stepType} "${step.id}": no decider produced a trusted, valid label.\n${describeAttempts(outcome.attempts, labels)}`;
+    const failedOutcome = payload?.outcome === "hard" ? "hard" : "soft";
+    const failed: AgentResult = {
+      success: false, output: msg, stderr: msg, exitCode: 1,
+      result: { status: "error" as const, files: [], artifacts: "", summary: msg },
+      toolCalls: payload?.toolCalls ?? [], duration: payload?.duration ?? 0, tokens: payload?.tokens ?? { input: 0, output: 0 },
+      // Soft, unless the decision agent itself hard-failed (e.g. terminal API
+      // error): soft lets `on_error` route; the caller escalates when unset.
+      outcome: failedOutcome,
+      failureInfo: { outcome: failedOutcome, message: msg, source: "decision_exhausted" },
+    };
+    if (!payload) {
+      // No agent ran, so observers never saw the step: show the failure on it.
+      options.onAgentStarted?.("decider", step.id, undefined, { nodeKind: a.nodeKind });
+      options.onAgentComplete?.("decider", step.id, failed, { nodeKind: a.nodeKind });
+    }
+    return { result: failed, decidedBy: agentName };
   }
 
-  // Fallback: first branch when agent fails or branch missing
-  const firstBranchLabel = Object.keys(step.branches)[0];
-  const { nextStepId } = routeDecisionBranch(step, ctx, options, firstBranchLabel);
-  return { nextStepId, agentResult: result };
+  if (outcome.routedBy === "agent" && payload) {
+    return { label: outcome.label, result: payload, decidedBy: agentName };
+  }
+
+  // A classifier routed: no agent session ran. Report a synthetic result.
+  const routed = outcome.attempts.find((x) => x.entry === outcome.routedBy && x.outcome === "ok");
+  const conf = routed?.confidence !== undefined ? ` (confidence ${routed.confidence.toFixed(2)})` : "";
+  const summary = `Decided "${outcome.label}" via ${outcome.routedBy}${conf}`;
+  const result: AgentResult = {
+    success: true, output: summary, stderr: "", exitCode: 0,
+    result: { status: "complete" as const, files: [], artifacts: "", summary },
+    toolCalls: [], duration: routed?.latencyMs ?? 0, tokens: { input: 0, output: 0 },
+    outcome: "success",
+  };
+  options.onAgentStarted?.(outcome.routedBy, step.id, undefined, { nodeKind: a.nodeKind });
+  options.onAgentComplete?.(outcome.routedBy, step.id, result, { nodeKind: a.nodeKind });
+  return { label: outcome.label, result, decidedBy: outcome.routedBy, confidence: routed?.confidence };
 }
 
 // ---- Helpers ---------------------------------------------------------------

@@ -12,7 +12,7 @@ Every agent is a Markdown file with YAML frontmatter in the `agents/` directory:
 ---
 name: agent-name                  # Unique identifier
 description: What this agent does # Brief description
-model: @coding                    # Model tier
+model: anthropic/claude-sonnet-4-5   # Optional: ref, [list], or omitted
 thinking: high                    # Optional: thinking depth
 tools: read, write, bash          # Tool allowlist
 skills: skill-name                # Skill bundles (comma-separated or list)
@@ -43,7 +43,7 @@ Supports ${{task}} and ${{input.<name>}} interpolation.
 |-------|----------|------|-------------|
 | `name` | ✓ | string | Unique agent identifier, used in flow step `agent:` field |
 | `description` | ✓ | string | Brief description shown in catalogs and dashboards |
-| `model` | ✓ | string | Model tier: `@coding`, `@planning`, `@research`, `@compact` |
+| `model` |  | string / list | Single ref (`provider/model[:thinking]`, bare `model-id`, or `@name`), an ordered list `[a, b]`, or omitted (session model). See [Model references](#model-references). |
 | `thinking` | | string | Thinking depth override (e.g., `high`) |
 | `tools` | ✓ | string/list | Comma-separated tool allowlist |
 | `skills` | | string/list | Skill bundle names. Each skill is advertised in the prompt (name/description/location); the agent reads `SKILL.md` + topic files on demand with `read` (auto-granted when `skills:` is set). |
@@ -64,14 +64,17 @@ Supports ${{task}} and ${{input.<name>}} interpolation.
 | `access.bash` | | object | Bash command restrictions |
 | `access.bash.deny` | | list | Denied bash command patterns |
 
-## Model Tiers
+## Model references
 
-| Tier | Use Case | Cost |
-|------|----------|------|
-| `@coding` | Implementation requiring code generation | High |
-| `@planning` | Orchestration, analysis, and verification | Medium-High |
-| `@research` | Read-only exploration and analysis | Medium |
-| `@compact` | Lightweight tasks (summaries, formatting) | Low |
+`model:` is optional. It accepts:
+
+- a **single ref**: `provider/model[:thinking]`, a bare `model-id[:thinking]`, or `@name`;
+- an **ordered list**: `model: [@my-alias, anthropic/claude-haiku-4-5]` (or a YAML block list). The first entry that resolves is used;
+- **nothing**: the agent runs on the dispatching session's model.
+
+`@name` is an optional alias handled by an installed `model:resolve` resolver (for example pi-agent-dashboard roles); pi-flows itself defines no role names. When no resolver answers, or it reports an error for the `@name`, the entry is skipped. When no entry resolves — or `model:` is omitted — the agent runs on the session model captured at flow start, with its `thinking:` (or the session's thinking level), and the fallback is reported on the `flow:agent-started` event and the card.
+
+A literal ref that does not exist is always an error and later entries are not tried. Set `flows.modelFallback: "error"` in `.pi/settings.json` (project overrides global) to fail instead of falling back; the default is `"session"`. Built-in agents keep their `@` refs and work without a resolver through this fallback.
 
 ## Card Types
 
@@ -112,10 +115,10 @@ outputs: [findings, verdict]
 
 In the expanded form, each output accepts two optional fields:
 
-- `type: string | number | boolean` — constrains the string content. `type: number` requires a numeric string; `type: boolean` requires `true` or `false`.
+- `type: string | number | boolean | object | array` — the value's JSON type. `number`/`boolean` also accept a matching string (e.g. `"3"`, `"true"`), coerced to the type.
 - `pattern: <regex>` — requires the string to match the given regex.
 
-Output values remain **string-valued** — downstream still reads `${{result.STEP.name}}` as a string. `type` and `pattern` are content constraints on that string, not type conversions. An explicit `pattern` takes precedence over `type`. An invalid regex degrades to an unconstrained required string.
+Output values keep their declared JSON type under the result's `outputs` (serialized when interpolated into text). `pattern` constrains a string value. An explicit `pattern` takes precedence over `type`. An invalid regex degrades to an unconstrained required string.
 
 ```yaml
 outputs:
@@ -128,7 +131,7 @@ outputs:
 
 ### Outputs are required by default
 
-Declared outputs are **required**. If an agent calls `finish` without a declared output, or with a value that violates its `type`/`pattern`, the finish call is rejected and the agent is re-prompted (the existing finish retry loop). The step fails once retries are exhausted (`MAX_FINISH_RETRIES`). This is enforced at the finish-tool schema level. Existing agents that declared outputs but sometimes omitted them will now be retried and may fail.
+Declared outputs are **required**. If an agent calls `finish` without a declared output, or with a value that violates its `type`/`pattern`, the finish call is rejected and the agent is re-prompted (the existing finish retry loop). The step fails once retries are exhausted (`MAX_FINISH_RETRIES`), with status `error` and a summary stating the reason. Outputs are required only for `status: "complete"`: `finish(status:"error"|"blocked")` may omit them, and its summary reaches the `on_error` target as `${{result.X.summary}}` (status `error`/`blocked`). This is enforced at the finish-tool schema level. Existing agents that declared outputs but sometimes omitted them will now be retried and may fail.
 
 Inputs are unchanged — still bare names with no typing or validation. The validated output's name carries the contract; inputs need no symmetric typing.
 
@@ -162,7 +165,7 @@ A typical read-only research agent:
 ---
 name: backend-researcher
 description: Investigates backend code patterns and conventions
-model: @research
+model: anthropic/claude-haiku-4-5
 tools: read, grep, find, ls
 skills: my-backend-docs
 inputs:
@@ -207,7 +210,7 @@ A typical code-writing agent:
 ---
 name: backend-developer
 description: Implements backend changes based on research findings
-model: @coding
+model: anthropic/claude-sonnet-4-5
 tools: read, write, edit, grep, find, ls, bash
 skills: my-backend-docs
 inputs:
@@ -254,7 +257,7 @@ A typical verification/build agent:
 ---
 name: verifier
 description: Builds the project and verifies acceptance criteria
-model: @planning
+model: [@my-alias, anthropic/claude-sonnet-4-5]
 tools: read, grep, find, ls, bash
 inputs:
   - implementation_output

@@ -5,6 +5,41 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Optional, resolver-agnostic `model:`** (`resolver-agnostic-model-refs`). `model:` accepts a single ref, an ordered list (`[@fast, anthropic/claude-haiku-4-5]`), or nothing. Unresolvable `@`-refs (no `model:resolve` resolver, or the resolver reports an error) are skipped; when nothing resolves — or `model:` is omitted — the agent runs on the dispatching session's model (snapshot at flow start) and the fallback is reported on `flow:agent-started` (`modelFallback`). Literal refs that do not exist still fail.
+- Setting `flows.modelFallback: "session" | "error"` (default `session`).
+- **System-wide decision agent**: step `agent:` → flow `decision_agent:` → setting `flows.decisionAgent` → built-in `flow-decision`. `agent-decision` steps may omit `agent:`.
+- `flow_agents` write emits `model:resolve` per `@`-ref and reports resolver errors as advisory warnings.
+
+- **Classifier decisions** (`classifier-decisions`). Decision points (autonomous `fork`, fork "Other", `agent-decision`) take an ordered `decider:` chain of `system-one`, a pi-ai classifier ref (`provider/model`) and `agent`; set per step, per flow, or via `flows.decider`. Default `[agent]` is unchanged. Trust policy (`trust: auto | calibrated | confidence`, `min_confidence`), untrusted answers are recorded as shadow. Branches may be written `label: { to, means }`; decision steps accept a `state:` map. System One decisions register as consumer `pi-flows:<flow>:<step>`, with an in-process `llm` caller. System One `allowOffMachine: false` also blocks hosted pi-ai classifiers. New `flow:decision` event (persisted as `flow_decision`).
+- **New dependency:** `@blackbelt-technology/pi-system-one ^0.11.0` (no transitive dependencies; imported lazily).
+
+### Changed
+
+- **Behaviour change — `on_error` rules.** `on_error` must point at a later step (a backward or self `on_error` is a validation error; retry with a decision step loop). An `on_error` target waits for its source step, so it sees the source's result without `blockedBy`. `code-decision` now honours `on_error` for soft failures (missing/non-string branch, throw, timeout, contract violation); an unknown branch label still halts.
+- **Declared outputs are required only on `status: "complete"`.** An agent can finish `error`/`blocked` without them, and its summary reaches the `on_error` target. Outputs may be typed `object`/`array`; `number`/`boolean` also accept their real type.
+- **No more `status: "unknown"`.** An agent that never calls `finish` (or whose finish was rejected 3 times) ends `error` with the reason as summary.
+- **Fork fixes:** a multiSelect fork runs each selected branch exactly once (it re-ran every branch); untaken branches are marked skipped whatever the target's step type.
+- **Loops:** re-entering a loop keeps the results of steps outside the loop body (they were overwritten as skipped).
+- A run started with an already-aborted signal ends `aborted` (was `success`).
+- `${{flow.input.<name>}}` validates when the flow declares the input (was always an error; now an error only when undeclared). `$&`, `$$` and `$1` in a task are no longer treated as replacement patterns. Whole-value code inputs keep `null` and honour a declared `fullOutput`.
+- **~260 new end-to-end faux tests** for forks, code steps, failures, templates and realistic multi-step flows.
+- **A decision agent that finishes `blocked` or `error` has not decided.** Its `branch` is ignored and the attempt fails, so `on_error` routes (or the flow halts) instead of looping on a branch the agent itself said it could not choose.
+- **`${{result.<id>.fullOutput}}` works in agent task templates.** It expanded to an empty string; it now gives the agent's reply text (a declared output named `fullOutput` wins). `summary` stays the agent's description of its work.
+- **Fork `allowCustom`:** a flow-level `decision_agent:` now routes "Other" answers and offers Auto-decide. Validation warns (no longer errors) when nothing in the flow routes them, since the `flows.decider` setting may.
+- `flow:agent-started` `config` carries `modelRefs`, the whole `model:` list.
+- Removed the stale `agent-docs/` mirror; `docs/` is the only reference.
+- **Decision agents see `state:` and branch `means`.** The agent entry of a decision chain now gets the same inputs as a classifier: its task is followed by the branch list (with `means`) and the expanded `state:` map. Before, it saw only `task:` and decided blind.
+- **Behaviour change:** decision steps no longer fall back silently to the first branch. An invalid or missing label is a failed attempt; when every decider entry fails an `agent-decision` or autonomous `fork` fails the step (hard) with an error listing each attempt, and an interactive fork asks the user again.
+- The resolved `Model` object is passed straight to the agent session (no second registry lookup).
+- Agent validation no longer knows role names; it only checks ref syntax and `:thinking` levels. `AgentConfig.model` is optional; new `AgentConfig.modelRefs`.
+- Built-in agents (`flow-decision`, `project-context-reader`) now work without pi-agent-dashboard via the session-model fallback.
+
+- **User-level flows and agents** (`user-flow-location`): discovered from `<agentDir>/flows/{flows,agents}/`; precedence project > user > package > built-in. `/flows` and `flow_agents list` show a `project | user | package | built-in` source label (`flow_agents` `source_type` `local` is now `project`). `flow_write` and `flow_agents write` accept `scope: "project" | "user"`. `/flows:delete` names the deleted path and refuses package/built-in flows.
+
 ## [v0.8.1] - 2026-10-30
 
 ### Changed

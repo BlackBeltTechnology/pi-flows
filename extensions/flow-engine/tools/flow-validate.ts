@@ -20,9 +20,23 @@ import type {
   CodeDecisionStep,
   ForkStep,
   AgentDecisionStep,
+  DeciderSpec,
 } from "../types.js";
+import { ENTRY_FORMS, TRUST_MODES, isClassifierRefEntry, isValidEntry } from "../decider/chain.js";
 export type { Diagnostic };
+import { reservedOutputMessage } from "./agent-validate.js";
 import { parseFlowYamlString } from "../flow-parser-yaml.js";
+
+// ---- Path-safe names ------------------------------------------------------
+
+export const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+/** Error text when `value` is not a path-safe name/namespace; null when fine. */
+export function unsafeNameError(kind: string, value: string): string | null {
+  return SAFE_NAME.test(value)
+    ? null
+    : `Invalid ${kind} ${JSON.stringify(value)}: must match ^[a-z0-9][a-z0-9-]*$`;
+}
 
 // ---- Line index -----------------------------------------------------------
 
@@ -162,6 +176,74 @@ function stepLine(idx: LineIndex, stepId: string): number {
   return idx.steps.get(stepId)?.headerLine ?? 1;
 }
 
+// ---- Decider validation (change: classifier-decisions) ---------------------
+
+function checkDeciderSpec(
+  spec: DeciderSpec,
+  line: number,
+  where: string,
+  diagnostics: Diagnostic[],
+  isKnownClassifier?: (ref: string) => boolean,
+): void {
+  for (const e of spec.entries ?? []) {
+    if (!isValidEntry(e)) {
+      diagnostics.push({
+        line, severity: "error",
+        message: `${where}: unknown decider entry "${e}"`,
+        suggestion: `Use ${ENTRY_FORMS}`,
+      });
+    } else if (isClassifierRefEntry(e) && isKnownClassifier && !isKnownClassifier(e)) {
+      diagnostics.push({
+        line, severity: "error",
+        message: `${where}: decider entry "${e}" is not a classifier model`,
+        suggestion: "Use a pi-ai classifier model (e.g. typesafe/jev-latest), not a chat model",
+      });
+    }
+  }
+  if (spec.trust !== undefined && !TRUST_MODES.includes(spec.trust)) {
+    diagnostics.push({
+      line, severity: "error",
+      message: `${where}: invalid trust "${spec.trust}"`,
+      suggestion: `Use one of: ${TRUST_MODES.join(", ")}`,
+    });
+  }
+  if (spec.minConfidence !== undefined && !(spec.minConfidence >= 0 && spec.minConfidence <= 1)) {
+    diagnostics.push({
+      line, severity: "error",
+      message: `${where}: min_confidence must be a number between 0 and 1`,
+    });
+  }
+}
+
+function validateDeciders(
+  flow: FlowConfig,
+  idx: LineIndex,
+  diagnostics: Diagnostic[],
+  isKnownClassifier?: (ref: string) => boolean,
+): void {
+  if (flow.decider) checkDeciderSpec(flow.decider, 1, "flow decider", diagnostics, isKnownClassifier);
+  for (const step of flow.steps) {
+    if (step.stepType !== "agent-decision" && step.stepType !== "fork") continue;
+    const s = step as AgentDecisionStep | ForkStep;
+    const line = stepPropLine(idx, s.id, "decider") || stepLine(idx, s.id);
+    if (s.decider) checkDeciderSpec(s.decider, line, `${step.stepType} "${s.id}"`, diagnostics, isKnownClassifier);
+    // Classifier chains: agent-decision branches should say what they mean.
+    const entries = s.decider?.entries ?? flow.decider?.entries ?? [];
+    if (step.stepType === "agent-decision" && entries.some((e) => e !== "agent")) {
+      for (const label of Object.keys(s.branches ?? {})) {
+        if (!s.branchMeans?.[label]) {
+          diagnostics.push({
+            line: stepPropLine(idx, s.id, "branches") || stepLine(idx, s.id),
+            severity: "warning",
+            message: `agent-decision "${s.id}": branch "${label}" has no "means" description for the classifier`,
+            suggestion: `Write it as ${label}: { to: <step>, means: "<criterion>" }`,
+          });
+        }
+      }
+    }
+  }
+}
+
 // ---- Public validation function -------------------------------------------
 
 /**
@@ -171,6 +253,8 @@ function stepLine(idx: LineIndex, stepId: string): number {
 export function validateFlowContent(
   content: string,
   getDiscoveredAgents?: () => Map<string, AgentConfig>,
+  /** Optional catalog check: is `provider/model` a known pi-ai classifier model? */
+  isKnownClassifier?: (ref: string) => boolean,
 ): { valid: boolean; diagnostics: Diagnostic[] } {
   const diagnostics: Diagnostic[] = [];
   const lines = content.split("\n");
@@ -251,6 +335,35 @@ export function validateFlowContent(
   if (getDiscoveredAgents) {
     const knownAgents = getDiscoveredAgents();
 
+    if (flow.decision_agent && !knownAgents.has(flow.decision_agent)) {
+      diagnostics.push({
+        line: 1,
+        severity: "warning",
+        message: `decision_agent "${flow.decision_agent}" is not in the discovered agent catalog`,
+        suggestion: "Ensure the agent exists before decision steps run, or remove decision_agent",
+      });
+    }
+
+    // `branch` is the reserved routing key: decision agents must not declare it.
+    const decisionAgents = new Set<string>();
+    if (flow.decision_agent) decisionAgents.add(flow.decision_agent);
+    for (const step of flow.steps) {
+      if (step.stepType === "agent-decision" || step.stepType === "fork") {
+        const a = (step as AgentDecisionStep | ForkStep).agent;
+        if (a) decisionAgents.add(a);
+      }
+    }
+    for (const name of decisionAgents) {
+      if ((knownAgents.get(name)?.outputs ?? []).some((o) => o.name === "branch")) {
+        diagnostics.push({
+          line: 1,
+          severity: "error",
+          message: `Decision agent "${name}": ${reservedOutputMessage("branch", "branch").message}`,
+          suggestion: reservedOutputMessage("branch", "branch").suggestion,
+        });
+      }
+    }
+
     for (const step of flow.steps) {
       switch (step.stepType) {
         case "agent": {
@@ -267,7 +380,7 @@ export function validateFlowContent(
         }
         case "agent-decision": {
           const s = step as AgentDecisionStep;
-          if (!knownAgents.has(s.agent)) {
+          if (s.agent && !knownAgents.has(s.agent)) {
             diagnostics.push({
               line: stepPropLine(idx, s.id, "agent"),
               severity: "warning",
@@ -286,13 +399,14 @@ export function validateFlowContent(
               suggestion: "Ensure the agent exists or will be created before the flow runs",
             });
           }
-          // allowCustom requires agent: field for custom answer routing
-          if (s.allowCustom && !s.agent) {
+          // An "Other" answer needs something to route it. The flows.decider
+          // setting also counts at runtime but is invisible here: warn, not error.
+          if (s.allowCustom && !s.agent && !s.decider?.entries && !flow.decider?.entries && !flow.decision_agent) {
             diagnostics.push({
               line: stepPropLine(idx, s.id, "allowCustom"),
-              severity: "error",
-              message: `Fork "${s.id}" has allowCustom: true but no agent: field. An agent is required to route custom freetext answers to branches.`,
-              suggestion: "Add agent: <agent-name> to this fork step",
+              severity: "warning",
+              message: `Fork "${s.id}" has allowCustom: true but nothing in the flow routes a custom answer; "Other" is offered only when the flows.decider setting is set.`,
+              suggestion: "Add agent: <agent-name> or decider: to this fork, or decision_agent: to the flow",
             });
           }
           break;
@@ -301,12 +415,40 @@ export function validateFlowContent(
     }
   }
 
+  // 4a'. on_error targets on non-code steps (code steps are checked in 4b).
+  for (const step of flow.steps) {
+    if (step.stepType === "code" || step.stepType === "code-decision") continue;
+    const onError = (step as { on_error?: string }).on_error;
+    if (onError && !stepIds.has(onError)) {
+      diagnostics.push({
+        line: stepPropLine(idx, step.id, "on_error"),
+        severity: "error",
+        message: `on_error references unknown step ID "${onError}"`,
+        suggestion: `Available step IDs: ${[...stepIds].join(", ")}`,
+      });
+    }
+  }
+
+  // 4a''. on_error must point forward (later in file order) on every step type.
+  // A backward on_error is an unbounded retry loop; retries use a decision step.
+  const fileIndex = new Map(flow.steps.map((st, i) => [st.id, i] as const));
+  flow.steps.forEach((step, i) => {
+    const onError = (step as { on_error?: string }).on_error;
+    const target = onError === undefined ? undefined : fileIndex.get(onError);
+    if (target === undefined || target > i) return;
+    diagnostics.push({
+      line: stepPropLine(idx, step.id, "on_error"),
+      severity: "error",
+      message: `Step "${step.id}": on_error target "${onError}" must come later in file order than "${step.id}" (backward on_error is not allowed)`,
+      suggestion: `To retry, use a decision step (agent-decision/code-decision) with a backward branch and max_iterations.`,
+    });
+  });
+
   // 4b. Code node validation: id, inputs, outputs, references.
   // Covers both `code` and `code-decision` (which shares the handler shape).
   for (const step of flow.steps) {
     if (step.stepType !== "code" && step.stepType !== "code-decision") continue;
-    // Both share the handler shape (id/inputs/outputs/blockedBy). on_error
-    // only exists on `code`; reading it on a code-decision is undefined.
+    // Both share the handler shape (id/inputs/outputs/blockedBy/on_error).
     const s = step as CodeStep;
 
     // code-decision: the reserved `branch` routing key must not be a data output.
@@ -471,6 +613,14 @@ export function validateFlowContent(
     const templateStrings: Array<{ tpl: string; prop: string }> = [];
     const stepTask = (step as { task?: string }).task;
     if (stepTask) templateStrings.push({ tpl: stepTask, prop: "task" });
+    const stepQuestion = (step as { question?: string }).question;
+    if (typeof stepQuestion === "string") templateStrings.push({ tpl: stepQuestion, prop: "question" });
+    const stepState = (step as { state?: Record<string, string> }).state;
+    if (stepState) {
+      for (const [key, val] of Object.entries(stepState)) {
+        if (typeof val === "string") templateStrings.push({ tpl: val, prop: `state.${key}` });
+      }
+    }
     const stepInputs = (step as { inputs?: Record<string, string> }).inputs;
     if (stepInputs) {
       for (const [key, val] of Object.entries(stepInputs)) {
@@ -542,6 +692,9 @@ export function validateFlowContent(
       }
     }
   }
+
+  // 4e2. Decider chains (change: classifier-decisions).
+  validateDeciders(flow, idx, diagnostics, isKnownClassifier);
 
   // 4f. Branch target validation.
   // Fork: dangling-target only (human-driven, no loop/min-branch rules).
@@ -691,6 +844,20 @@ export function validateFlowContent(
           message: `Deprecated: \${{${varPath}}} — fork context is now autowired into branch steps`,
           suggestion: "Remove this reference. The branch step automatically receives fork question, answer, and notes in its system prompt.",
         });
+      } else if (/^flow\.input\.[\w-]+$/.test(varPath)) {
+        // ${{flow.input.<name>}} — only declared flow inputs are referenceable.
+        const name = varPath.slice("flow.input.".length);
+        if (!flow.inputs || !Object.prototype.hasOwnProperty.call(flow.inputs, name)) {
+          const declared = flow.inputs ? Object.keys(flow.inputs) : [];
+          diagnostics.push({
+            line: i + 1,
+            severity: "error",
+            message: `Template variable "\${{${varPath}}}" references undeclared flow input "${name}"`,
+            suggestion: declared.length > 0
+              ? `Declared inputs: ${declared.join(", ")}`
+              : `Declare it under the flow's top-level inputs: block`,
+          });
+        }
       } else if (!knownPrefixes.includes(root)) {
         // Check if the unrecognized root matches a step ID — likely missing "result." prefix
         const suggestion = stepIds.has(root)
@@ -775,9 +942,17 @@ function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
     pred.get(to)!.add(from);
   };
 
-  for (const step of flow.steps) {
+  flow.steps.forEach((step, i) => {
     const blockedBy = (step as { blockedBy?: string[] }).blockedBy;
     if (blockedBy) for (const dep of blockedBy) addEdge(dep, step.id);
+
+    // Non-agent steps are "separators": the engine runs them only after every
+    // earlier segment has finished (see splitIntoSegments/runFlow), so every
+    // step EARLIER in file order is ordered before them. Agent steps in a
+    // parallel group get no such guarantee and keep the blockedBy-based rule.
+    if (step.stepType !== "agent") {
+      for (let j = 0; j < i; j++) addEdge(flow.steps[j].id, step.id);
+    }
 
     const onError = (step as { on_error?: string }).on_error;
     if (onError) addEdge(step.id, onError);
@@ -786,7 +961,7 @@ function computeOrderedBefore(flow: FlowConfig): Map<string, Set<string>> {
       const branches = (step as ForkStep | AgentDecisionStep | CodeDecisionStep).branches;
       if (branches) for (const target of Object.values(branches)) addEdge(step.id, target);
     }
-  }
+  });
 
   // Transitive closure of predecessors for each step (BFS over pred edges).
   const orderedBefore = new Map<string, Set<string>>();

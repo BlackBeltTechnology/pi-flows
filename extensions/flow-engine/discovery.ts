@@ -2,14 +2,15 @@
 // Flow Engine -- Discovery
 //
 // Discovers agents and flows from package and registered directories.
-// Discovery: extra packages → pi-flows package → project-local.
+// Precedence (low → high): built-in → registered packages → user → project.
 // ---------------------------------------------------------------------------
 
 import type { AgentConfig, FlowConfig } from "./types.js";
 import { parseAgentFile } from "./agent-parser.js";
 import { parseFlowYamlFile } from "./flow-parser-yaml.js";
+import { reservedOutputsOf } from "./reserved-outputs.js";
 import { readdirSync, existsSync, statSync } from "node:fs";
-import { join, dirname, relative } from "node:path";
+import { join, dirname, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // ---- Public types ---------------------------------------------------------
@@ -23,12 +24,13 @@ export interface DiscoveryResult {
 // ---- Public API -----------------------------------------------------------
 
 // Discover all agents and flows from multiple tiers:
-// extra package dirs -> pi-flows package -> project-local (.pi/flows/)
+// built-in -> registered package dirs -> user -> project-local (.pi/flows/)
 export function discoverAll(
   packageRoot: string,
   projectRoot: string,
   extraAgentsDirs?: string[],
   extraFlowsDirs?: string[],
+  userRoot?: string,
 ): DiscoveryResult {
   const agents = new Map<string, AgentConfig>();
   const flows = new Map<string, FlowConfig>();
@@ -36,7 +38,13 @@ export function discoverAll(
 
   // --- Agents ---
 
-  // Extra package agents (registered by dependent packages via events)
+  // Built-in pi-flows agents: agents/*.md (lowest priority)
+  const packageAgentsDir = join(packageRoot, "agents");
+  for (const agent of discoverAgentsInDir(packageAgentsDir, warnings)) {
+    agents.set(agent.name, agent);
+  }
+
+  // Package agents (registered by dependent packages via events): override built-ins
   if (extraAgentsDirs) {
     for (const dir of extraAgentsDirs) {
       for (const agent of discoverAgentsInDir(dir, warnings)) {
@@ -45,15 +53,15 @@ export function discoverAll(
     }
   }
 
-  // pi-flows package agents: agents/*.md
-  const packageAgentsDir = join(packageRoot, "agents");
-  for (const agent of discoverAgentsInDir(packageAgentsDir, warnings)) {
-    agents.set(agent.name, agent);
-  }
-
   // --- Flows ---
 
-  // Extra package flows (registered by dependent packages via events)
+  // Built-in pi-flows flows (recursive; lowest priority)
+  const packageFlowsDir = join(packageRoot, "flows");
+  for (const flow of discoverFlowsInDir(packageFlowsDir, warnings)) {
+    flows.set(flow.name, flow);
+  }
+
+  // Package flows (registered by dependent packages via events): override built-ins
   if (extraFlowsDirs) {
     for (const dir of extraFlowsDirs) {
       for (const flow of discoverFlowsInDir(dir, warnings)) {
@@ -62,10 +70,15 @@ export function discoverAll(
     }
   }
 
-  // pi-flows package flows: flows/*.yaml (recursive)
-  const packageFlowsDir = join(packageRoot, "flows");
-  for (const flow of discoverFlowsInDir(packageFlowsDir, warnings)) {
-    flows.set(flow.name, flow);
+  // --- User tier (<agentDir>/flows): overrides packages + built-ins, loses to project ---
+
+  if (userRoot) {
+    for (const agent of discoverAgentsInDir(join(userRoot, "agents"), warnings)) {
+      agents.set(agent.name, agent);
+    }
+    for (const flow of discoverFlowsInDir(join(userRoot, "flows"), warnings)) {
+      flows.set(flow.name, flow);
+    }
   }
 
   // --- Project-local (highest priority — overrides package on name collision) ---
@@ -81,6 +94,30 @@ export function discoverAll(
   }
 
   return { agents, flows, warnings };
+}
+
+export type SourceKind = "project" | "user" | "package" | "built-in";
+
+function under(path: string, dir: string): boolean {
+  const rel = relative(dir, path);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Classify a discovered item's source path. Order mirrors precedence:
+ * project (.pi/flows) > user (<agentDir>/flows) > package (registered dirs) > built-in.
+ */
+export function classifySource(
+  path: string | undefined,
+  roots: { projectRoot: string; userRoot?: string; extraDirs?: string[] },
+): SourceKind {
+  if (!path) return "built-in";
+  if (under(path, join(roots.projectRoot, ".pi", "flows"))) return "project";
+  if (roots.userRoot && under(path, roots.userRoot)) return "user";
+  for (const dir of roots.extraDirs ?? []) {
+    if (under(path, dir)) return "package";
+  }
+  return "built-in";
 }
 
 /**
@@ -126,6 +163,12 @@ function discoverAgentsInDir(dir: string, warnings: string[]): AgentConfig[] {
 
     try {
       const config = parseAgentFile(filePath);
+      const reserved = reservedOutputsOf(config);
+      if (reserved.length) {
+        warnings.push(
+          `[discovery] Agent "${config.name}" (${filePath}) declares reserved output ${reserved.map((r) => `"${r}"`).join(", ")}; flows using it will not start. Rename it (e.g. "outcome").`,
+        );
+      }
       agents.push(config);
     } catch (err) {
       warnings.push(

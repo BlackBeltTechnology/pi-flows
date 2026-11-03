@@ -216,11 +216,12 @@ describe("2.5 removed bootstrap options are never sent", () => {
   }, 20_000);
 });
 
-describe("2.6 the model is NEVER inherited from the parent", () => {
+// Superseded by resolver-agnostic-model-refs: an unresolvable `@`-ref or an
+// omitted/empty model now falls back to the session model (see 2.6b below).
+// A literal ref that does not exist still fails and never inherits the parent.
+describe("2.6 a missing literal model is never replaced by the parent's model", () => {
   const cases: Array<[string, string, RegExp]> = [
     ["(a) unknown literal", "rtprov/does-not-exist", /does-not-exist/],
-    ["(b) @role without a model:resolve handler", "\"@coding\"", /model:resolve/],
-    ["(c) empty model", "\"\"", /model/i],
   ];
   for (const [label, ref, msg] of cases) {
     it(`${label} fails and never runs the parent's model`, async () => {
@@ -236,6 +237,23 @@ describe("2.6 the model is NEVER inherited from the parent", () => {
       expect(why(result)).toMatch(msg);
       expect(sessionCalls).toHaveLength(0);
       expect(parent.faux.state.callCount).toBe(0);
+    }, 20_000);
+  }
+});
+
+describe("2.6b unresolvable @-ref / omitted model falls back to the session model", () => {
+  for (const [label, ref] of [["@role without a model:resolve handler", "\"@coding\""], ["empty model", "\"\""]]) {
+    it(`${label} runs on the parent model`, async () => {
+      const parent = await makeParentSession();
+      respond(parent, finishOk);
+      const f = oneAgent(ref);
+      const host = await boot(f.flows, f.agents);
+      await host.fire("session_start", { ...parent.ctx, model: parent.registry.find("rtprov", "m1") });
+
+      const result = await runViaEvent(host, "rt:one");
+
+      expect(result.status, why(result)).toBe("success");
+      expect(parent.faux.state.callCount).toBeGreaterThan(0);
     }, 20_000);
   }
 });

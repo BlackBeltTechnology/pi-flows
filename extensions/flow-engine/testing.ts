@@ -393,6 +393,28 @@ export interface RunFauxOptions {
   flowInput?: Record<string, unknown>;
   /** Override the flow task string (default "flow task"). */
   task?: string;
+  /** Decide forks autonomously (spawns the decision agent). */
+  isAutonomous?: () => boolean;
+  /** `flows.modelFallback` for the run (default session). */
+  modelFallback?: "session" | "error";
+  /** `flows.decisionAgent` for the run. */
+  decisionAgent?: string;
+  /** Install a `model:resolve` handler on the pi stub (default: silent). */
+  resolveHandler?: (probe: any) => void;
+  /** Run with no captured session model (default: the faux model). */
+  withoutParentModel?: boolean;
+  /** Observe agent starts (incl. `modelFallback` extra). */
+  onAgentStarted?: FlowRunOptions["onAgentStarted"];
+  /** `flows.decider` for the run. */
+  decider?: FlowRunOptions["decider"];
+  /** Replace decider entries (`system-one`, `provider/model`) with fakes. */
+  entryOverrides?: FlowRunOptions["entryOverrides"];
+  /** Observe `flow:decision` payloads. */
+  onDecision?: FlowRunOptions["onDecision"];
+  /** Observe agent completion. */
+  onAgentComplete?: FlowRunOptions["onAgentComplete"];
+  /** Answer interactive prompts (default: first option). */
+  askUser?: FlowRunOptions["askUser"];
 }
 
 /**
@@ -416,7 +438,10 @@ export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
   // pi stub: `events.emit` is silent (no model:resolve handler) so resolveModel
   // falls through to the in-process registry fallback using `pi.modelRegistry`.
   const pi: any = {
-    events: { emit: () => undefined, on: () => undefined },
+    events: {
+      emit: (ch: string, probe: any) => { if (ch === "model:resolve") options.resolveHandler?.(probe); },
+      on: () => undefined,
+    },
     modelRegistry: registry,
   };
 
@@ -429,8 +454,17 @@ export async function runFaux(options: RunFauxOptions): Promise<FlowResult> {
     modelRuntime: runtime,
     pi,
     getAgent: (name: string) => agentMap.get(name),
-    askUser: async () => ({ answer: "" }),
+    askUser: options.askUser ?? (async () => ({ answer: "" })),
     signal: options.signal,
+    isAutonomous: options.isAutonomous,
+    decider: options.decider,
+    entryOverrides: options.entryOverrides,
+    onDecision: options.onDecision,
+    onAgentComplete: options.onAgentComplete,
+    modelFallback: options.modelFallback,
+    decisionAgent: options.decisionAgent,
+    onAgentStarted: options.onAgentStarted,
+    parentModel: options.withoutParentModel ? undefined : { model: faux.getModel("faux-1") as any },
   };
 
   try {
@@ -491,15 +525,20 @@ export async function runFauxFlow(options: RunFauxFlowOptions): Promise<FlowResu
     modelRuntime: runtime,
     pi,
     getAgent: (name: string) => agentMap.get(name),
-    askUser: async (_q, _t, opts) => {
+    decider: options.decider,
+    entryOverrides: options.entryOverrides,
+    onDecision: options.onDecision,
+    isAutonomous: options.isAutonomous,
+    askUser: options.askUser ?? (async (_q, _t, opts) => {
       // Fork answer resolution: the engine passes the fork's option list; we
       // return the configured answer (or the first option as a safe default).
       const answer = options.forkAnswers && Object.values(options.forkAnswers)[0];
       return { answer: answer ?? (opts?.[0] ?? "") };
-    },
+    }),
     onAgentStarted: options.onAgentStarted,
     onAgentComplete: options.onAgentComplete,
     signal: options.signal,
+    parentModel: { model: faux.getModel("faux-1") as any },
   };
 
   try {

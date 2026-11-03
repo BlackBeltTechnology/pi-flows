@@ -3,7 +3,7 @@
  * (spec `agent-node`, change: enhance-agent-node-contract).
  *
  * Declared outputs are REQUIRED and encode `type`/`pattern` as string
- * constraints. An invalid regex degrades to a plain required string.
+ * constraints. An invalid regex degrades to a plain string.
  */
 
 import { describe, expect, it } from "vitest";
@@ -36,9 +36,9 @@ describe("finish schema — base params", () => {
 });
 
 describe("finish schema — declared outputs", () => {
-  it("declared outputs are required (not optional)", () => {
+  it("declared outputs are optional in the schema (required only on status complete, enforced by the guard)", () => {
     const schema = buildFinishSchema([{ name: "verdict" }]);
-    expect(schema.required).toContain("verdict");
+    expect(schema.required ?? []).not.toContain("verdict");
     expect(schema.properties.verdict.type).toBe("string");
   });
 
@@ -47,14 +47,20 @@ describe("finish schema — declared outputs", () => {
     expect(schema.properties.file_path.pattern).toBe("^/.+");
   });
 
-  it("type: number → numeric string pattern", () => {
+  it("type: number → a number or a numeric-pattern string", () => {
     const schema = buildFinishSchema([{ name: "count", type: "number" }]);
-    expect(schema.properties.count.pattern).toBe(NUMERIC_PATTERN);
+    expect(schema.properties.count.anyOf).toEqual([
+      expect.objectContaining({ type: "number" }),
+      expect.objectContaining({ type: "string", pattern: NUMERIC_PATTERN }),
+    ]);
   });
 
-  it("type: boolean → true|false pattern", () => {
+  it("type: boolean → a boolean or a true|false string", () => {
     const schema = buildFinishSchema([{ name: "ok", type: "boolean" }]);
-    expect(schema.properties.ok.pattern).toBe(BOOLEAN_PATTERN);
+    expect(schema.properties.ok.anyOf).toEqual([
+      expect.objectContaining({ type: "boolean" }),
+      expect.objectContaining({ type: "string", pattern: BOOLEAN_PATTERN }),
+    ]);
   });
 
   it("explicit pattern wins over type", () => {
@@ -62,11 +68,10 @@ describe("finish schema — declared outputs", () => {
     expect(schema.properties.x.pattern).toBe("^/.+");
   });
 
-  it("invalid regex degrades to a plain required string (no pattern, no throw)", () => {
+  it("invalid regex degrades to a plain string (no pattern, no throw)", () => {
     const schema = buildFinishSchema([{ name: "bad", pattern: "([unclosed" }]);
     expect(schema.properties.bad.type).toBe("string");
     expect(schema.properties.bad.pattern).toBeUndefined();
-    expect(schema.required).toContain("bad");
   });
 
   it("description falls back to a default when omitted", () => {

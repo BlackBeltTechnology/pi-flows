@@ -89,9 +89,13 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         );
       }
 
-      // Add declared output parameters. Outputs are string-valued but REQUIRED
-      // by default, and `type`/`pattern` are encoded as string constraints so
-      // the SDK rejects a non-conforming finish call (→ followUp retry).
+      // Add declared output parameters. Outputs are REQUIRED only when
+      // status is "complete": the schema marks them optional (so an
+      // error/blocked finish needs none) and the tool_call hook below blocks
+      // a complete finish missing any of them (→ error result → retry).
+      // object/array take their JSON type; number/boolean accept the real type
+      // or a string matching the type-derived pattern (coerceDeclaredOutput);
+      // otherwise a string, constrained by `pattern` when given.
       const NUMERIC_PATTERN = "^-?\\d+(\\.\\d+)?$";
       const BOOLEAN_PATTERN = "^(true|false)$";
       const agentOutputs = options.agentOutputs ?? [];
@@ -99,6 +103,12 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         const schemaOpts: Record<string, any> = {
           description: output.description ?? `Output: ${output.name}`,
         };
+        if (output.pattern === undefined && (output.type === "object" || output.type === "array")) {
+          baseParams[output.name] = Type.Optional(output.type === "object"
+            ? Type.Object({}, schemaOpts)
+            : Type.Array(Type.Unknown(), schemaOpts));
+          continue;
+        }
         // Explicit pattern wins over the type-derived pattern.
         const pattern = output.pattern
           ?? (output.type === "number" ? NUMERIC_PATTERN
@@ -115,8 +125,16 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
             );
           }
         }
-        // Required: no Type.Optional wrapper.
-        baseParams[output.name] = Type.String(schemaOpts);
+        // Optional in the schema; required-on-complete is enforced in tool_call.
+        if (output.pattern === undefined && schemaOpts.pattern !== undefined) {
+          const { pattern: typePattern, ...opts } = schemaOpts;
+          baseParams[output.name] = Type.Optional(Type.Union([
+            output.type === "number" ? Type.Number() : Type.Boolean(),
+            Type.String({ pattern: typePattern }),
+          ], opts));
+        } else {
+          baseParams[output.name] = Type.Optional(Type.String(schemaOpts));
+        }
       }
 
       pi.registerTool({
@@ -150,6 +168,15 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
           return { block: true, reason: "Agent has already called finish. No further tool calls allowed." };
         }
         if ((event.toolName || event.name) === finishName) {
+          // Declared outputs are required only on a "complete" finish; block
+          // (→ error result → retry) before latching finishCalled.
+          const params = event.input || event.params || {};
+          if (params.status === "complete") {
+            const missing = agentOutputs.map((o) => o.name).filter((n) => params[n] === undefined);
+            if (missing.length) {
+              return { block: true, reason: `missing required output${missing.length > 1 ? "s" : ""} for status "complete": ${missing.join(", ")}` };
+            }
+          }
           finishCalled = true;
         }
         return undefined;

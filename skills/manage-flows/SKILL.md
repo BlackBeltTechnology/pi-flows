@@ -122,7 +122,7 @@ YAML frontmatter + Markdown body (the system prompt).
 ---
 name: code-reviewer
 description: Reviews source code for quality and correctness
-model: @coding
+model: anthropic/claude-sonnet-4-5
 thinking: medium
 tools: read, grep, find
 inputs:
@@ -165,7 +165,7 @@ Context: ${{input.research_context}}
 |-------|----------|-------|
 | `name` | Yes | Unique. Filename = `<name>.md`. Referenced as `agent: <name>` in steps. |
 | `description` | Yes | One line. Shown in catalog. |
-| `model` | Yes | See **Model references**. |
+| `model` | No | Optional; session model when omitted. See **Model references**. |
 | `tools` | Yes | Comma-separated. Guard blocks anything not listed. Standard: `read, write, edit, grep, find, ls, bash, ask_user`. Declaring `skills:` auto-grants `read`; never list `skill_read` (it does not exist). |
 | `thinking` | No | `off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`. Overrides any `:level` suffix in `model`. |
 | `skills` | No | Comma-separated skill names injected into the prompt. |
@@ -181,15 +181,16 @@ Context: ${{input.research_context}}
 
 ## Model references
 
-The `model:` field accepts three forms. **Prefer `@role`.** Use the other two when a specific model is required regardless of role config, or when the user explicitly asks for a non-role model.
+`model:` is optional and takes one of these forms:
 
 | Form | Example | When |
 |------|---------|------|
-| `@role` (preferred) | `model: @coding` | Default. Resolves via the active role→model map (`/roles`). Built-in roles: `@planning`, `@coding`, `@fast`, `@architect`. |
-| `provider/model[:thinking]` | `model: anthropic/claude-haiku-4-5:high` | A specific provider+model is required; optional `:thinking` suffix sets the thinking level. |
-| bare `model-id` | `model: claude-haiku-4-5` | A specific model id with no provider qualifier; thinking comes from the `thinking:` field or none. |
+| single literal | `model: anthropic/claude-haiku-4-5:high` (or bare `claude-haiku-4-5`) | A specific model is required; optional `:thinking` suffix sets the thinking level. A literal that does not exist is an error. |
+| single `@name` | `model: @my-alias` | Optional alias resolved by an installed `model:resolve` resolver (e.g. pi-agent-dashboard roles). Without a resolver, or when it rejects the name, the agent falls back to the session model per `flows.modelFallback`. |
+| ordered list | `model: [@my-alias, anthropic/claude-haiku-4-5]` | The first entry that resolves is used; unresolvable `@name` entries are skipped. |
+| omitted | *(no `model:` line)* | The agent runs on the session model. |
 
-A `thinking:` field always overrides any `:thinking` suffix in `model`.
+`@name` needs a resolver; otherwise it falls back per `flows.modelFallback` (`"session"` default, `"error"` to fail instead). Do not assume any particular `@name` exists. A `thinking:` field always overrides any `:thinking` suffix in `model`.
 
 ## Flow files (`.yaml`)
 
@@ -370,7 +371,7 @@ Each flow is a self-contained directory: `flow.yaml` plus its co-located handler
 
 Both writing tools validate before writing. On failure they return `{ written: false, diagnostics: [...] }` and write nothing. Read each diagnostic's `message` and `suggestion`, fix the content, and call the tool again. Common cases:
 
-- **Missing required field** (`name`, `description`, `model`, `tools` for agents; `name`, `description` for flows) → add it.
+- **Missing required field** (`name`, `description`, `tools` for agents — `model` is optional, session model when omitted; `name`, `description` for flows) → add it.
 - **"Agent not in catalog"** → the flow references an agent that does not exist. Create it with `flow_agents` `op: write`, then retry `flow_write`.
 - **Unwired declared input** → add the missing key to the step's `inputs:` block.
 - **Bad reference / routing target** → every `blockedBy`, `branches` target, and `on_error` must point at an existing step `id`; fix the typo.

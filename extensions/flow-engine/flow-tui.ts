@@ -9,9 +9,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
   AgentConfig,
   AgentResult,
+  DecisionEvent,
   FlowConfig,
   FlowResult,
   NodeKind,
+  AgentStartedExtra,
 } from "./types.js";
 import type { FlowObserver } from "./flow-io.js";
 import { FlowEventPersister, type OrphanedRun } from "./flow-persist.js";
@@ -379,6 +381,18 @@ function wireDashboard(dashboard: any, ui: any) {
 
 // ---- TuiFlowObserver -------------------------------------------------------
 
+/**
+ * One-line summary of a routed decision, e.g. `decided fix via typesafe/jev-latest (0.91)`
+ * or `decided done via agent`. Confidence is shown for classifiers only.
+ * Returns undefined when nothing was routed.
+ */
+export function formatDecisionLine(event: DecisionEvent): string | undefined {
+  if (event.routedBy === undefined || event.label === undefined) return undefined;
+  const routed = event.attempts.find((a) => a.entry === event.routedBy && a.outcome === "ok");
+  const conf = event.routedBy !== "agent" && routed?.confidence !== undefined ? ` (${routed.confidence.toFixed(2)})` : "";
+  return `decided ${event.label} via ${event.routedBy}${conf}`;
+}
+
 export class TuiFlowObserver implements FlowObserver {
   private dashboard: any = null;
   private renderDashboard: (() => void) | undefined;
@@ -491,6 +505,11 @@ export class TuiFlowObserver implements FlowObserver {
       this.dashboard.onThinkingText(agentName, text);
       this.renderDashboard!();
     }
+  }
+
+  onDecision(event: DecisionEvent): void {
+    const line = formatDecisionLine(event);
+    if (line) this.pi.events.emit("flow:notify", { message: line, level: "info" });
   }
 
   onLoopIteration(
@@ -612,12 +631,13 @@ export class EventEmitObserver implements FlowObserver {
     stepId: string,
     config?: AgentConfig,
     resolvedModel?: string,
-    extra?: { nodeKind?: NodeKind; target?: string },
+    extra?: AgentStartedExtra,
   ): void {
     this.emit("flow:agent-started", {
       agentName,
       stepId,
       resolvedModel,
+      ...(extra?.modelFallback ? { modelFallback: extra.modelFallback } : {}),
       nodeKind: extra?.nodeKind,
       target: extra?.target,
       config: config
@@ -625,6 +645,7 @@ export class EventEmitObserver implements FlowObserver {
             name: config.name,
             description: config.description,
             model: config.model,
+            ...(config.modelRefs?.length ? { modelRefs: config.modelRefs } : {}),
             card: config.card,
             sourcePath: config.source,
           }
@@ -696,13 +717,19 @@ export class EventEmitObserver implements FlowObserver {
     agentName: string,
     chosenBranch: string,
     targetStepId: string,
+    detail?: { confidence?: number },
   ): void {
     this.emit("flow:auto-decision", {
       forkId,
       agentName,
       chosenBranch,
       targetStepId,
+      ...(detail?.confidence !== undefined ? { confidence: detail.confidence } : {}),
     });
+  }
+
+  onDecision(event: DecisionEvent): void {
+    this.emit("flow:decision", event);
   }
 
   onLoopIteration(
