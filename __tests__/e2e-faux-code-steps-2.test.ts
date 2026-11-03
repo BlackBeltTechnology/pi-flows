@@ -179,7 +179,6 @@ ${onError ? `  - id: recover
   const run = (yaml: string, handler: string) => {
     const t = tracker();
     const tasks: string[] = [];
-    // NOTE: parsed without the validator — see the ENGINE BUG test on code-decision on_error ordering below.
     const p = runFauxFlow({
       flow: parseFlowYamlString(yaml, "<e2e-code>"), agents: WORKERS.agents,
       codeHandlers: { gate: handler },
@@ -203,8 +202,7 @@ ${onError ? `  - id: recover
     expect(t.started("fix")).toBe(false);
   });
 
-  // ENGINE BUG: executeCodeDecisionStep escalates every handler failure to hard and ignores on_error (docs: soft failure routes to on_error).
-  it.fails("a missing `branch` is a SOFT failure: routes to on_error with a message naming the reserved output", async () => {
+  it("a missing `branch` is a SOFT failure: routes to on_error with a message naming the reserved output", async () => {
     const { result, t, tasks } = await run(routed(true), `export default async () => ({});`);
     expect(result.status).not.toBe("error");
     expect(result.results.gate.status).toBe("error");
@@ -220,8 +218,7 @@ ${onError ? `  - id: recover
     expect(t.started("ship")).toBe(false);
   });
 
-  // ENGINE BUG: executeCodeDecisionStep escalates every handler failure to hard and ignores on_error (docs: soft failure routes to on_error).
-  it.fails("a non-string `branch` is a soft failure routed to on_error", async () => {
+  it("a non-string `branch` is a soft failure routed to on_error", async () => {
     const { result, t } = await run(routed(true), `export default async () => ({ branch: 1 });`);
     expect(result.results.gate.status).toBe("error");
     expect(result.results.recover.status).toBe("complete");
@@ -229,8 +226,7 @@ ${onError ? `  - id: recover
     expect(result.status).not.toBe("error");
   });
 
-  // ENGINE BUG: executeCodeDecisionStep escalates every handler failure to hard and ignores on_error (docs: soft failure routes to on_error).
-  it.fails("a throwing handler routes to on_error; the recovery step sees the thrown message", async () => {
+  it("a throwing handler routes to on_error; the recovery step sees the thrown message", async () => {
     const { result, tasks, t } = await run(routed(true), `export default async (i) => { throw new Error("cannot parse " + i.build); };`);
     expect(result.status).not.toBe("error");
     expect(tasks.find((x) => /RECOVER/.test(x))).toContain("cannot parse built");
@@ -245,8 +241,7 @@ ${onError ? `  - id: recover
     expect(t.started("ship")).toBe(false);
   });
 
-  // ENGINE BUG: executeCodeDecisionStep escalates every handler failure to hard and ignores on_error (docs: soft failure routes to on_error).
-  it.fails("a handler exceeding `timeout` soft-fails to on_error", async () => {
+  it("a handler exceeding `timeout` soft-fails to on_error", async () => {
     const started = Date.now();
     const { result, tasks, t } = await run(
       routed(true, "    timeout: 50\n"),
@@ -263,8 +258,7 @@ ${onError ? `  - id: recover
 // ââ 3. Validation of code-decision definitions ââââââââââââââââââââââââââââ
 
 describe("e2e code-decision: authoring validation", () => {
-  // ENGINE BUG: the validator does not treat a code-decision's on_error edge as ordering, so a recovery step reading ${{result.<gate>.summary}} is rejected (docs rule 3: on_error edge chains order).
-  it.fails("a recovery step reached via a code-decision's on_error may reference the decision's result", () => {
+  it("a recovery step reached via a code-decision's on_error may reference the decision's result", () => {
     const yaml = `name: v
 description: validation
 steps:

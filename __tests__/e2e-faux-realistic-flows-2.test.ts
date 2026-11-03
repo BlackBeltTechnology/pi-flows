@@ -44,15 +44,6 @@ const agentMd = (name: string, o: AgentOpts = {}) => {
 };
 
 const errorsOf = <T extends { severity: string }>(d: T[]) => d.filter((x) => x.severity === "error");
-/**
- * Known validator bug (see the it.fails in scenario 8): `${{flow.input.X}}` is
- * flagged as an "unrecognized prefix" error although docs/flows.md documents it.
- * author() tolerates exactly that diagnostic so the runtime can still be tested.
- */
-const FLOW_INPUT_PREFIX_BUG = /has unrecognized prefix "flow"/;
-const flowErrorsOf = (d: Array<{ severity: string; message: string }>) =>
-  errorsOf(d).filter((x) => !FLOW_INPUT_PREFIX_BUG.test(x.message));
-
 function author(yaml: string, agentMds: string[], handlers: Record<string, string> = {}): { flow: FlowConfig; agents: AgentConfig[] } {
   const dir = mkdtempSync(join(tmpdir(), "e2e-realistic2-"));
   tmpDirs.push(dir);
@@ -62,7 +53,7 @@ function author(yaml: string, agentMds: string[], handlers: Record<string, strin
   for (const md of agentMds) expect(errorsOf(validateAgentContent(md).diagnostics), md).toEqual([]);
   const agents = agentMds.map((m) => parseAgentString(m, "<e2e>"));
   const diag = validateFlowContent(yaml, () => new Map(agents.map((a) => [a.name, a])), () => true);
-  expect(flowErrorsOf(diag.diagnostics)).toEqual([]);
+  expect(errorsOf(diag.diagnostics)).toEqual([]);
   return { flow: parseFlowYamlString(yaml, source), agents };
 }
 
@@ -640,8 +631,7 @@ describe("e2e realistic 11: deploy pipeline with on_error rescue", () => {
     expect(o.tasks.incident).toHaveLength(1);
   });
 
-  // ENGINE BUG: the YAML parser drops `on_error` on code-decision steps, so a throwing code-decision hard-fails the flow.
-  it.fails("a throwing smoke handler soft-fails and is rescued by on_error", async () => {
+  it("a throwing smoke handler soft-fails and is rescued by on_error", async () => {
     // docs/flows.md → Code Decision Step: any code-step failure is soft and routes to on_error.
     const { result, o } = await run("prod-unreachable");
     expect(result.status, result.lastResult.result.summary).toBe("success");

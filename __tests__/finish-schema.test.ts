@@ -3,7 +3,7 @@
  * (spec `agent-node`, change: enhance-agent-node-contract).
  *
  * Declared outputs are REQUIRED and encode `type`/`pattern` as string
- * constraints. An invalid regex degrades to a plain required string.
+ * constraints. An invalid regex degrades to a plain string.
  */
 
 import { describe, expect, it } from "vitest";
@@ -36,9 +36,9 @@ describe("finish schema — base params", () => {
 });
 
 describe("finish schema — declared outputs", () => {
-  it("declared outputs are required (not optional)", () => {
+  it("declared outputs are optional in the schema (required only on status complete, enforced by the guard)", () => {
     const schema = buildFinishSchema([{ name: "verdict" }]);
-    expect(schema.required).toContain("verdict");
+    expect(schema.required ?? []).not.toContain("verdict");
     expect(schema.properties.verdict.type).toBe("string");
   });
 
@@ -68,11 +68,10 @@ describe("finish schema — declared outputs", () => {
     expect(schema.properties.x.pattern).toBe("^/.+");
   });
 
-  it("invalid regex degrades to a plain required string (no pattern, no throw)", () => {
+  it("invalid regex degrades to a plain string (no pattern, no throw)", () => {
     const schema = buildFinishSchema([{ name: "bad", pattern: "([unclosed" }]);
     expect(schema.properties.bad.type).toBe("string");
     expect(schema.properties.bad.pattern).toBeUndefined();
-    expect(schema.required).toContain("bad");
   });
 
   it("description falls back to a default when omitted", () => {

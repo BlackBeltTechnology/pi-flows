@@ -255,8 +255,7 @@ steps:
     }
   });
 
-  it.fails("an on_error target ordered only by the on_error edge (no blockedBy) sees the failed step's result", async () => {
-    // ENGINE BUG: the validator accepts the ref via the on_error edge (docs rule 3), but at runtime the target runs in the same segment before the failure, so the ref expands to "".
+  it("an on_error target ordered only by the on_error edge (no blockedBy) sees the failed step's result", async () => {
     const yaml = `name: t-onerror-order
 description: on_error edge as the only ordering
 steps:

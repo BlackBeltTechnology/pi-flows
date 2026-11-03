@@ -218,6 +218,7 @@ function parseCodeDecisionStep(raw: any, source: string): CodeDecisionStep {
   if (branchMeans) step.branchMeans = branchMeans;
 
   if (raw.target) step.target = String(raw.target);
+  if (raw.on_error) step.on_error = String(raw.on_error);
   if (raw.max_iterations !== undefined) step.max_iterations = toInt(raw.max_iterations, source);
   if (raw.timeout !== undefined) step.timeout = toInt(raw.timeout, source);
 

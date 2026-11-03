@@ -271,7 +271,10 @@ steps:
     expect(result.results.postmortem.summary).toContain("POSTMORTEM error");
   });
 
-  it("on_error to an EARLIER step in a previous segment re-runs from there (a retry loop)", async () => {
+  const backwardErrors = (yaml: string) =>
+    validateFlowContent(yaml, agentMap()).diagnostics.filter((d) => d.severity === "error" && /on_error/.test(d.message));
+
+  it("on_error to an EARLIER step in a previous segment is a validation error (retries use a decision loop)", () => {
     const yaml = `name: retry-back
 description: build failures go back to prep
 steps:
@@ -297,31 +300,14 @@ steps:
     blockedBy: [build]
     task: "SHIP \${{result.build.summary}}"
 `;
-    let builds = 0;
-    const t = tracker();
-    const result = await runFaux({
-      flow: validated(yaml),
-      agents: AGENTS,
-      maxTurns: 40,
-      onAgentStarted: t.onAgentStarted,
-      responder: (task) => {
-        if (/BUILD/.test(task)) return ++builds < 3 ? fail("flaky") : ok("built on attempt 3");
-        if (/GATE/.test(task)) return ok("go", { branch: "go" });
-        return ok(task);
-      },
-    });
-    expect(result.status).toBe("success");
-    expect(t.count("prep")).toBe(3);
-    expect(t.count("build")).toBe(3);
-    expect(t.count("ship")).toBe(1);
-    expect(result.results.ship.summary).toContain("built on attempt 3");
-    // NOTE: unlike a backward decision branch, a backward on_error edge has no
-    // max_iterations cap; it loops for as long as the step keeps failing.
+    const errs = backwardErrors(yaml);
+    expect(errs).toHaveLength(1);
+    expect(errs[0].message).toContain('"build"');
+    expect(errs[0].message).toContain('"prep"');
+    expect(`${errs[0].message} ${errs[0].suggestion}`).toMatch(/decision step.*max_iterations/);
   });
 
-  // ENGINE BUG: on_error pointing at an earlier step in the SAME DAG segment is a no-op —
-  // the target is not re-run, the failed step's dependents still run, and the flow reports success.
-  it.fails("on_error to an earlier step in the same DAG segment does not let the failed step's dependent run", async () => {
+  it("on_error to an earlier step in the SAME DAG segment is a validation error", () => {
     const yaml = `name: same-segment-back
 description: build failure points back at prep
 steps:
@@ -341,20 +327,22 @@ steps:
     blockedBy: [build]
     task: "SHIP"
 `;
-    const t = tracker();
-    let builds = 0;
-    const result = await runFaux({
-      flow: validated(yaml),
-      agents: AGENTS,
-      maxTurns: 40,
-      onAgentStarted: t.onAgentStarted,
-      responder: (task) => (/BUILD/.test(task) ? (++builds === 1 ? fail("flaky") : ok("built")) : ok(task)),
-    });
-    // Either the edge is honoured (prep re-runs before ship) or ship must not run on a failed build.
-    const shipIdx = t.starts.indexOf("ship");
-    const prepReruns = t.count("prep") > 1;
-    expect(shipIdx === -1 || prepReruns).toBe(true);
-    expect(result.results.ship?.status === "complete" && result.results.build.status === "error").toBe(false);
+    const errs = backwardErrors(yaml);
+    expect(errs).toHaveLength(1);
+    expect(errs[0].message).toMatch(/"build".*"prep"/);
+  });
+
+  it("on_error pointing at itself is a validation error", () => {
+    const yaml = `name: self-back
+description: build retries itself
+steps:
+  - id: build
+    type: agent
+    agent: worker
+    task: "BUILD"
+    on_error: build
+`;
+    expect(backwardErrors(yaml)).toHaveLength(1);
   });
 });
 

@@ -115,10 +115,10 @@ outputs: [findings, verdict]
 
 In the expanded form, each output accepts two optional fields:
 
-- `type: string | number | boolean` — constrains the string content. `type: number` requires a numeric string; `type: boolean` requires `true` or `false`.
+- `type: string | number | boolean | object | array` — the value's JSON type. `number`/`boolean` also accept a matching string (e.g. `"3"`, `"true"`), coerced to the type.
 - `pattern: <regex>` — requires the string to match the given regex.
 
-Output values remain **string-valued** — downstream still reads `${{result.STEP.name}}` as a string. `type` and `pattern` are content constraints on that string, not type conversions. An explicit `pattern` takes precedence over `type`. An invalid regex degrades to an unconstrained required string.
+Output values keep their declared JSON type under the result's `outputs` (serialized when interpolated into text). `pattern` constrains a string value. An explicit `pattern` takes precedence over `type`. An invalid regex degrades to an unconstrained required string.
 
 ```yaml
 outputs:
@@ -131,7 +131,7 @@ outputs:
 
 ### Outputs are required by default
 
-Declared outputs are **required**. If an agent calls `finish` without a declared output, or with a value that violates its `type`/`pattern`, the finish call is rejected and the agent is re-prompted (the existing finish retry loop). The step fails once retries are exhausted (`MAX_FINISH_RETRIES`). This is enforced at the finish-tool schema level. Existing agents that declared outputs but sometimes omitted them will now be retried and may fail.
+Declared outputs are **required**. If an agent calls `finish` without a declared output, or with a value that violates its `type`/`pattern`, the finish call is rejected and the agent is re-prompted (the existing finish retry loop). The step fails once retries are exhausted (`MAX_FINISH_RETRIES`), with status `error` and a summary stating the reason. Outputs are required only for `status: "complete"`: `finish(status:"error"|"blocked")` may omit them, and its summary reaches the `on_error` target as `${{result.X.summary}}` (status `error`/`blocked`). This is enforced at the finish-tool schema level. Existing agents that declared outputs but sometimes omitted them will now be retried and may fail.
 
 Inputs are unchanged — still bare names with no typing or validation. The validated output's name carries the contract; inputs need no symmetric typing.
 

@@ -328,10 +328,7 @@ steps:
     expect(result.results.book.summary).toContain("BOOK INV-77");
   });
 
-  // ENGINE BUG: declared outputs are required even on finish(status:"error"), so an agent that
-  // reports a logical failure is rejected 3x and its error summary is lost (status/summary
-  // downstream read "unknown"/""), contradicting flows.md "finish(status:error) → soft".
-  it.fails("an error finish does not need the declared outputs: one call, the error summary reaches on_error", async () => {
+  it("an error finish does not need the declared outputs: one call, the error summary reaches on_error", async () => {
     let calls = 0;
     const result = await runFaux({
       flow: validated(FLOW),

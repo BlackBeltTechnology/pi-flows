@@ -429,12 +429,26 @@ export function validateFlowContent(
     }
   }
 
+  // 4a''. on_error must point forward (later in file order) on every step type.
+  // A backward on_error is an unbounded retry loop; retries use a decision step.
+  const fileIndex = new Map(flow.steps.map((st, i) => [st.id, i] as const));
+  flow.steps.forEach((step, i) => {
+    const onError = (step as { on_error?: string }).on_error;
+    const target = onError === undefined ? undefined : fileIndex.get(onError);
+    if (target === undefined || target > i) return;
+    diagnostics.push({
+      line: stepPropLine(idx, step.id, "on_error"),
+      severity: "error",
+      message: `Step "${step.id}": on_error target "${onError}" must come later in file order than "${step.id}" (backward on_error is not allowed)`,
+      suggestion: `To retry, use a decision step (agent-decision/code-decision) with a backward branch and max_iterations.`,
+    });
+  });
+
   // 4b. Code node validation: id, inputs, outputs, references.
   // Covers both `code` and `code-decision` (which shares the handler shape).
   for (const step of flow.steps) {
     if (step.stepType !== "code" && step.stepType !== "code-decision") continue;
-    // Both share the handler shape (id/inputs/outputs/blockedBy). on_error
-    // only exists on `code`; reading it on a code-decision is undefined.
+    // Both share the handler shape (id/inputs/outputs/blockedBy/on_error).
     const s = step as CodeStep;
 
     // code-decision: the reserved `branch` routing key must not be a data output.

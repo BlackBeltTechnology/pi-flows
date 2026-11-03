@@ -432,6 +432,13 @@ async function runDagSegment(
   // are already satisfied (the preceding separator/segment completed before us).
   const segmentStepIds = new Set(steps.map(s => s.id));
 
+  // An on_error source is an implicit dependency of its target: the target
+  // waits for the source to settle (so it sees the failed step's result).
+  const depsOf = new Map<string, string[]>(steps.map(s => [s.id, [...(s.blockedBy ?? [])]]));
+  for (const s of steps) {
+    if (s.on_error && segmentStepIds.has(s.on_error)) depsOf.get(s.on_error)!.push(s.id);
+  }
+
   // If activeSteps is set (branch exclusivity), skip inactive steps immediately
   if (activeSteps) {
     for (const step of steps) {
@@ -458,8 +465,7 @@ async function runDagSegment(
     // Deps outside this segment are treated as satisfied (cross-segment ordering)
     const unblocked = steps.filter(s => {
       if (completed.has(s.id)) return false;
-      if (!s.blockedBy) return true;
-      return s.blockedBy.every(dep => completed.has(dep) || !segmentStepIds.has(dep));
+      return depsOf.get(s.id)!.every(dep => completed.has(dep) || !segmentStepIds.has(dep));
     });
 
     // Deadlock detection
@@ -1095,16 +1101,17 @@ function storeForkContext(
 /**
  * A `code-decision` runs its handler exactly like a `code` node (reusing
  * executeCodeStep) then routes on the reserved `branch` output resolved against
- * `branches:`. An execution failure (missing handler, throw, timeout, missing
- * declared/reserved output) has no `on_error` to fall back to, so it escalates
- * to a hard flow halt. An off-map `branch` is likewise a hard failure.
+ * `branches:`. An execution failure (throw, timeout, missing/non-string
+ * `branch`, return-contract violation) is a soft failure: it routes to
+ * `on_error` when set and halts the flow otherwise, exactly like a `code` node.
+ * An off-map `branch` label is a hard failure that halts even with `on_error`.
  */
 async function executeCodeDecisionStep(step: CodeDecisionStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   const result = await executeCodeStep(step, ctx, options, options.flow.name, options.flow.source);
 
-  // Execution failure: code-decision has no on_error edge, so any soft/hard
-  // failure halts the flow (mirrors a soft failure with no on_error).
+  // Execution failure: soft -> on_error; hard (or soft without on_error) halts.
   if (result.outcome !== "success") {
+    if (resolveRouteOutcome(result, step.on_error) === "soft") return { agentResult: result, nextStepId: step.on_error };
     result.outcome = "hard";
     result.failureInfo = {
       outcome: "hard",

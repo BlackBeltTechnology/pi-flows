@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Behaviour change — `on_error` rules.** `on_error` must point at a later step (a backward or self `on_error` is a validation error; retry with a decision step loop). An `on_error` target waits for its source step, so it sees the source's result without `blockedBy`. `code-decision` now honours `on_error` for soft failures (missing/non-string branch, throw, timeout, contract violation); an unknown branch label still halts.
+- **Declared outputs are required only on `status: "complete"`.** An agent can finish `error`/`blocked` without them, and its summary reaches the `on_error` target. Outputs may be typed `object`/`array`; `number`/`boolean` also accept their real type.
+- **No more `status: "unknown"`.** An agent that never calls `finish` (or whose finish was rejected 3 times) ends `error` with the reason as summary.
+- **Fork fixes:** a multiSelect fork runs each selected branch exactly once (it re-ran every branch); untaken branches are marked skipped whatever the target's step type.
+- **Loops:** re-entering a loop keeps the results of steps outside the loop body (they were overwritten as skipped).
+- A run started with an already-aborted signal ends `aborted` (was `success`).
+- `${{flow.input.<name>}}` validates when the flow declares the input (was always an error; now an error only when undeclared). `$&`, `$$` and `$1` in a task are no longer treated as replacement patterns. Whole-value code inputs keep `null` and honour a declared `fullOutput`.
+- **~260 new end-to-end faux tests** for forks, code steps, failures, templates and realistic multi-step flows.
 - **A decision agent that finishes `blocked` or `error` has not decided.** Its `branch` is ignored and the attempt fails, so `on_error` routes (or the flow halts) instead of looping on a branch the agent itself said it could not choose.
 - **`${{result.<id>.fullOutput}}` works in agent task templates.** It expanded to an empty string; it now gives the agent's reply text (a declared output named `fullOutput` wins). `summary` stays the agent's description of its work.
 - **Fork `allowCustom`:** a flow-level `decision_agent:` now routes "Other" answers and offers Auto-decide. Validation warns (no longer errors) when nothing in the flow routes them, since the `flows.decider` setting may.

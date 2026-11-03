@@ -263,6 +263,7 @@ export interface CodeDecisionStep {
   branches: Record<string, string>; // branch label -> step ID mapping
   branchMeans?: Record<string, string>; // label -> description, from the `{ to, means }` branch form
   blockedBy?: string[]; // Step IDs that must complete before this step runs
+  on_error?: string; // Route to step ID on a soft failure (handler error/timeout/missing branch)
   max_iterations?: number; // Required only when a branch forms a backward (loop) edge
   timeout?: number; // Optional soft timeout in milliseconds
 }

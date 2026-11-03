@@ -91,7 +91,7 @@ steps:
 | `task` | Task override (template string). If omitted, uses the flow's task |
 | `blockedBy` | Array of step IDs that must complete before this step starts |
 | `inputs` | Named inputs wired from template expressions |
-| `on_error` | Step ID to route to on error |
+| `on_error` | Step ID to route to on error. Must be a step later in file order (not itself); a backward `on_error` is a validation error. |
 
 > On success a step **falls through** to the next step in file order — there is no success-routing field. To order a later step after this one use `blockedBy`; to select a forward path (including skipping steps) use a `fork` or `code-decision` node.
 
@@ -151,7 +151,7 @@ Present options to the user (interactive mode) or let a decision agent / decider
 | `options` | ✓ | Comma-separated or YAML list of choices |
 | `branches` | ✓ | Map of option text → step ID |
 | `allowCustom` | | Appends "Other (describe)" to the prompt. The typed text is mapped to a branch by the fork's decider chain (see [Free text](#fork-free-text-other-describe)). Offered when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or the `flows.decider` setting is set; otherwise validation only warns. |
-| `multiSelect` | | Allow selecting multiple options. All selected branches run sequentially. |
+| `multiSelect` | | Allow selecting multiple options. Each selected branch runs exactly once, sequentially. |
 | `agent` | | Decision agent for this fork (autonomous decisions, "Auto-decide", "Other" free text). Optional: without it the agent is picked by [Decision agent selection](#decision-agent-selection). |
 | `decider` | | Decider chain for this fork (see [Decider chain](#decider-chain-classifier-decisions)). |
 | `task` | | Task description for the decision agent. Defaults to question + options. |
@@ -159,7 +159,7 @@ Present options to the user (interactive mode) or let a decision agent / decider
 **Behavior:**
 
 - **Single-select:** Routes to one branch. Unselected branches are skipped (synthetic "skipped" results stored).
-- **Multi-select:** All selected branches run sequentially.
+- **Multi-select:** Each selected branch runs exactly once, sequentially; unselected branches get synthetic skipped results. Execution then continues after the branches.
 - **After selection:** User is prompted for optional notes (Enter to skip). Fork context is **automatically injected** into the branch step's system prompt.
 
 **Autonomous mode:** When alt+a is active, every fork skips the user prompt and is decided by its [decider chain](#decider-chain-classifier-decisions). Entries are tried in order; the first trusted, valid label routes (so listed classifiers run before `agent`). The `agent` entry (the default chain is `[agent]`) runs the decision agent: the step's `agent:`, else the flow's `decision_agent:`, else the setting `flows.decisionAgent`, else the built-in `flow-decision` (see [Decision agent selection](#decision-agent-selection)). An `agent:` on the fork is not required. If every entry fails, the step fails (routed by `on_error` when set); there is no default branch.
@@ -169,9 +169,9 @@ Present options to the user (interactive mode) or let a decision agent / decider
 | Extra option | Offered when | Result |
 |---|---|---|
 | `Other (describe)` | `allowCustom: true` | User types free text. The decider chain maps it to a branch. |
-| `Auto-decide (let AI choose)` | The fork has `agent:` or a `decider:` chain (step, flow, or setting `flows.decider`) | Decided as in autonomous mode. Autonomous mode is switched on. |
+| `Auto-decide (let AI choose)` | The fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or the setting `flows.decider` is set | Decided as in autonomous mode. Autonomous mode is switched on. |
 
-A flow-level `decision_agent:` or the setting `flows.decisionAgent` alone does not add `Auto-decide`.
+The setting `flows.decisionAgent` alone does not add `Auto-decide`.
 
 #### Fork free text (Other / describe)
 
@@ -217,6 +217,7 @@ Run a TypeScript handler exactly like a [Code Step](#code-step), then route on a
 | `blockedBy` | | Array of step IDs that must complete before this step runs. |
 | `max_iterations` | | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#loops). |
 | `timeout` | | Soft deadline in milliseconds. On expiry the engine aborts `ctx.signal` and the step soft-fails. |
+| `on_error` | | Step ID to route to on soft failure (later in file order). Halts the flow when unset. |
 
 **Handler contract:**
 
@@ -250,8 +251,8 @@ export default async function (
 |-----------|---------|
 | Fewer than 2 `branches` | Validation error — use a plain `code` step instead. |
 | `branch` declared in `outputs:` | Validation error — `branch` is reserved. |
-| Handler return omits `branch` | Soft failure naming the reserved `branch` output. |
-| Returned `branch` not in `branches:` | **Hard** failure — halts the flow (consistent with `agent-decision`). |
+| Handler return omits `branch`, or `branch` is not a string | Soft failure naming the reserved `branch` output. |
+| Returned `branch` not in `branches:` | **Hard** failure — halts the flow even with `on_error`. |
 | Any code-step failure (throw, contract violation, timeout) | Soft failure — routes to `on_error`, or hard-fails when none. |
 
 **Type-safe scaffold:** `/flows:generate` emits a `type Branch = "auto_approve" | "needs_human" | "park";` union for each `code-decision` and types the handler return as `Promise<{ branch: Branch } & Output>`, so an off-map label is a compile-time error. Scaffolds write a `.ts.default` and never overwrite an implemented handler.
@@ -292,7 +293,7 @@ Delegate a routing decision to an agent. The agent analyzes the context and call
 finish(summary="Quality is sufficient.", branch="ready")
 ```
 
-If the agent returns a `branch` not in `branches`, the flow hard-fails. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#loops).
+If the decider returns a missing or invalid `branch` (not in `branches`), the step soft-fails: `on_error` routes it, else the flow halts. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#loops).
 
 ---
 
@@ -377,6 +378,8 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
 - A `*-decision` node with a branch target pointing to an earlier step **MUST** declare `max_iterations`.
 - `max_iterations: N` caps the number of loop-backs (backward branch edges taken), not total passes. The body runs at most N + 1 times: the first pass plus N re-entries (`max_iterations: 3` → up to 4 passes).
 - When the cap is reached and the decision again picks the backward branch, the engine does not loop; control falls through to the next step in file order.
+- On re-entry only the loop body re-runs (target .. decision, plus steps reachable from the target); steps outside it keep their completed results.
+- To retry after a failure, use a decision step with a backward branch and `max_iterations` — `on_error` cannot point backward.
 - `${{loop.<id>.iteration}}` is the 1-based number of the current pass (pass N shows N) in both the body and the decision; `${{loop.<id>.max}}` is N.
 - A `*-decision` node whose branches all point forward needs no `max_iterations`.
 - The dashboard ↻ iteration badge is driven by the `flow:loop-iteration` event, emitted only when a backward edge is actually taken — not inferred from the presence of `max_iterations`.
@@ -415,7 +418,7 @@ The agent calls `finish(branch="rework")` to loop back to `developer`, or `finis
 
 ### Routing Node Semantics
 
-A routing node (`fork`, `agent-decision`, `code-decision`) **always executes**, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches that are not taken receive synthetic `skipped` results; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
+A routing node (`fork`, `agent-decision`, `code-decision`) **always executes**, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches that are not taken receive synthetic `skipped` results, whatever the chosen target's step type; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
 
 ---
 
@@ -514,7 +517,7 @@ flowchart TD
 
 ### `on_error` is the soft switch
 
-A soft-eligible failure routes to `on_error` **when the node declares one**. A soft-eligible failure on a node with **no `on_error` hard-fails the flow**. This is fail-fast by default: if you do not handle a recoverable failure, the flow stops rather than silently continuing.
+A soft-eligible failure routes to `on_error` **when the node declares one**. A soft-eligible failure on a node with **no `on_error` hard-fails the flow**. The `on_error` target must be later in file order (a backward `on_error` is a validation error). It implicitly waits for its source to settle, so it sees the source's result without `blockedBy`; on success it still runs if it is on the normal path. This is fail-fast by default: if you do not handle a recoverable failure, the flow stops rather than silently continuing.
 
 > **⚠️ Breaking behavioral change.** Previously, a failure on a node with no `on_error` silently continued. It now **hard-fails the flow**. Flows that relied on silent continuation must add an explicit `on_error` target to the affected node.
 
@@ -534,7 +537,7 @@ Agent outcomes are determined **structurally** — there is no error-message par
 | Terminated with a terminal API error and no `finish` (pi-coding-agent's auto-retries exhausted: rate limit, quota, auth) | `hard` (the provider is unusable for the rest of the flow) |
 | Terminated without finishing and without an API error | `soft` |
 
-**Capped no-finish reminder.** If an agent stops without calling `finish` (and there is no API error), it receives at most **2** reminders that include the `finish` tool-call format. If it still does not finish, the node resolves as a clean `soft` failure — never `status:"unknown"`, and never an infinite loop.
+**Capped no-finish reminder.** If an agent stops without calling `finish` (and there is no API error), it receives at most **2** reminders that include the `finish` tool-call format. If it still does not finish (or its `finish` was rejected 3 times), the node resolves as a clean `soft` failure with status `error` and a summary stating the reason — never `status:"unknown"`, and never an infinite loop.
 
 ### Transient retries are delegated to pi
 
@@ -565,7 +568,7 @@ Template variables are placeholders in `task`, `inputs`, and `question` fields. 
 | `${{result.STEP-ID.summary}}` | Summary from `finish(summary:)` |
 | `${{result.STEP-ID.status}}` | Status: `complete`, `error`, or `blocked` |
 | `${{result.STEP-ID.<outputName>}}` | A declared typed output (agent or code step), held under the result's `outputs` in its real JSON type. A produced file path is conveyed this way as a `*_path` output. |
-| `${{flow.input.NAME}}` | A declared flow input (see [Typed Flow Inputs](#typed-flow-inputs)) |
+| `${{flow.input.NAME}}` | A declared flow input (see [Typed Flow Inputs](#typed-flow-inputs)). Validation error unless the flow's `inputs:` declares `NAME`. |
 | `${{loop.STEP-ID.iteration}}` | Current iteration (1-based) in a loop step |
 | `${{loop.STEP-ID.max}}` | Maximum iterations configured for a loop |
 

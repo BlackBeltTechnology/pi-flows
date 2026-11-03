@@ -72,7 +72,10 @@ export function describeBadFinish(
     if (b === undefined || b === null || b === "") problems.push(`missing branch (${valid})`);
     else if (typeof b !== "string" || !opts.decisionBranches.includes(b)) problems.push(`invalid branch ${JSON.stringify(b)} (${valid})`);
   }
-  const missing = (opts.outputNames ?? []).filter((n) => a[n] === undefined);
+  // Declared outputs are required only on a "complete" finish.
+  const missing = a.status === "error" || a.status === "blocked"
+    ? []
+    : (opts.outputNames ?? []).filter((n) => a[n] === undefined);
   if (missing.length) problems.push(`missing required output${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`);
   if (problems.length) return problems.join("; ");
   const text = (opts.errorText ?? "").trim().replace(/\s+/g, " ");
