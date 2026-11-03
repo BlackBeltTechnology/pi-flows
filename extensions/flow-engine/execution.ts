@@ -1,6 +1,6 @@
 import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
 import { classifyAgentOutcome } from "./failure.js";
-import { createFinishLatch } from "./finish-latch.js";
+import { createFinishLatch, describeBadFinish } from "./finish-latch.js";
 import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ModelRuntime, ResourceLoader } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -588,6 +588,13 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Cap for the stop-gate reminder loop (below). Exhaustion ends in a clean
   // SOFT failure via classifyAgentOutcome. See node-failure-model D4.
   const MAX_FINISH_RETRIES = 2;
+  // The same cap applies to finish calls that are REJECTED (invalid/missing
+  // branch, missing declared output): the initial attempt + MAX_FINISH_RETRIES
+  // reminders. The 3rd rejected finish aborts the session; the step then
+  // fails SOFT naming the problem. See node-failure-model "Capped no-finish reminder".
+  const finishArgsById = new Map<string, unknown>();
+  let badFinishCount = 0;
+  let badFinishMessage: string | undefined;
   let lastAssistantText = "";
   let lastApiError: string | undefined;
   let accumulatedTokens = { input: 0, output: 0 };
@@ -597,6 +604,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
       case "tool_execution_start": {
         if (event.toolName === finishToolName) {
           finishLatch.start(event.toolCallId, event.args);
+          finishArgsById.set(event.toolCallId, event.args);
         }
         const tc: ToolCallRecord = {
           toolName: event.toolName,
@@ -634,6 +642,18 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
         // retry on the returned error tool result, with the stop-gate as backstop.
         if (finishLatch.end(event.toolCallId, !!event.isError)) {
           session.abort();
+        } else if (
+          event.toolName === finishToolName && event.isError && !finishLatch.latched &&
+          finishArgsById.has(event.toolCallId)
+        ) {
+          // Rejected finish: count it against the same cap as a missing finish.
+          badFinishCount++;
+          badFinishMessage = describeBadFinish(finishArgsById.get(event.toolCallId), {
+            decisionBranches: options.decisionBranches,
+            outputNames: (agent.outputs ?? []).map((o) => o.name),
+            errorText: typeof output === "string" ? output : rawResult?.content?.[0]?.text,
+          });
+          if (badFinishCount > MAX_FINISH_RETRIES) session.abort();
         }
         break;
       }
@@ -688,7 +708,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     // Stop-gate: remind (≤MAX) only while no correct finish has been latched;
     // then stop and classify. Keyed on the latch, not finishParams, so a
     // duplicate/blocked finish can never spuriously trigger a reminder. (D4)
-    while (!finishLatch.latched && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
+    while (!finishLatch.latched && badFinishCount <= MAX_FINISH_RETRIES && finishRetries < MAX_FINISH_RETRIES && !options.signal?.aborted) {
       finishRetries++;
       await session.prompt(
         `You did not call the \`${finishToolName}\` tool. You MUST call \`${finishToolName}\` to submit your result.\n\n` +
@@ -702,6 +722,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     // prompt() may throw on catastrophic errors
     if (!lastApiError) lastApiError = err.message;
   }
+
+  // Our own cap-abort surfaces as a provider "aborted" error; it is not an API failure.
+  if (!finishLatch.latched && badFinishCount > MAX_FINISH_RETRIES) lastApiError = undefined;
 
   // Cleanup abort listener
   options.signal?.removeEventListener("abort", onAbort);
@@ -784,7 +807,15 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Structural outcome classification (success | soft | hard). The DAG
   // scheduler routes on `outcome`, not on `parsed.status === "complete"`.
-  const { outcome, failureInfo } = classifyAgentOutcome(finishParams ?? undefined, lastApiError);
+  let { outcome, failureInfo } = classifyAgentOutcome(finishParams ?? undefined, lastApiError);
+  if (!finishParams && badFinishCount > 0 && outcome === "soft") {
+    // The agent DID call finish but never with a valid payload: name the problem.
+    failureInfo = {
+      outcome: "soft",
+      message: `Agent's finish was rejected ${badFinishCount} time(s): ${badFinishMessage}`,
+      source: "agent_finish_invalid",
+    };
+  }
 
   return {
     success: parsed.status === "complete",
