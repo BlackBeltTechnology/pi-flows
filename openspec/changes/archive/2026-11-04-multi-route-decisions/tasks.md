@@ -58,4 +58,3 @@ Every group: write the failing faux e2e/unit tests from the spec scenarios first
 ## 6. Docs and release notes
 - [x] 6.1 `docs/flows.md`, `docs/flow-authoring.md`, `docs/events-api.md`, `docs/architecture.md`, `docs/public-api.md` (delegated); CHANGELOG with the behaviour changes called out in the proposal.
 - [x] 6.2 Live check: a GLM run of a fan-out flow and a lanes flow through the local build (RPC driver).
-- [ ] 6.3 Companion issue in pi-agent-dashboard: key cards on `stepId` + `itemIndex`.

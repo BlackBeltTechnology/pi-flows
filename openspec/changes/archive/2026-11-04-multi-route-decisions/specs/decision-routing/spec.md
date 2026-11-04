@@ -18,7 +18,7 @@
 
 ### Requirement: Routing nodes always execute; skipped forward siblings are typed-empty
 
-A routing node SHALL always execute before control leaves it, so its own outputs are always populated; for a loop, its outputs SHALL reflect the last iteration. Forward branches not taken, and every step a forward route jumps over (any step type), SHALL receive synthetic `skipped` results if they have none; for a `multi: true` decision, every step of the activated segment not reachable from a chosen target SHALL receive a synthetic `skipped` result, replacing any earlier result. Unresolved `${{result.<stepId>.<field>}}` references SHALL expand to the empty string, never `undefined`.
+A routing node SHALL always execute before control leaves it, so its own outputs are always populated; for a loop, its outputs SHALL reflect the last iteration. Forward branch targets not taken, of a fork or a decision and whatever the target's step type, SHALL receive synthetic `skipped` results if they have none; for a `multi: true` decision, every step of the activated segment not reachable from a chosen target SHALL receive a synthetic `skipped` result, replacing any earlier result. Unresolved `${{result.<stepId>.<field>}}` references SHALL expand to the empty string, never `undefined`.
 
 #### Scenario: Loop node output is last-iteration value
 - **WHEN** a looping `code-decision` runs three iterations then exits

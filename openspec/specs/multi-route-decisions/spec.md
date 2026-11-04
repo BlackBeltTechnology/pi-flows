@@ -1,4 +1,9 @@
-## ADDED Requirements
+# multi-route-decisions Specification
+
+## Purpose
+Let a decision node (`agent-decision` or `code-decision` with `multi: true`) choose zero or more branches at runtime: the chosen lanes run in parallel and the rest are skipped, and a fan-out branch runs its target step once per item of a runtime list, with the per-item results aggregated in item order for the steps after it.
+
+## Requirements
 
 ### Requirement: A multi decision returns zero or more routes
 
@@ -134,7 +139,7 @@ For a `multi: true` decision, classifier entries SHALL be removed from the resol
 
 ### Requirement: Multi routes and items are observable
 
-`flow:decision` of an agent-decision SHALL carry `labels` (returned order) and `routes` (`{ branch, itemCount? }`), with `label` the first label or absent, emitted after item expansion and carrying `routeError` when expansion fails. Every per-agent event of an instance SHALL carry `itemIndex` and `itemCount`, and the TUI SHALL show the instance as `<agent>[i]`.
+`flow:decision` of an agent-decision SHALL carry `labels` (returned order) and `routes` (`{ branch, itemCount? }`), with `label` the first label or absent, emitted after item expansion and carrying `routeError` when expansion fails. Every per-agent event of an instance SHALL carry `itemIndex` and `itemCount`, and the TUI SHALL show the instance as its own card `<stepId>[i]`.
 
 #### Scenario: Decision event of a fan-out
 - **WHEN** a multi agent-decision returns `explore` whose `for_each` yields two items

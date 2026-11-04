@@ -194,4 +194,3 @@ Without `multi: true`, `branches` and `routes` are ordinary keys and must be dec
 - **One step per item.** A per-item chain (explore → summarize) has to be done inside one agent, or as a second fan-out after a code step. Accepted; it keeps instances independent and unambiguous.
 - **Lanes share segment failure rules.** One lane's routed failure can skip the others. Accepted for v1. There is no in-segment workaround: in-segment `on_error` narrowing also skips sibling lanes. A flow that needs isolation routes `on_error` outside the segment and handles the failure there.
 - **Wave scheduler.** Instances are scheduled in `Promise.all` waves. A pool is a follow-up.
-- **Dashboard lag** until the companion repo keys instance cards.
