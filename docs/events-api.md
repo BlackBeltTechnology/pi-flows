@@ -320,6 +320,8 @@ pi.events.on("flow:agent-started", (data: {
   config?:       { model?: string; modelRefs?: string[] };  // model: entry 1 is config.model; modelRefs is the whole model: list in order
   nodeKind?:     NodeKind;  // the node's TYPE (all node types emit this)
   target?:       string;    // resolved handler path, code / code-decision only
+  itemIndex?:    number;    // fan-out instance: 0-based item index
+  itemCount?:    number;    // fan-out instance: number of items
 }) => { ... });
 ```
 
@@ -340,8 +342,14 @@ pi.events.on("flow:agent-complete", (data: {
   stepId:    string;
   result:    AgentResult;
   nodeKind?: NodeKind;   // the node's TYPE (all node types emit this)
+  itemIndex?: number;    // fan-out instance only
+  itemCount?: number;
 }) => { ... });
 ```
+
+#### Fan-out instances
+
+When a [multi decision](flows.md#fan-out) fans a step out over items, each item runs as its own instance of that step. Every per-agent event of an instance — `flow:agent-started`, `flow:agent-complete`, `flow:assistant-text`, `flow:thinking-text`, `flow:subagent-tool-call`, `flow:subagent-tool-result` — carries the step's `stepId` plus `itemIndex` (0-based) and `itemCount`. Events of ordinary steps have no item fields. The TUI shows each instance as its own card, `<stepId>[i]`.
 
 ---
 
@@ -443,12 +451,17 @@ pi.events.on("flow:decision", (data: {
     model?: string; latencyMs: number; reason?: string;
   }>;
   routedBy?: string;           // absent when the chain was exhausted
-  label?: string;
+  label?: string;              // multi: first chosen label, absent when none
+  labels?: string[];           // multi: chosen labels in order (may be empty)
+  routes?: Array<{ branch: string; itemCount?: number }>;  // multi: chosen routes
+  routeError?: string;         // multi: item expansion / max_items failed
   runId: string;
 }) => { /* ... */ });
 ```
 
 The payload never contains the classifier state or the task text.
+
+**Multi decisions.** For a [`multi: true`](flows.md#multi-route-decisions) `agent-decision` the event is emitted after item expansion and carries `labels`, `routes` (with `itemCount` for fan-out routes) and, when expanding items or the `max_items` cap failed, `routeError`. A missing `label` with `routedBy` present means "nothing chosen". The TUI notify line reads `decided backend, docs via agent`, or `decided none via agent`. Code-decisions do not emit `flow:decision`.
 
 ### `flow:loop-iteration`
 

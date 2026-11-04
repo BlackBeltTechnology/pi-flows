@@ -26,3 +26,7 @@ Rules:
 - If the previous step reported failure/FAIL/issues that need fixing, choose the loop branch.
 - Respect iteration limits — if close to max iterations, prefer exiting.
 - Call `finish` with your chosen `branch` and a brief summary.
+
+## Multi-route decisions
+
+When the branch list asks for `branches`, choose every branch that applies (possibly none) and call `finish` with `branches` as a list, each branch at most once. Do not set `branch`.

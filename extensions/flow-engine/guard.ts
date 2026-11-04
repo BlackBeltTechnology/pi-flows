@@ -17,6 +17,8 @@ export interface GuardOptions {
   requireFinish?: boolean;
   accessRules?: AccessRules;
   decisionBranches?: string[];
+  /** Multi decision: finish takes `branches` (a list, possibly empty) instead of `branch`. */
+  decisionMulti?: boolean;
   agentOutputs?: AgentOutput[];
   allowAskUser?: boolean;
 }
@@ -82,7 +84,13 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
         summary: Type.String({ description: "Brief summary of what was accomplished or what went wrong" }),
       };
 
-      if (decisionBranches) {
+      const decisionMulti = !!(decisionBranches && options.decisionMulti);
+      if (decisionMulti) {
+        baseParams.branches = Type.Array(
+          Type.Union(decisionBranches!.map(b => Type.Literal(b))),
+          { description: `Your decision: every branch that applies (may be empty). Each must be one of: ${decisionBranches!.join(", ")}` },
+        );
+      } else if (decisionBranches) {
         baseParams.branch = Type.Union(
           decisionBranches.map(b => Type.Literal(b)),
           { description: `Your decision. Must be one of: ${decisionBranches.join(", ")}` }
@@ -140,10 +148,18 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
       pi.registerTool({
         name: finishName,
         label: "Finish",
-        description: decisionBranches
+        description: decisionMulti
+          ? `Submit your decision and result. Set branches to every branch that applies (possibly none), from: ${decisionBranches!.join(", ")}`
+          : decisionBranches
           ? `Submit your decision and result. You MUST set branch to one of: ${decisionBranches.join(", ")}`
           : "Submit your final structured result. You MUST call this tool as your last action.",
-        promptGuidelines: decisionBranches
+        promptGuidelines: decisionMulti
+          ? [
+              "You MUST call the `finish` tool as your final action to submit your result.",
+              `Set the \`branches\` parameter to the list of every branch that applies (possibly empty), each one of: ${decisionBranches!.join(", ")}`,
+              "Base your decision on the evidence in your analysis.",
+            ]
+          : decisionBranches
           ? [
               "You MUST call the `finish` tool as your final action to submit your result.",
               `You MUST set the \`branch\` parameter to one of: ${decisionBranches.join(", ")}`,
@@ -171,6 +187,9 @@ export function createGuardExtension(options: GuardOptions): ExtensionFactory {
           // Declared outputs are required only on a "complete" finish; block
           // (→ error result → retry) before latching finishCalled.
           const params = event.input || event.params || {};
+          if (decisionMulti && Array.isArray(params.branches) && new Set(params.branches).size !== params.branches.length) {
+            return { block: true, reason: "duplicate branches: list each branch once" };
+          }
           if (params.status === "complete") {
             const missing = agentOutputs.map((o) => o.name).filter((n) => params[n] === undefined);
             if (missing.length) {

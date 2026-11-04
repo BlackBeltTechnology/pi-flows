@@ -9,27 +9,32 @@ import type { AgentConfig, FlowConfig } from "./types.js";
 /** Output names that collide with the `finish` tool's own fields. */
 export const RESERVED_FINISH_OUTPUTS = ["status", "summary", "files", "artifacts"];
 
-/** Reserved names an agent declares; `branch` counts only for decision agents. */
-export function reservedOutputsOf(agent: Pick<AgentConfig, "outputs">, decision = false): string[] {
+/**
+ * Reserved names an agent declares; `branch` counts only for decision agents,
+ * `branches` only for agents deciding a `multi: true` decision.
+ */
+export function reservedOutputsOf(agent: Pick<AgentConfig, "outputs">, decision = false, multi = false): string[] {
   const names = (agent.outputs ?? []).map((o) => o.name);
-  return names.filter((n) => RESERVED_FINISH_OUTPUTS.includes(n) || (decision && n === "branch"));
+  return names.filter((n) => RESERVED_FINISH_OUTPUTS.includes(n) || (decision && n === "branch") || (multi && n === "branches"));
 }
 
 /** One line per offending agent used by the flow, or [] when the flow is clean. */
 export function reservedOutputProblems(flow: FlowConfig, getAgent: (name: string) => AgentConfig | undefined): string[] {
-  const usage = new Map<string, boolean>(); // agent name → used as a decision agent
-  const use = (name: string | undefined, decision: boolean) => {
-    if (name) usage.set(name, (usage.get(name) ?? false) || decision);
+  // agent name → 0 plain, 1 decision agent, 2 multi decision agent
+  const usage = new Map<string, number>();
+  const use = (name: string | undefined, level: number) => {
+    if (name) usage.set(name, Math.max(usage.get(name) ?? 0, level));
   };
-  use(flow.decision_agent, true);
+  use(flow.decision_agent, 1);
   for (const step of flow.steps) {
     const agent = (step as { agent?: string }).agent;
-    use(agent, step.stepType === "agent-decision" || step.stepType === "fork");
+    const multi = step.stepType === "agent-decision" && step.multi === true;
+    use(multi ? agent ?? flow.decision_agent : agent, multi ? 2 : step.stepType === "agent-decision" || step.stepType === "fork" ? 1 : 0);
   }
   const problems: string[] = [];
-  for (const [name, decision] of usage) {
+  for (const [name, level] of usage) {
     const cfg = getAgent(name);
-    const bad = cfg ? reservedOutputsOf(cfg, decision) : [];
+    const bad = cfg ? reservedOutputsOf(cfg, level >= 1, level === 2) : [];
     if (bad.length) {
       problems.push(`agent "${name}" declares reserved output ${bad.map((b) => `"${b}"`).join(", ")}; rename it (e.g. "outcome")`);
     }

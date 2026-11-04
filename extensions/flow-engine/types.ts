@@ -89,6 +89,21 @@ export interface AgentStartedExtra {
   nodeKind?: NodeKind;
   target?: string;
   modelFallback?: ModelFallbackInfo;
+  /** Fan-out instance (change: multi-route-decisions): 0-based index and item count. */
+  itemIndex?: number;
+  itemCount?: number;
+}
+
+/** Fan-out branch declaration: `for_each` is a template or `dynamic` (items from a code route). */
+export interface BranchFanout {
+  for_each: string;
+  max_items?: number;
+}
+
+/** Fan-out instance identity passed to per-agent observer callbacks. */
+export interface ItemRef {
+  index: number;
+  count: number;
 }
 
 export interface AgentConfig {
@@ -158,6 +173,12 @@ export interface DecisionEvent {
   /** The entry that routed; absent when the chain was exhausted. */
   routedBy?: string;
   label?: string;
+  /** Multi decision: every chosen label, in returned order (may be empty). */
+  labels?: string[];
+  /** Multi decision: chosen routes, with the item count of fan-out routes. */
+  routes?: Array<{ branch: string; itemCount?: number }>;
+  /** Multi decision: why item expansion / the cap failed after routing. */
+  routeError?: string;
 }
 
 export interface FlowConfig {
@@ -233,6 +254,8 @@ export interface AgentDecisionStep {
   decider?: DeciderSpec; // Decider chain (default: flow decider → flows.decider → [agent])
   state?: Record<string, string>; // Template-expanded classifier state (default { task })
   branchMeans?: Record<string, string>; // label -> criterion, from the `{ to, means }` branch form
+  multi?: boolean; // Zero or more branches (change: multi-route-decisions)
+  branchFanout?: Record<string, BranchFanout>; // label -> fan-out declaration
 }
 
 export interface CodeStep {
@@ -266,6 +289,8 @@ export interface CodeDecisionStep {
   on_error?: string; // Route to step ID on a soft failure (handler error/timeout/missing branch)
   max_iterations?: number; // Required only when a branch forms a backward (loop) edge
   timeout?: number; // Optional soft timeout in milliseconds
+  multi?: boolean; // Zero or more branches (change: multi-route-decisions)
+  branchFanout?: Record<string, BranchFanout>; // label -> fan-out declaration
 }
 
 // ---- Agent execution results ----------------------------------------------
@@ -293,6 +318,8 @@ export interface AgentResult {
   outcome?: FailureOutcome;
   /** Failure detail when `outcome` is `soft` or `hard`. */
   failureInfo?: FailureInfo;
+  /** Fan-out aggregate: per-instance results in input order. */
+  items?: StepResultValue[];
 }
 
 export interface ToolCallRecord {
@@ -333,6 +360,8 @@ export interface StepResultValue {
   summary: string;
   fullOutput: string;
   outputs: Record<string, unknown>;
+  /** Fan-out target: per-instance results in input order (`${{result.<t>.items}}`). */
+  items?: StepResultValue[];
 }
 
 export interface FlowResult {
@@ -360,6 +389,8 @@ export interface TemplateContext {
   loopMaxIterations?: Record<string, number>;
   /** Typed flow-level inputs, referenceable as `${{flow.input.<name>}}`. */
   flowInput?: Record<string, unknown>;
+  /** Fan-out instance: `${{item}}`, `${{item.<field>}}`, `${{item_index}}`. */
+  item?: { value: unknown; index: number };
 }
 
 // ---- Persisted flow-event record ------------------------------------------

@@ -14,6 +14,7 @@ import type {
   CodeDecisionStep,
   ForkStep,
   AgentDecisionStep,
+  BranchFanout,
 } from "./types.js";
 import { readFileSync } from "node:fs";
 import { parseDeciderSpec } from "./decider/chain.js";
@@ -189,7 +190,7 @@ function parseForkStep(raw: any, source: string): ForkStep {
 }
 
 function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
-  const { branches, branchMeans } = parseBranches(raw.branches, raw.id, source);
+  const { branches, branchMeans, branchFanout } = parseBranches(raw.branches, raw.id, source);
 
   const step: AgentDecisionStep = {
     stepType: "agent-decision",
@@ -198,6 +199,8 @@ function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
     branches,
   };
   if (branchMeans) step.branchMeans = branchMeans;
+  if (raw.multi === true || raw.multi === "true") step.multi = true;
+  if (branchFanout) step.branchFanout = branchFanout;
   if (raw.agent) step.agent = String(raw.agent);
   if (raw.on_error) step.on_error = String(raw.on_error);
   if (raw.decider !== undefined) step.decider = parseDecider(raw.decider, source);
@@ -208,7 +211,7 @@ function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {
 }
 
 function parseCodeDecisionStep(raw: any, source: string): CodeDecisionStep {
-  const { branches, branchMeans } = parseBranches(raw.branches, raw.id, source);
+  const { branches, branchMeans, branchFanout } = parseBranches(raw.branches, raw.id, source);
 
   const step: CodeDecisionStep = {
     stepType: "code-decision",
@@ -216,6 +219,8 @@ function parseCodeDecisionStep(raw: any, source: string): CodeDecisionStep {
     branches,
   };
   if (branchMeans) step.branchMeans = branchMeans;
+  if (raw.multi === true || raw.multi === "true") step.multi = true;
+  if (branchFanout) step.branchFanout = branchFanout;
 
   if (raw.target) step.target = String(raw.target);
   if (raw.on_error) step.on_error = String(raw.on_error);
@@ -283,9 +288,10 @@ function parseBranches(
   raw: any,
   stepId: string,
   source: string,
-): { branches: Record<string, string>; branchMeans?: Record<string, string> } {
+): { branches: Record<string, string>; branchMeans?: Record<string, string>; branchFanout?: Record<string, BranchFanout> } {
   const branches: Record<string, string> = {};
   const means: Record<string, string> = {};
+  const fanout: Record<string, BranchFanout> = {};
   if (raw && typeof raw === "object") {
     for (const [k, v] of Object.entries(raw)) {
       if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -296,12 +302,22 @@ function parseBranches(
         branches[k] = String(to);
         const m = (v as any).means;
         if (m !== undefined && m !== null && String(m) !== "") means[k] = String(m);
+        const fe = (v as any).for_each;
+        if (fe !== undefined && fe !== null && String(fe) !== "") {
+          fanout[k] = { for_each: String(fe) };
+          const mi = (v as any).max_items;
+          if (mi !== undefined) fanout[k].max_items = Number(mi);
+        }
       } else {
         branches[k] = String(v);
       }
     }
   }
-  return { branches, ...(Object.keys(means).length ? { branchMeans: means } : {}) };
+  return {
+    branches,
+    ...(Object.keys(means).length ? { branchMeans: means } : {}),
+    ...(Object.keys(fanout).length ? { branchFanout: fanout } : {}),
+  };
 }
 
 function parseDecider(raw: any, source: string) {

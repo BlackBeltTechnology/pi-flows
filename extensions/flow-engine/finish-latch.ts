@@ -62,11 +62,21 @@ export function createFinishLatch(): FinishLatch {
  */
 export function describeBadFinish(
   args: unknown,
-  opts: { decisionBranches?: string[]; outputNames?: string[]; errorText?: string },
+  opts: { decisionBranches?: string[]; decisionMulti?: boolean; outputNames?: string[]; errorText?: string },
 ): string {
   const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
   const problems: string[] = [];
-  if (opts.decisionBranches) {
+  if (opts.decisionBranches && opts.decisionMulti) {
+    const valid = `valid: ${opts.decisionBranches.join(", ")}`;
+    const bs = a.branches;
+    if (!Array.isArray(bs)) problems.push(`missing branches: a list of branches (${valid})${a.branch !== undefined ? "; this decision takes `branches`, not `branch`" : ""}`);
+    else {
+      const bad = bs.filter((b) => typeof b !== "string" || !opts.decisionBranches!.includes(b));
+      if (bad.length) problems.push(`invalid branches ${JSON.stringify(bad)} (${valid})`);
+      const dup = bs.filter((b, i) => bs.indexOf(b) !== i);
+      if (dup.length) problems.push(`duplicate branches ${JSON.stringify([...new Set(dup)])}`);
+    }
+  } else if (opts.decisionBranches) {
     const valid = `valid: ${opts.decisionBranches.join(", ")}`;
     const b = a.branch;
     if (b === undefined || b === null || b === "") problems.push(`missing branch (${valid})`);

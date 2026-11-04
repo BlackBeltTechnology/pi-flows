@@ -5,6 +5,21 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Multi-route decisions** (`multi-route-decisions`). `multi: true` on an `agent-decision` or `code-decision` chooses zero or more branches: the decision agent calls `finish({ branches: [...] })`; a handler returns `{ branch }`, `{ branches }` or `{ routes: [{ branch, items? }] }`. The chosen targets (agent steps directly after the decision) run in parallel; the rest of that group is `skipped`; choosing nothing skips the group.
+- **Fan-out.** A branch `{ to, for_each: "${{…}}" | dynamic, max_items }` runs its target once per item, with `${{item}}`, `${{item.<field>}}` and `${{item_index}}`. Later steps read `${{result.<target>.items}}` (per-item results in item order). A soft item failure lets the others finish, then routes by the target's `on_error`.
+- `flow:decision` carries `labels`, `routes` and `routeError` for multi decisions; per-agent events of a fan-out instance carry `itemIndex` / `itemCount`; the TUI shows instances as `<stepId>[i]` cards.
+
+### Changed
+
+- **Behaviour change — untaken decision branches are `skipped`.** Every decision (not only forks) gives a forward branch target that was not taken a `skipped` result if it has none, so `${{result.<step>.status}}` of a jumped-over optional step reads `skipped` instead of `""`.
+- **Behaviour change — reserved names.** On a multi decision, `branches`, `routes` and `items` are reserved outputs, and a multi decision's agent must not declare an output named `branches`. `${{item…}}` is valid only in a fan-out target.
+- In a multi decision's group, unchosen steps are overwritten with `skipped` (stale results from an earlier loop pass do not survive); at `max_iterations` a multi decision acts as if it chose nothing instead of falling through.
+- Observer callbacks `onToolCall` / `onToolResult` / `onAssistantText` / `onThinkingText` gain an optional trailing `item` argument; `onExtensionUIRequest` an optional `meta` argument.
+
 ## [v0.9.0] - 2026-11-03
 
 ### Added
