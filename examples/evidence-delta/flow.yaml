@@ -1,0 +1,22 @@
+name: evidence-delta
+description: >-
+  OPT-IN isolated read-only mission evidence recon; no mutation,
+  no automatic follow-up
+task_required: true
+task_prompt: >-
+  Ask one bounded evidence question about the frozen PiB+ test mission.
+  Do not supply new approvals.
+steps:
+  - id: reconcile
+    type: agent
+    agent: role-evidence-delta
+    task: >
+      Reconcile this bounded question against only the four provided
+      source files.
+      Identify any mandatory Human Gate, then emit an advisory minimal Delta
+      or NO_ACTION with evidence. Do not execute, write, authorize, or audit.
+      Question: ${{task}}
+      The files are an OFFLINE copy, so current native state remains UNKNOWN.
+      A completed investigation must finish status=complete even if the proposed
+      action is NO_ACTION/STOP. Only use blocked if the investigation itself
+      cannot finish; do not equate a denied operation with an agent error.
