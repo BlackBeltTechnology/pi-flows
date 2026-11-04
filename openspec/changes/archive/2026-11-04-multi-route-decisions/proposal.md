@@ -26,8 +26,8 @@ Two earlier proposals added new constructs for this: a `when:` guard on every st
 - **Events:**
   - `flow:decision` adds `labels` and `routes: [{ branch, itemCount? }]`;
   - every per-agent event of an item run carries `itemIndex` and `itemCount`;
-  - the TUI shows item cards as `agent[i]`.
-- **Optional steps need no new construct.** A two-branch decision (`run: e2e` / `skip: <next>`) already jumps past an optional step of any type. This change also gives every jumped-over step a `skipped` result, which is missing today for separators.
+  - the TUI shows item cards as `<stepId>[i]`.
+- **Optional steps need no new construct.** A two-branch decision (`run: e2e` / `skip: <next>`) already jumps past an optional step of any type. This change also gives every untaken decision branch target a `skipped` result, which forks already did.
 - **Supersedes** `map-step` and `node-when-guard` (removed). Forks are unchanged.
 
 ## Capabilities
@@ -60,13 +60,12 @@ Two earlier proposals added new constructs for this: a `when:` guard on every st
   - forks;
   - resumable runs (flows are not resumable; see `docs/architecture.md`);
   - multi-label classifier questions.
-- **Dashboard (companion repo):** pi-agent-dashboard must key cards on `stepId` + `itemIndex`. Until then, browser cards of one fanned-out step overwrite each other.
 - **Docs:** `docs/flows.md`, `docs/flow-authoring.md`, `docs/events-api.md`, `docs/architecture.md`, `docs/public-api.md`.
 - **Behaviour changes called out:**
   - in a multi decision's segment, unchosen steps are overwritten with `skipped`;
   - a multi decision at its loop cap skips the segment instead of falling through;
   - `${{item…}}` becomes a reserved template prefix;
-  - jumped-over separators get `skipped` results.
+  - untaken decision branch targets get `skipped` results (previously forks only).
 - **Used by:** `batch-apply-example`, which must be rewritten on top of this change. `plan-wave` becomes a multi code-decision returning one `apply` route whose items carry the change name and its worktree path; `collect-wave` reads `${{result.apply.items}}`.
 
 ## Discipline Skills
