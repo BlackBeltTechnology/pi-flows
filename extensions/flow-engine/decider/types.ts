@@ -9,6 +9,8 @@ export type Mode = "shadow" | "enforce";
 /** One classifier (or agent) answer to the decision's single choice question. */
 export interface DecisionAnswer {
   label: string;
+  /** Multi decision (agent only): every chosen label, possibly empty. `label` is the first or "". */
+  labels?: string[];
   confidence: number;
   probabilities?: Record<string, number>;
   /** System One calibration mode; absent for pi-ai classifiers and agents. */
@@ -47,6 +49,8 @@ export interface DecisionAttempt {
   entry: string;
   outcome: AttemptOutcome;
   label?: string;
+  /** Multi decision: every chosen label. */
+  labels?: string[];
   confidence?: number;
   mode?: Mode;
   trusted?: boolean;
@@ -58,7 +62,7 @@ export interface DecisionAttempt {
 }
 
 export type DecisionOutcome =
-  | { ok: true; label: string; routedBy: string; attempts: DecisionAttempt[]; payload?: unknown }
+  | { ok: true; label: string; labels?: string[]; routedBy: string; attempts: DecisionAttempt[]; payload?: unknown }
   | { ok: false; attempts: DecisionAttempt[]; aborted?: boolean; payload?: unknown };
 
 export interface DecisionQuestion {

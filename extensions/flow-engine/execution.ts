@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentResult, ParsedResult, TemplateContext, ToolCallRecord } from "./types.js";
+import type { AgentConfig, AgentResult, ParsedResult, StepResultValue, TemplateContext, ToolCallRecord } from "./types.js";
 import { classifyAgentOutcome } from "./failure.js";
 import { createFinishLatch, describeBadFinish } from "./finish-latch.js";
 import type { ExtensionAPI, ExtensionFactory, ExtensionUIContext, ModelRuntime, ResourceLoader } from "@earendil-works/pi-coding-agent";
@@ -70,7 +70,7 @@ export function loadContextFiles(
 
 // Template variable expansion
 export function expandTemplateVariables(template: string, ctx: TemplateContext): string {
-  return template
+  return expandItemVariables(template, ctx)
     // Primary syntax: ${{...}}
     .replace(/\$\{\{task\}\}/g, () => ctx.task)
     .replace(/\$\{\{input\.([\w-]+)\}\}/g, (_, name) => ctx.inputs[name] ?? "")
@@ -85,7 +85,7 @@ export function expandTemplateVariables(template: string, ctx: TemplateContext):
     // Catch-all for typed outputs: ${{result.STEP.anyField}} resolves against the
     // typed `outputs` map and is serialized at this text boundary (compact JSON
     // for non-strings). Standard fields above are matched first.
-    .replace(/\$\{\{result\.([\w-]+)\.([\w]+)\}\}/g, (_, id, field) => serializeForText(ctx.results[id]?.outputs?.[field]))
+    .replace(/\$\{\{result\.([\w-]+)\.([\w]+)\}\}/g, (_, id, field) => serializeForText(resultField(ctx.results[id], field)))
     .replace(/\$\{\{result\.([\w-]+)\}\}/g, (_, id) => ctx.results[id]?.fullOutput ?? "")
     // 1-based: an uninitialized counter (e.g. the first loop-body pass, before
     // the decision step has run) resolves to 1 so body and decision agree.
@@ -117,6 +117,33 @@ export function serializeForText(v: unknown): string {
   try { return JSON.stringify(v); } catch { return String(v); }
 }
 
+/**
+ * A typed result field: a fan-out target's `items` (change:
+ * multi-route-decisions), else the declared output of that name.
+ */
+function resultField(r: StepResultValue | undefined, field: string): unknown {
+  if (!r) return undefined;
+  if (field === "items" && r.items !== undefined) return r.items;
+  return r.outputs?.[field];
+}
+
+/**
+ * Fan-out instance variables: `${{item}}` (strings raw, others compact JSON),
+ * `${{item.<field>}}` (one level, "" when absent) and `${{item_index}}`.
+ * Outside an instance they are left untouched.
+ */
+function expandItemVariables(template: string, ctx: TemplateContext): string {
+  const it = ctx.item;
+  if (!it) return template;
+  return template
+    .replace(/\$\{\{item_index\}\}/g, () => String(it.index))
+    .replace(/\$\{\{item\.([\w-]+)\}\}/g, (_, field) => {
+      const v = it.value;
+      return v && typeof v === "object" && !Array.isArray(v) ? serializeForText((v as Record<string, unknown>)[field]) : "";
+    })
+    .replace(/\$\{\{item\}\}/g, () => serializeForText(it.value));
+}
+
 const WHOLE_RESULT_FIELD = /^\$\{\{result\.([\w-]+)\.([\w]+)\}\}$/;
 const WHOLE_RESULT_BARE = /^\$\{\{result\.([\w-]+)\}\}$/;
 const WHOLE_FLOW_INPUT = /^\$\{\{flow\.input\.([\w-]+)\}\}$/;
@@ -137,7 +164,7 @@ export function resolveCodeInput(template: string, ctx: TemplateContext): unknow
       case "summary": return r.summary;
       // A declared output of the same name wins (as in text expansion).
       case "fullOutput": return r.outputs?.fullOutput !== undefined ? r.outputs.fullOutput : r.fullOutput;
-      default: { const v = r.outputs?.[m[2]]; return v === undefined ? "" : v; }
+      default: { const v = resultField(r, m[2]); return v === undefined ? "" : v; }
     }
   }
   const b = template.match(WHOLE_RESULT_BARE);
@@ -191,6 +218,8 @@ export interface SpawnOptions {
   onThinkingText?: (text: string) => void;
   onExtensionUIRequest?: (request: any, respond: (response: any) => void) => void;
   decisionBranches?: string[];
+  /** Multi decision: finish takes `branches` (change: multi-route-decisions). */
+  decisionMulti?: boolean;
   signal?: AbortSignal;
   /** Pre-resolved model ID — when provided, skips model resolution. */
   resolvedModelId?: string;
@@ -427,6 +456,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     requireFinish: true,
     accessRules,
     decisionBranches: options.decisionBranches,
+    decisionMulti: options.decisionMulti,
     agentOutputs: agent.outputs,
     allowAskUser: !!options.onExtensionUIRequest,
   };
@@ -656,6 +686,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
           badFinishCount++;
           badFinishMessage = describeBadFinish(finishArgsById.get(event.toolCallId), {
             decisionBranches: options.decisionBranches,
+            decisionMulti: options.decisionMulti,
             outputNames: (agent.outputs ?? []).map((o) => o.name),
             errorText: typeof output === "string" ? output : rawResult?.content?.[0]?.text,
           });

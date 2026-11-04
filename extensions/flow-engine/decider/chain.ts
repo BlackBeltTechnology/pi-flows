@@ -81,7 +81,7 @@ export interface DecideRequest extends TrustPolicy {
 export async function decide(req: DecideRequest): Promise<DecisionOutcome> {
   const attempts: DecisionAttempt[] = [];
   const timeoutMs = req.timeoutMs ?? DECIDER_TIMEOUT_MS;
-  let routed: { label: string; entry: string; payload?: unknown } | undefined;
+  let routed: { label: string; labels?: string[]; entry: string; payload?: unknown } | undefined;
   let lastPayload: unknown;
 
   for (const entry of req.entries) {
@@ -133,13 +133,24 @@ export async function decide(req: DecideRequest): Promise<DecisionOutcome> {
     const base = {
       entry,
       label: a.label,
+      ...(a.labels ? { labels: a.labels } : {}),
       confidence: a.confidence,
       ...(a.mode ? { mode: a.mode } : {}),
       ...(a.model ? { model: a.model } : {}),
       ...(a.usage !== undefined ? { usage: a.usage } : {}),
       latencyMs,
     };
-    if (!req.labels.includes(a.label)) {
+    if (a.labels) {
+      const bad = a.labels.filter((l) => !req.labels.includes(l));
+      const dup = a.labels.filter((l, i) => a.labels!.indexOf(l) !== i);
+      if (bad.length || dup.length) {
+        const reason = bad.length
+          ? `${bad.map((l) => `"${l}"`).join(", ")} not one of: ${req.labels.join(", ")}`
+          : `duplicate ${[...new Set(dup)].map((l) => `"${l}"`).join(", ")}`;
+        attempts.push({ ...base, outcome: "invalid-label", reason });
+        continue;
+      }
+    } else if (!req.labels.includes(a.label)) {
       attempts.push({ ...base, outcome: "invalid-label", reason: `"${a.label}" is not one of: ${req.labels.join(", ")}` });
       continue;
     }
@@ -149,7 +160,7 @@ export async function decide(req: DecideRequest): Promise<DecisionOutcome> {
       continue;
     }
     attempts.push({ ...base, outcome: "ok", trusted: true });
-    routed = { label: a.label, entry, payload: res.payload };
+    routed = { label: a.label, ...(a.labels ? { labels: a.labels } : {}), entry, payload: res.payload };
     break;
   }
 
@@ -157,7 +168,7 @@ export async function decide(req: DecideRequest): Promise<DecisionOutcome> {
   for (const at of attempts) {
     if (at.outcome === "untrusted" && at.label !== undefined) at.agreed = at.label === routed.label;
   }
-  return { ok: true, label: routed.label, routedBy: routed.entry, attempts, payload: routed.payload };
+  return { ok: true, label: routed.label, ...(routed.labels ? { labels: routed.labels } : {}), routedBy: routed.entry, attempts, payload: routed.payload };
 }
 
 /** Human-readable list of attempts for an exhausted-chain error. */

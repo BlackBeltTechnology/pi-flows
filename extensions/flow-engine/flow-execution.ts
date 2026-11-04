@@ -1,4 +1,4 @@
-import type { DeciderSpec, DecisionEvent, AgentStartedExtra, FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue } from "./types.js";
+import type { DeciderSpec, DecisionEvent, AgentStartedExtra, FlowConfig, FlowStep, AgentStep, ForkStep, AgentDecisionStep, TemplateContext, AgentResult, FlowResult, CodeStep, CodeDecisionStep, NodeKind, StepResultValue, ItemRef } from "./types.js";
 import { executeCodeStep } from "./execute-code-step.js";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
 import { expandTemplateVariables, spawnAgent, loadContextFiles } from "./execution.js";
@@ -61,6 +61,8 @@ export interface FlowContext {
    * parallel steps abort cooperatively (reuses the user-abort path).
    */
   requestHalt?: () => void;
+  /** Internal: steps that are fan-out branch targets (their skipped result carries `items: []`). */
+  fanoutTargets?: Set<string>;
 }
 
 export interface FlowRunOptions {
@@ -99,12 +101,13 @@ export interface FlowRunOptions {
   getSkill?: (name: string) => Skill | undefined;
   askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
   onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => void;
-  onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }) => void;
-  onToolCall?: (agentName: string, stepId: string, toolName: string, input: any) => void;
-  onToolResult?: (agentName: string, stepId: string, toolName: string, output: any, isError: boolean) => void;
-  onAssistantText?: (agentName: string, stepId: string, text: string) => void;
-  onThinkingText?: (agentName: string, stepId: string, text: string) => void;
-  onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void) => void;
+  onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string; itemIndex?: number; itemCount?: number }) => void;
+  // `item` is set for a fan-out instance (change: multi-route-decisions).
+  onToolCall?: (agentName: string, stepId: string, toolName: string, input: any, item?: ItemRef) => void;
+  onToolResult?: (agentName: string, stepId: string, toolName: string, output: any, isError: boolean, item?: ItemRef) => void;
+  onAssistantText?: (agentName: string, stepId: string, text: string, item?: ItemRef) => void;
+  onThinkingText?: (agentName: string, stepId: string, text: string, item?: ItemRef) => void;
+  onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void, meta?: { stepId: string; item?: ItemRef }) => void;
   onLoopIteration?: (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => void;
   isAutonomous?: () => boolean;
   onAutoDecision?: (forkId: string, agentName: string, chosenBranch: string, targetStepId: string, detail?: { confidence?: number }) => void;
@@ -115,7 +118,15 @@ export interface FlowRunOptions {
 // ---- Segment types ---------------------------------------------------------
 
 type Segment =
-  | { type: "dag"; steps: AgentStep[]; activeSteps?: Set<string> }
+  | {
+      type: "dag";
+      steps: AgentStep[];
+      activeSteps?: Set<string>;
+      /** Set by a multi decision for one run: inactive steps get `skipped`, replacing earlier results. */
+      overwriteSkipped?: boolean;
+      /** Set by a multi decision for one run: fan-out target → its items. */
+      fanout?: Map<string, unknown[]>;
+    }
   | { type: "separator"; step: FlowStep };
 
 // ---- Public API ------------------------------------------------------------
@@ -169,6 +180,7 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
     steps: flow.steps,
     pendingForkContext: new Map(),
     hardFail: null,
+    fanoutTargets: fanoutTargetsOf(flow.steps),
   };
 
   // Hard-fail halt reuses the user-abort path (abort-utils) with a DISTINCT
@@ -201,7 +213,14 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
 
       if (segment.type === "dag") {
 
-        const dagResult = await runDagSegment(segment.steps, maxConcurrent, ctx, effectiveOptions, segment.activeSteps);
+        const multiRun = segment.overwriteSkipped ? { overwriteSkipped: true, fanout: segment.fanout } : undefined;
+        if (multiRun) {
+          // One-shot: a multi decision re-routes on every entry.
+          segment.overwriteSkipped = undefined;
+          segment.fanout = undefined;
+        }
+        const dagResult = await runDagSegment(segment.steps, maxConcurrent, ctx, effectiveOptions, segment.activeSteps, multiRun);
+        if (multiRun) segment.activeSteps = undefined;
         if (dagResult.lastResult) lastResult = dagResult.lastResult;
 
         // A node hard-failed (or soft-failed with no on_error): halt the flow.
@@ -237,7 +256,24 @@ export async function runFlow(options: FlowRunOptions): Promise<FlowResult> {
         }
         if (ctx.hardFail) break;
 
-        if (segment.step.stepType === "fork") markUntakenBranchesSkipped(ctx, segment.step, stepResult);
+        // Multi decision: activate the union of the chosen targets in the next
+        // segment (every other step there is skipped); fan-out targets run per item.
+        if (stepResult.multi) {
+          const nextIdx = segmentIndex + 1;
+          const nextSeg = segments[nextIdx];
+          if (nextSeg?.type === "dag") {
+            const active = new Set<string>();
+            for (const t of stepResult.multi.targets) for (const a of computeActiveSteps(nextSeg.steps, t)) active.add(a);
+            nextSeg.activeSteps = active;
+            nextSeg.overwriteSkipped = true;
+            nextSeg.fanout = stepResult.multi.items;
+          }
+          segmentIndex = nextIdx;
+          continue;
+        }
+
+        const st = segment.step.stepType;
+        if (st === "fork" || st === "agent-decision" || st === "code-decision") markUntakenBranchesSkipped(ctx, segment.step, stepResult);
 
         // Multi-select fork: the selected branches already ran inside the fork.
         // Continue in the furthest branch segment with only the steps reachable
@@ -421,6 +457,7 @@ async function runDagSegment(
   ctx: FlowContext,
   options: FlowRunOptions,
   activeSteps?: Set<string>,
+  multiRun?: { overwriteSkipped: boolean; fanout?: Map<string, unknown[]> },
 ): Promise<DagSegmentResult> {
   const completed = new Set<string>();
   let lastResult: AgentResult | null = null;
@@ -447,8 +484,9 @@ async function runDagSegment(
         // Store synthetic "skipped" result so blockedBy refs auto-satisfy. A
         // step that already has a result (e.g. completed before a loop
         // re-entered this segment) keeps it.
-        if (!ctx.results[step.id]) {
-          ctx.results[step.id] = { fullOutput: "", status: "skipped" as const, summary: "", outputs: {} };
+        // A multi decision's segment replaces stale results from an earlier pass.
+        if (!ctx.results[step.id] || multiRun?.overwriteSkipped) {
+          ctx.results[step.id] = skippedValue(ctx, step.id);
         }
         // Don't emit events for skipped agents — they stay "pending" in the dashboard
       }
@@ -513,7 +551,10 @@ async function runDagSegment(
     try {
       results = await raceWithAbort(
         Promise.all(batch.map(async (step) => {
-          const r = await executeAgentStep(step, ctx, options);
+          const items = multiRun?.fanout?.get(step.id);
+          const r = items
+            ? await runFanoutInstances(step, items, Math.max(1, maxConcurrent - (batch.length - 1)), ctx, options)
+            : await executeAgentStep(step, ctx, options);
           if (r && !ctx.hardFail && resolveRouteOutcome(r, step.on_error) === "hard") {
             completed.add(step.id);
             lastResult = r;
@@ -585,7 +626,7 @@ async function runDagSegment(
             for (const s of steps) {
               if (!reachable.has(s.id) && !completed.has(s.id)) {
                 completed.add(s.id);
-                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", outputs: {} };
+                ctx.results[s.id] = skippedValue(ctx, s.id);
               }
             }
           } else {
@@ -593,7 +634,7 @@ async function runDagSegment(
             for (const s of steps) {
               if (!completed.has(s.id)) {
                 completed.add(s.id);
-                ctx.results[s.id] = { fullOutput: "", status: "skipped", summary: "", outputs: {} };
+                ctx.results[s.id] = skippedValue(ctx, s.id);
               }
             }
             return { lastResult, routeToStepId: routeTarget };
@@ -613,18 +654,20 @@ interface StepResult {
   nextStepId?: string;
   /** Multi-select fork: branch step ids already run inside the fork. */
   ranBranches?: string[];
+  /** Multi decision: chosen forward targets (possibly none) and fan-out items per target. */
+  multi?: { targets: string[]; items: Map<string, unknown[]> };
 }
 
 /**
  * Store a synthetic "skipped" result for every forward branch target of a fork
  * that was not taken (and has no result yet), whatever the target's step type.
  */
-function markUntakenBranchesSkipped(ctx: FlowContext, step: ForkStep, stepResult: StepResult): void {
+function markUntakenBranchesSkipped(ctx: FlowContext, step: { id: string; branches?: Record<string, string> }, stepResult: StepResult): void {
   if (!stepResult.nextStepId && !stepResult.ranBranches) return;
   const taken = new Set([stepResult.nextStepId, ...(stepResult.ranBranches ?? [])]);
   for (const target of Object.values(step.branches ?? {})) {
     if (taken.has(target) || ctx.results[target] || isBackwardTarget(ctx.steps, step.id, target)) continue;
-    ctx.results[target] = { fullOutput: "", status: "skipped", summary: "", outputs: {} };
+    ctx.results[target] = skippedValue(ctx, target);
   }
 }
 
@@ -791,7 +834,14 @@ function decisionAgentMissing(pick: { name: string; source: string }): AgentResu
   };
 }
 
-async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: FlowRunOptions): Promise<AgentResult | null> {
+async function executeAgentStep(
+  step: AgentStep,
+  ctx: FlowContext,
+  options: FlowRunOptions,
+  item?: { value: unknown; index: number; count: number },
+): Promise<AgentResult | null> {
+  const ref: ItemRef | undefined = item ? { index: item.index, count: item.count } : undefined;
+  const itemExtra = item ? { itemIndex: item.index, itemCount: item.count } : {};
   const agentConfig = options.getAgent(step.agent);
   if (!agentConfig) {
     const errorResult: AgentResult = {
@@ -804,14 +854,14 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       duration: 0,
       tokens: { input: 0, output: 0 },
     };
-    options.onAgentStarted?.(step.agent, step.id, undefined, { nodeKind: "agent" });
-    options.onAgentComplete?.(step.agent, step.id, errorResult, { nodeKind: "agent" });
+    options.onAgentStarted?.(step.agent, step.id, undefined, { nodeKind: "agent", ...itemExtra });
+    options.onAgentComplete?.(step.agent, step.id, errorResult, { nodeKind: "agent", ...itemExtra });
     return errorResult;
   }
 
   // Resolve model early so it's available for onAgentStarted observers
   const pre = preResolveModel(agentConfig, options);
-  options.onAgentStarted?.(step.agent, step.id, pre.resolvedModelId, { nodeKind: "agent", ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
+  options.onAgentStarted?.(step.agent, step.id, pre.resolvedModelId, { nodeKind: "agent", ...itemExtra, ...(pre.fallback ? { modelFallback: pre.fallback } : {}) });
 
   // Resolve step inputs at dispatch time via plain template expansion (strings).
   // File-backed data is passed as a PATH and read just-in-time by the agent's
@@ -825,6 +875,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
       results: ctx.results,
       loopCounters: ctx.loopCounters,
       loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
+      ...(item ? { item: { value: item.value, index: item.index } } : {}),
     };
     for (const [name, expr] of Object.entries(step.inputs)) {
       resolvedInputs[name] = expandTemplateVariables(expr, resolveCtx);
@@ -837,6 +888,7 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     results: ctx.results,
     loopCounters: ctx.loopCounters,
     loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
+    ...(item ? { item: { value: item.value, index: item.index } } : {}),
   };
 
   // Determine user message: step task override or fallback to flow task
@@ -889,19 +941,178 @@ async function executeAgentStep(step: AgentStep, ctx: FlowContext, options: Flow
     mainSessionManager: options.mainSessionManager,
     extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
-    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input),
-    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err),
-    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text),
-    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text),
+    onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input, ref),
+    onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err, ref),
+    onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text, ref),
+    onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text, ref),
     onExtensionUIRequest: options.onExtensionUIRequest
-      ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond)
+      ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond, { stepId: step.id, ...(ref ? { item: ref } : {}) })
       : undefined,
     signal: options.signal,
     ...pre.spawn,
   });
 
-  options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent" });
+  options.onAgentComplete?.(step.agent, step.id, result, { nodeKind: "agent", ...itemExtra });
   return result;
+}
+
+// ---- Fan-out (change: multi-route-decisions) --------------------------------
+
+/** Every step that is the target of a fan-out branch. */
+function fanoutTargetsOf(steps: FlowStep[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of steps) {
+    const fan = (s as { branchFanout?: Record<string, unknown> }).branchFanout;
+    const br = (s as { branches?: Record<string, string> }).branches;
+    if (fan && br) for (const label of Object.keys(fan)) if (br[label]) out.add(br[label]);
+  }
+  return out;
+}
+
+/** A synthetic `skipped` result; a fan-out target's carries `items: []`. */
+function skippedValue(ctx: FlowContext, stepId: string): StepResultValue {
+  return {
+    fullOutput: "", status: "skipped", summary: "", outputs: {},
+    ...(ctx.fanoutTargets?.has(stepId) ? { items: [] } : {}),
+  };
+}
+
+const toValue = (r: AgentResult): StepResultValue => ({
+  status: r.result.status,
+  summary: r.result.summary,
+  fullOutput: r.output,
+  outputs: r.typedOutputs ?? {},
+});
+
+/**
+ * Run the target step once per item (at most `poolSize` at a time) and fold the
+ * instances into one aggregate result. A soft instance failure lets siblings
+ * finish; a hard one halts the run and stops launching instances.
+ */
+async function runFanoutInstances(
+  step: AgentStep,
+  items: unknown[],
+  poolSize: number,
+  ctx: FlowContext,
+  options: FlowRunOptions,
+): Promise<AgentResult> {
+  const count = items.length;
+  const results: Array<AgentResult | null> = new Array(count).fill(null);
+  let next = 0;
+  let hard: AgentResult | undefined;
+  const worker = async () => {
+    while (next < count && !hard && !options.signal?.aborted) {
+      const index = next++;
+      const r = await executeAgentStep(step, ctx, options, { value: items[index], index, count });
+      results[index] = r;
+      if (r && r.outcome === "hard" && !hard) {
+        hard = r;
+        if (!ctx.hardFail) {
+          ctx.hardFail = r.failureInfo ?? { outcome: "hard", message: r.output || "Hard failure", source: "node_hard_fail" };
+          ctx.requestHalt?.();
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(poolSize, Math.max(count, 1)) }, worker));
+
+  const values: StepResultValue[] = results.map((r) =>
+    r ? toValue(r) : { status: options.signal?.aborted ? "aborted" : "skipped", summary: "", fullOutput: "", outputs: {} });
+  const complete = values.filter((v) => v.status === "complete").length;
+  const failed = count - complete;
+  const allOk = failed === 0;
+  const summary = count === 0 ? "0 items" : `${count} items: ${complete} complete, ${failed} failed`;
+  const outcome = hard ? "hard" : allOk ? "success" : "soft";
+  const aggregate: AgentResult = {
+    success: allOk,
+    output: "",
+    stderr: "",
+    exitCode: allOk ? 0 : 1,
+    result: { status: allOk ? "complete" : "error", summary, files: [], artifacts: "" },
+    toolCalls: [],
+    duration: results.reduce((d, r) => d + (r?.duration ?? 0), 0),
+    tokens: results.reduce((t, r) => ({ input: t.input + (r?.tokens.input ?? 0), output: t.output + (r?.tokens.output ?? 0) }), { input: 0, output: 0 }),
+    outcome,
+    ...(outcome !== "success" ? { failureInfo: hard?.failureInfo ?? { outcome, message: `"${step.id}": ${summary}`, source: "fanout_item_failed" } } : {}),
+    items: values,
+  };
+  if (hard) storeResult(ctx, step.id, aggregate);
+  return aggregate;
+}
+
+/**
+ * Resolve the routes of a `multi: true` decision (change: multi-route-decisions):
+ * a backward branch alone loops (or, at the cap, chooses nothing); a backward
+ * branch with other routes, a non-array `for_each`, or more items than
+ * `max_items` soft-fails the decision; otherwise the chosen forward targets
+ * activate the next segment. `decision` is the decision's own result; it is
+ * stored first so `for_each` may reference the decision's outputs.
+ */
+function resolveMultiRoutes(
+  step: (AgentDecisionStep | CodeDecisionStep),
+  routes: Array<{ branch: string; items?: unknown[] }>,
+  decision: AgentResult,
+  ctx: FlowContext,
+  options: FlowRunOptions,
+): { stepResult: StepResult; routes: Array<{ branch: string; itemCount?: number }>; routeError?: string } {
+  const fail = (message: string) => {
+    const failed: AgentResult = {
+      ...decision,
+      success: false,
+      output: message,
+      result: { ...decision.result, status: "error", summary: message },
+      outcome: "soft",
+      failureInfo: { outcome: "soft", message, source: "multi_route_failed" },
+    };
+    return { stepResult: routeExhaustedDecision(failed, step.on_error), routes: [], routeError: message };
+  };
+
+  const labels = routes.map((r) => r.branch);
+  const backward = labels.filter((l) => isBackwardTarget(ctx.steps, step.id, step.branches[l]));
+  if (backward.length && labels.length > 1) {
+    return fail(`${step.stepType} "${step.id}": a loop branch must be chosen alone (got ${labels.map((l) => `"${l}"`).join(", ")})`);
+  }
+  if (backward.length === 1) {
+    const { nextStepId } = routeDecisionBranch(step, ctx, options, backward[0]);
+    if (nextStepId) return { stepResult: { agentResult: decision, nextStepId }, routes: [{ branch: backward[0] }] };
+    // Cap reached: the multi decision acts as if it chose nothing.
+    return { stepResult: { agentResult: decision, multi: { targets: [], items: new Map() } }, routes: [] };
+  }
+
+  storeResult(ctx, step.id, decision);
+  const templateCtx: TemplateContext = {
+    task: ctx.task, inputs: {}, results: ctx.results,
+    loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
+  };
+  const targets: string[] = [];
+  const items = new Map<string, unknown[]>();
+  const out: Array<{ branch: string; itemCount?: number }> = [];
+  for (const r of routes) {
+    const target = step.branches[r.branch];
+    targets.push(target);
+    const fan = step.branchFanout?.[r.branch];
+    if (!fan) { out.push({ branch: r.branch }); continue; }
+    let list: unknown[];
+    if (r.items) list = r.items;
+    else if (fan.for_each === "dynamic") list = [];
+    else {
+      const raw = expandTemplateVariables(fan.for_each, templateCtx).trim();
+      let parsed: unknown = raw;
+      if (raw === "") parsed = [];
+      else { try { parsed = JSON.parse(raw); } catch { /* not JSON */ } }
+      if (!Array.isArray(parsed)) {
+        return fail(`${step.stepType} "${step.id}": branch "${r.branch}" for_each must resolve to an array (got ${JSON.stringify(raw.slice(0, 80))})`);
+      }
+      list = parsed;
+    }
+    const max = fan.max_items ?? 50;
+    if (list.length > max) {
+      return fail(`${step.stepType} "${step.id}": branch "${r.branch}" has ${list.length} items, more than max_items ${max}`);
+    }
+    items.set(target, list);
+    out.push({ branch: r.branch, itemCount: list.length });
+  }
+  return { stepResult: { agentResult: decision, multi: { targets, items } }, routes: out };
 }
 
 /**
@@ -1121,6 +1332,11 @@ async function executeCodeDecisionStep(step: CodeDecisionStep, ctx: FlowContext,
     return { agentResult: result, nextStepId: undefined };
   }
 
+  if (step.multi) {
+    const routes = (result.finishParams?.routes ?? []) as Array<{ branch: string; items?: unknown[] }>;
+    return resolveMultiRoutes(step, routes, result, ctx, options).stepResult;
+  }
+
   const branch = result.finishParams?.branch as string | undefined;
 
   // Off-map branch is a hard failure (consistent with agent-decision), halting
@@ -1181,6 +1397,7 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
         extraAgentExtensions: options.extraAgentExtensions,
         extraCustomTools: filterExtensionTools(options.extraCustomTools, decisionConfig.tools),
         decisionBranches: branchNames,
+        decisionMulti: step.multi === true,
         onToolCall: (name, input) => options.onToolCall?.(agentName, step.id, name, input),
         onToolResult: (name, output, err) => options.onToolResult?.(agentName, step.id, name, output, err),
         onAssistantText: (text) => options.onAssistantText?.(agentName, step.id, text),
@@ -1193,7 +1410,17 @@ async function executeAgentDecisionStep(step: AgentDecisionStep, ctx: FlowContex
     },
   });
 
-  if (run.label === undefined) return routeExhaustedDecision(run.result, step.on_error);
+  if (run.label === undefined) {
+    run.emit?.({});
+    return routeExhaustedDecision(run.result, step.on_error);
+  }
+
+  if (step.multi) {
+    const labels = run.labels ?? [];
+    const m = resolveMultiRoutes(step, labels.map((branch) => ({ branch })), run.result, ctx, options);
+    run.emit?.({ labels, routes: m.routes, ...(m.routeError ? { routeError: m.routeError } : {}) });
+    return m.stepResult;
+  }
 
   // A backward branch target loops (bounded by max_iterations); a forward target exits.
   const { nextStepId } = routeDecisionBranch(step, ctx, options, run.label);
@@ -1237,6 +1464,10 @@ interface RunDecisionArgs {
 interface DecisionRun {
   /** Routed label; undefined when the chain was exhausted. */
   label?: string;
+  /** Multi decision: every chosen label (possibly empty). */
+  labels?: string[];
+  /** Multi decision: emit `flow:decision` after routes are resolved. */
+  emit?: (extra: Partial<DecisionEvent>) => void;
   /** Result to report for the step (agent result, synthetic classifier result, or failure). */
   result: AgentResult;
   /** Agent name or classifier entry that decided (for fork context / auto-decision). */
@@ -1252,7 +1483,10 @@ interface DecisionRun {
 async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
   const { step, options } = a;
   const labels = Object.keys(step.branches);
+  const multi = (step as { multi?: boolean }).multi === true;
   const resolved = resolveDecider(step.decider, options.flow.decider, options.decider);
+  // Classifiers answer one label; they never decide a multi decision.
+  if (multi) resolved.entries = ["agent"];
 
   let declaredState: Record<string, string> | undefined;
   if (step.state) {
@@ -1278,17 +1512,22 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
     question,
     agentEntry: async (): Promise<EntryResult> => {
       const { result, agentName: name } = await a.runAgent(
-        decisionAgentContext(labels, step.branchMeans, declaredState),
+        decisionAgentContext(labels, step.branchMeans, declaredState, multi),
       );
       agentName = name;
       const branch = result.finishParams?.branch;
+      const chosen = result.finishParams?.branches;
       // A decision agent that reports it could not finish has not decided,
       // even if it also named a branch.
       const status = result.result?.status;
       if (result.finishParams && (status === "blocked" || status === "error")) {
         return { ok: false, outcome: "invalid-label", reason: capReason(`the decision agent finished with status ${status}`), payload: result };
       }
-      if (typeof branch === "string" && branch) {
+      if (multi) {
+        if (Array.isArray(chosen) && chosen.every((b) => typeof b === "string")) {
+          return { ok: true, authoritative: true, answer: { label: chosen[0] ?? "", labels: chosen, confidence: 1 }, payload: result };
+        }
+      } else if (typeof branch === "string" && branch) {
         return { ok: true, authoritative: true, answer: { label: branch, confidence: 1 }, payload: result };
       }
       // Never echo the agent's output/summary: the reason lands in `flow:decision`.
@@ -1306,15 +1545,18 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
     signal: options.signal,
   });
 
-  options.onDecision?.({
+  const event: DecisionEvent = {
     flowName: options.flow.name,
     stepId: step.id,
     nodeKind: a.nodeKind,
     consumerId: systemOneConsumerId(options.flow.name, step.id),
     chain: resolved.entries,
     attempts: outcome.attempts,
-    ...(outcome.ok ? { routedBy: outcome.routedBy, label: outcome.label } : {}),
-  });
+    ...(outcome.ok ? { routedBy: outcome.routedBy, ...(outcome.label ? { label: outcome.label } : {}) } : {}),
+  };
+  // A multi decision reports its routes after item expansion (the caller emits).
+  const emit = (extra: Partial<DecisionEvent>) => options.onDecision?.({ ...event, ...extra });
+  if (!multi) options.onDecision?.(event);
 
   if (!outcome.ok && outcome.aborted) throw new FlowCancelledError();
 
@@ -1336,11 +1578,11 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
       options.onAgentStarted?.("decider", step.id, undefined, { nodeKind: a.nodeKind });
       options.onAgentComplete?.("decider", step.id, failed, { nodeKind: a.nodeKind });
     }
-    return { result: failed, decidedBy: agentName };
+    return { result: failed, decidedBy: agentName, ...(multi ? { emit } : {}) };
   }
 
   if (outcome.routedBy === "agent" && payload) {
-    return { label: outcome.label, result: payload, decidedBy: agentName };
+    return { label: outcome.label, ...(outcome.labels ? { labels: outcome.labels } : {}), result: payload, decidedBy: agentName, ...(multi ? { emit } : {}) };
   }
 
   // A classifier routed: no agent session ran. Report a synthetic result.
@@ -1394,6 +1636,7 @@ function storeResult(ctx: FlowContext, stepId: string, result: AgentResult): voi
     summary: result.result.summary,
     // Typed declared outputs live in their own map, in real JSON types.
     outputs: result.typedOutputs ?? {},
+    ...(result.items ? { items: result.items } : {}),
   };
 }
 

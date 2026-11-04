@@ -181,7 +181,56 @@ export async function executeCodeStep(
   // validation. It is required, must be a string, and is never a declared data
   // output. The resolved branch travels to the router via finishParams.branch.
   let decisionBranch: string | undefined;
-  if (isDecision) {
+  let decisionRoutes: Array<{ branch: string; items?: unknown[] }> | undefined;
+  const multi = isDecision && (step as CodeDecisionStep).multi === true;
+  const ROUTING_KEYS = ["branch", "branches", "routes"];
+  if (multi) {
+    // Multi return contract (change: multi-route-decisions, D9): exactly one
+    // routing key; types; off-map labels (hard); duplicates; items only on
+    // fan-out branches. The cap and for_each expansion are checked by the router.
+    const fail = (msg: string, hard = false) => {
+      const r = hard
+        ? makeFailure({ outcome: "hard", message: `Code node "${step.id}": ${msg}`, source: "code_decision_off_map_branch" })
+        : makeSoftFailure(`Code node "${step.id}": ${msg}`);
+      options.onAgentComplete?.(step.id, step.id, r, lifecycle);
+      return r;
+    };
+    const present = ROUTING_KEYS.filter((k) => returned[k] !== undefined && returned[k] !== null);
+    if (present.length !== 1) {
+      return fail(present.length === 0
+        ? `missing routing key: a multi code-decision handler must return exactly one of { branch }, { branches } or { routes }`
+        : `more than one routing key (${present.join(", ")}): return exactly one of branch, branches or routes`);
+    }
+    const key = present[0];
+    const v = returned[key];
+    let routes: Array<{ branch: string; items?: unknown }>;
+    if (key === "branch") {
+      if (typeof v !== "string") return fail(`"branch" must be a string (got ${typeof v})`);
+      routes = [{ branch: v }];
+    } else if (key === "branches") {
+      if (!Array.isArray(v) || v.some((b) => typeof b !== "string")) return fail(`"branches" must be an array of branch names`);
+      routes = (v as string[]).map((b) => ({ branch: b }));
+    } else {
+      if (!Array.isArray(v) || v.some((r) => !r || typeof r !== "object" || typeof (r as any).branch !== "string")) {
+        return fail(`"routes" must be an array of { branch, items? }`);
+      }
+      routes = (v as Array<{ branch: string; items?: unknown }>).map((r) => ({ branch: r.branch, ...(r.items !== undefined ? { items: r.items } : {}) }));
+      const notArray = routes.find((r) => r.items !== undefined && !Array.isArray(r.items));
+      if (notArray) return fail(`route "${notArray.branch}": "items" must be an array`);
+    }
+    const branchesMap = (step as CodeDecisionStep).branches;
+    const offMap = routes.filter((r) => !(r.branch in branchesMap)).map((r) => r.branch);
+    if (offMap.length) {
+      return fail(`branch ${offMap.map((b) => `"${b}"`).join(", ")} is not in the branches map. Valid branches: ${Object.keys(branchesMap).join(", ")}`, true);
+    }
+    const labels = routes.map((r) => r.branch);
+    const dup = labels.filter((l, i) => labels.indexOf(l) !== i);
+    if (dup.length) return fail(`duplicate branch ${[...new Set(dup)].map((b) => `"${b}"`).join(", ")}`);
+    const fanout = (step as CodeDecisionStep).branchFanout ?? {};
+    const stray = routes.find((r) => r.items !== undefined && !fanout[r.branch]);
+    if (stray) return fail(`route "${stray.branch}" has items but branch "${stray.branch}" is not a fan-out branch (declare for_each)`);
+    decisionRoutes = routes as Array<{ branch: string; items?: unknown[] }>;
+  } else if (isDecision) {
     const rawBranch = returned.branch;
     if (rawBranch === undefined || rawBranch === null) {
       const missingBranch = makeSoftFailure(`Code node "${step.id}": missing reserved "branch" output (a code-decision handler must return { branch: ... })`);
@@ -208,6 +257,7 @@ export async function executeCodeStep(
   // No undeclared extra keys (the reserved `branch` key is allowed on code-decision)
   for (const key of Object.keys(returned)) {
     if (key === "branch" && isDecision) continue;
+    if (multi && ROUTING_KEYS.includes(key)) continue;
     if (!declaredNames.includes(key)) {
       const extraErr = makeSoftFailure(`Code node "${step.id}": undeclared output key "${key}" — remove it or add it to outputs:`);
       options.onAgentComplete?.(step.id, step.id, extraErr, lifecycle);
@@ -249,6 +299,7 @@ export async function executeCodeStep(
     // code-decision surfaces its chosen branch to the router the same way an
     // agent-decision does (via finishParams.branch); data outputs stay separate.
     ...(decisionBranch !== undefined ? { finishParams: { branch: decisionBranch } } : {}),
+    ...(decisionRoutes !== undefined ? { finishParams: { routes: decisionRoutes } } : {}),
   };
   options.onAgentComplete?.(step.id, step.id, successResult, lifecycle);
   return successResult;

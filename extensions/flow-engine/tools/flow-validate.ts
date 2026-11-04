@@ -592,6 +592,14 @@ export function validateFlowContent(
   // unknown-step check and the warning-level output-field check.
   const STANDARD_RESULT_FIELDS = new Set(["summary", "status", "fullOutput"]);
   const orderedBefore = computeOrderedBefore(flow);
+  // Fan-out branch targets (change: multi-route-decisions): `.items` is their
+  // standard field; their declared outputs live per item under `.items`.
+  const fanoutTargets = new Set<string>();
+  for (const st of flow.steps) {
+    const fan = (st as { branchFanout?: Record<string, unknown> }).branchFanout;
+    const br = (st as { branches?: Record<string, string> }).branches;
+    if (fan && br) for (const l of Object.keys(fan)) if (br[l]) fanoutTargets.add(br[l]);
+  }
 
   /** Declared output names for a referenced step, or null when not statically knowable. */
   const declaredOutputsOf = (refStepId: string): Set<string> | null => {
@@ -622,6 +630,24 @@ export function validateFlowContent(
       }
     }
     const stepInputs = (step as { inputs?: Record<string, string> }).inputs;
+    const stepFanout = (step as { branchFanout?: Record<string, { for_each: string }> }).branchFanout;
+    if (stepFanout) {
+      for (const [label, fan] of Object.entries(stepFanout)) {
+        if (fan.for_each !== "dynamic") templateStrings.push({ tpl: fan.for_each, prop: `branch.${label}` });
+      }
+    }
+    // `${{item…}}` is valid only in the task/inputs of a fan-out target.
+    if (!fanoutTargets.has(step.id)) {
+      const itemTexts = [stepTask ?? "", ...Object.values(stepInputs ?? {})];
+      if (itemTexts.some((t) => typeof t === "string" && /\$\{\{item(?:_index|\.[\w-]+)?\}\}/.test(t))) {
+        diagnostics.push({
+          line: stepPropLine(idx, step.id, "task") || stepLine(idx, step.id),
+          severity: "error",
+          message: `Step "${step.id}" uses \${{item}} but is not the target of a fan-out branch (for_each)`,
+          suggestion: "Use ${{item}}, ${{item.<field>}} and ${{item_index}} only in a step reached by a branch with for_each:",
+        });
+      }
+    }
     if (stepInputs) {
       for (const [key, val] of Object.entries(stepInputs)) {
         if (typeof val === "string" && !val.startsWith("file://")) {
@@ -675,6 +701,18 @@ export function validateFlowContent(
           });
         }
 
+        // Fan-out target: `.items` is standard; a declared output lives per item.
+        if (fanoutTargets.has(refStepId) && refField && !STANDARD_RESULT_FIELDS.has(refField)) {
+          if (refField !== "items") {
+            diagnostics.push({
+              line,
+              severity: "error",
+              message: `Reference result.${refStepId}.${refField}: "${refStepId}" runs once per item, so its outputs are per item; read \${{result.${refStepId}.items}}`,
+              suggestion: `Use \${{result.${refStepId}.items}} (an array of { status, summary, fullOutput, outputs } in item order)`,
+            });
+          }
+          continue;
+        }
         // Field existence: unknown declared output is an error (standard fields always pass).
         if (refField && !STANDARD_RESULT_FIELDS.has(refField)) {
           const declared = declaredOutputsOf(refStepId);
@@ -725,8 +763,9 @@ export function validateFlowContent(
     const stepIdx = orderedStepIds.indexOf(s.id);
     const hasMaxIterations = typeof s.max_iterations === "number";
 
-    // A *-decision must offer a real choice (>= 2 branches).
-    if (branchEntries.length < 2) {
+    // A *-decision must offer a real choice (>= 2 branches); a multi decision
+    // chooses a subset, so one branch is enough.
+    if (branchEntries.length < (s.multi ? 1 : 2)) {
       diagnostics.push({
         line: stepPropLine(idx, s.id, "branches") || stepLine(idx, s.id),
         severity: "error",
@@ -762,6 +801,9 @@ export function validateFlowContent(
       });
     }
   }
+
+  // 4g. Multi decisions and fan-out branches (change: multi-route-decisions).
+  validateMultiDecisions(flow, idx, diagnostics);
 
   // 4h. Agent input coverage validation
   if (getDiscoveredAgents) {
@@ -829,7 +871,7 @@ export function validateFlowContent(
 
   // ---- 5. Raw-line scans (template variables, deprecated syntax) ----------
 
-  const knownPrefixes = ["result", "input", "task", "loop"];
+  const knownPrefixes = ["result", "input", "task", "loop", "item", "item_index"];
 
   // 5a. Primary syntax: ${{...}}
   for (let i = 0; i < lines.length; i++) {
@@ -923,6 +965,97 @@ export function validateFlowContent(
 
   const hasErrors = diagnostics.some(d => d.severity === "error");
   return { valid: !hasErrors, diagnostics };
+}
+
+// ---- Multi decisions (change: multi-route-decisions) ------------------------
+
+const MULTI_RESERVED_OUTPUTS = ["branches", "routes", "items"];
+
+function validateMultiDecisions(flow: FlowConfig, idx: LineIndex, diagnostics: Diagnostic[]): void {
+  const order = flow.steps.map((s) => s.id);
+  flow.steps.forEach((step, i) => {
+    if (step.stepType !== "agent-decision" && step.stepType !== "code-decision") return;
+    const s = step as AgentDecisionStep | CodeDecisionStep;
+    const kind = step.stepType;
+    const err = (message: string, prop = "branches", suggestion?: string) =>
+      diagnostics.push({ line: stepPropLine(idx, s.id, prop) || stepLine(idx, s.id), severity: "error", message, ...(suggestion ? { suggestion } : {}) });
+    const fan = s.branchFanout ?? {};
+
+    if (!s.multi) {
+      for (const label of Object.keys(fan)) {
+        err(`${kind} "${s.id}": branch "${label}" declares for_each but the step is not multi: true`, `branch.${label}`, "Add multi: true to the decision");
+      }
+      return;
+    }
+
+    // The DAG segment directly after the decision: consecutive agent steps.
+    const segment: AgentStep[] = [];
+    for (let j = i + 1; j < flow.steps.length && flow.steps[j].stepType === "agent"; j++) segment.push(flow.steps[j] as AgentStep);
+    if (i === flow.steps.length - 1) {
+      err(`${kind} "${s.id}" is multi: true but nothing follows it; a multi decision activates the steps right after it`, "multi");
+    }
+
+    const forward: Array<[string, string]> = [];
+    const seenTargets = new Map<string, string>();
+    for (const [label, target] of Object.entries(s.branches)) {
+      const ti = order.indexOf(target);
+      if (ti < 0) continue; // unknown target reported in 4f
+      const prev = seenTargets.get(target);
+      if (prev) err(`${kind} "${s.id}": branches "${prev}" and "${label}" both target "${target}"; each branch of a multi decision needs its own target`, `branch.${label}`);
+      seenTargets.set(target, label);
+      if (ti <= i) {
+        if (fan[label]) err(`${kind} "${s.id}": loop branch "${label}" cannot declare for_each`, `branch.${label}`);
+        continue;
+      }
+      forward.push([label, target]);
+      if (!segment.some((a) => a.id === target)) {
+        err(
+          `${kind} "${s.id}": branch "${label}" targets "${target}", which is not an agent step in the group directly after the decision`,
+          `branch.${label}`,
+          "A multi decision's forward branches must target agent steps that immediately follow it (before the next non-agent step)",
+        );
+      }
+      const f = fan[label];
+      if (f && f.max_items !== undefined && (!Number.isInteger(f.max_items) || f.max_items < 1 || f.max_items > 1000)) {
+        err(`${kind} "${s.id}": branch "${label}" max_items must be an integer from 1 to 1000 (got ${f.max_items})`, `branch.${label}`);
+      }
+    }
+
+    // A fan-out target must not run as an ordinary lane of a sibling branch.
+    const reach = (root: string): Set<string> => {
+      const active = new Set([root]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const a of segment) {
+          if (!active.has(a.id) && a.blockedBy?.some((d) => active.has(d))) { active.add(a.id); changed = true; }
+        }
+      }
+      return active;
+    };
+    for (const [fl, ft] of forward) {
+      if (!fan[fl]) continue;
+      for (const [ol, ot] of forward) {
+        if (ol !== fl && reach(ot).has(ft)) {
+          err(`${kind} "${s.id}": fan-out branch "${fl}" targets "${ft}", which is reachable from branch "${ol}" ("${ot}"); a fan-out target must only be reached through its own branch`, `branch.${fl}`);
+        }
+      }
+    }
+
+    if (kind === "code-decision") {
+      for (const o of (s as CodeDecisionStep).outputs ?? []) {
+        if (MULTI_RESERVED_OUTPUTS.includes(o.name)) {
+          err(`code-decision "${s.id}" declares an output named "${o.name}", which is reserved on a multi decision`, "outputs");
+        }
+      }
+    }
+    if (kind === "agent-decision") {
+      const classifiers = (s as AgentDecisionStep).decider?.entries?.filter((e) => e !== "agent") ?? [];
+      if (classifiers.length) {
+        err(`agent-decision "${s.id}" is multi: true but its decider lists classifier entries (${classifiers.join(", ")}); only the agent decides a multi decision`, "decider", "Remove the decider: line, or use [agent]");
+      }
+    }
+  });
 }
 
 // ---- Cycle detection (Kahn's algorithm) -----------------------------------

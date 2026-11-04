@@ -28,8 +28,11 @@ export function decisionAgentContext(
   labels: string[],
   branchMeans: Record<string, string> | undefined,
   declaredState: Record<string, string> | undefined,
+  multi = false,
 ): string {
-  const lines = ["Branches (call finish with exactly one of these as `branch`):"];
+  const lines = [multi
+    ? "Branches (call finish with `branches`: every branch that applies, each at most once; an empty list chooses none):"
+    : "Branches (call finish with exactly one of these as `branch`):"];
   for (const l of labels) lines.push(branchMeans?.[l] ? `- ${l}: ${branchMeans[l]}` : `- ${l}`);
   if (declaredState && Object.keys(declaredState).length > 0) {
     lines.push("", "State:");
