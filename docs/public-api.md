@@ -146,6 +146,8 @@ interface AgentDecisionStep {
   task:     string;
   branches: Record<string, string>;   // branch name → step ID
   max_iterations?: number;             // required when a branch loops backward
+  multi?:    boolean;                  // choose zero or more branches
+  branchFanout?: Record<string, BranchFanout>;  // branch label → fan-out declaration
 }
 
 interface CodeStep {
@@ -169,8 +171,18 @@ interface CodeDecisionStep {
   blockedBy?:  string[];
   max_iterations?: number;                // required when a branch loops backward
   timeout?:    number;                    // soft deadline — milliseconds
+  multi?:      boolean;                   // choose zero or more branches
+  branchFanout?: Record<string, BranchFanout>;  // branch label → fan-out declaration
+}
+
+// Fan-out branch: `for_each` is a template, or "dynamic" (items from a code route).
+interface BranchFanout {
+  for_each:   string;
+  max_items?: number;    // default 50, allowed 1–1000
 }
 ```
+
+See [flows.md → Multi-Route Decisions](./flows.md#multi-route-decisions).
 
 ---
 
@@ -272,8 +284,11 @@ interface StepResultEntry {
   status:      string;      // "complete" | "error" | "blocked" | "aborted" | "skipped"
   summary:     string;
   outputs:     Record<string, unknown>;   // declared outputs in their real JSON types
+  items?:      StepResultEntry[];          // fan-out target: per-item results in input order
 }
 ```
+
+In `extensions/flow-engine/types.ts` this shape is `StepResultValue`.
 
 ---
 
@@ -293,8 +308,50 @@ interface TemplateContext {
   }>;
   loopCounters?:     Record<string, number>;
   loopMaxIterations?: Record<string, number>;
+  flowInput?:        Record<string, unknown>;      // ${{flow.input.<name>}}
+  item?:             { value: unknown; index: number };  // fan-out instance: ${{item}}, ${{item_index}}
 }
 ```
+
+---
+
+### Multi-route types
+
+Types added for [multi-route decisions](./flows.md#multi-route-decisions).
+
+```typescript
+// Identity of a fan-out instance, passed to per-agent callbacks.
+interface ItemRef {
+  index: number;   // 0-based
+  count: number;
+}
+
+// Extra context on agent lifecycle callbacks.
+interface AgentStartedExtra {
+  nodeKind?:  NodeKind;
+  target?:    string;
+  modelFallback?: ModelFallbackInfo;
+  itemIndex?: number;   // fan-out instance only
+  itemCount?: number;
+}
+
+// Payload of `flow:decision` and `onDecision`.
+interface DecisionEvent {
+  flowName:   string;
+  stepId:     string;
+  nodeKind:   NodeKind;
+  consumerId: string;
+  chain:      string[];
+  attempts:   DecisionAttempt[];
+  routedBy?:  string;
+  label?:     string;      // multi: first chosen label, absent when none
+  labels?:    string[];    // multi: chosen labels in order (may be empty)
+  routes?:    Array<{ branch: string; itemCount?: number }>;
+  routeError?: string;     // multi: item expansion / max_items failed
+}
+```
+
+See [events-api.md → `flow:decision`](./events-api.md#flowdecision).
 
 ---
 
@@ -365,12 +422,16 @@ interface FlowRunOptions {
   askUser:             (question: string, type: string, options?: string[], extra?: any)
                          => Promise<{ answer: string; notes?: string }>;
   // Callbacks
-  onAgentStarted?:     (agentName: string, stepId: string, resolvedModel?: string) => void;
-  onAgentComplete?:    (agentName: string, stepId: string, result: AgentResult) => void;
-  onToolCall?:         (agentName: string, stepId: string, toolName: string, input: any) => void;
-  onToolResult?:       (agentName: string, stepId: string, toolName: string, output: any, isError: boolean) => void;
-  onAssistantText?:    (agentName: string, stepId: string, text: string) => void;
-  onThinkingText?:     (agentName: string, stepId: string, text: string) => void;
+  onAgentStarted?:     (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => void;
+  onAgentComplete?:    (agentName: string, stepId: string, result: AgentResult,
+                         extra?: { nodeKind?: NodeKind; target?: string; itemIndex?: number; itemCount?: number }) => void;
+  // `item` is set for a fan-out instance
+  onToolCall?:         (agentName: string, stepId: string, toolName: string, input: any, item?: ItemRef) => void;
+  onToolResult?:       (agentName: string, stepId: string, toolName: string, output: any, isError: boolean, item?: ItemRef) => void;
+  onAssistantText?:    (agentName: string, stepId: string, text: string, item?: ItemRef) => void;
+  onThinkingText?:     (agentName: string, stepId: string, text: string, item?: ItemRef) => void;
+  onExtensionUIRequest?: (agentName: string, request: any, respond: (response: any) => void,
+                         meta?: { stepId: string; item?: ItemRef }) => void;
   onLoopIteration?:    (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => void;
   onAutoDecision?:     (forkId: string, agentName: string, chosenBranch: string, targetStepId: string) => void;
   onNotify?:           (message: string) => void;
@@ -411,12 +472,14 @@ interface FlowIOAdapter {
 
 interface FlowObserver {
   onFlowStarted?(runId: string, flowName: string, flow: FlowConfig, task: string): void;
-  onAgentStarted?(agentName: string, stepId: string, resolvedModel?: string): void;
-  onAgentComplete?(agentName: string, stepId: string, result: AgentResult): void;
-  onAssistantText?(agentName: string, stepId: string, text: string): void;
-  onThinkingText?(agentName: string, stepId: string, text: string): void;
-  onToolCall?(agentName: string, stepId: string, toolName: string, input: any): void;
-  onToolResult?(agentName: string, stepId: string, toolName: string, output: any, isError: boolean): void;
+  onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string, extra?: AgentStartedExtra): void;
+  onAgentComplete?(agentName: string, stepId: string, result: AgentResult,
+                   extra?: { nodeKind?: NodeKind; target?: string; itemIndex?: number; itemCount?: number }): void;
+  // `item` identifies a fan-out instance
+  onAssistantText?(agentName: string, stepId: string, text: string, item?: ItemRef): void;
+  onThinkingText?(agentName: string, stepId: string, text: string, item?: ItemRef): void;
+  onToolCall?(agentName: string, stepId: string, toolName: string, input: any, item?: ItemRef): void;
+  onToolResult?(agentName: string, stepId: string, toolName: string, output: any, isError: boolean, item?: ItemRef): void;
   onLoopIteration?(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void;
   onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void;
   onFlowComplete?(result: FlowResult): void;

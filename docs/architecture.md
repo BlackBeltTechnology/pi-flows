@@ -180,6 +180,21 @@ Code decision step → handler returns { branch } → route to branches[branch] 
                                                 → backward branch loops (max_iterations safety limit)
 ```
 
+**Multi decision (`multi: true`, several lanes):**
+
+A multi decision is a separator step like any decision. When it returns forward routes, the engine sets the next DAG segment's `activeSteps` to the union of `computeActiveSteps(segment, target)` over the chosen targets, plus a one-shot `overwriteSkipped` flag: steps outside the union are written as `skipped` even if they already have a result (e.g. from a previous loop pass). The flag is cleared after that segment run, so a later single route or `on_error` into the segment uses the normal rules. Choosing nothing skips the whole segment.
+
+A fan-out route carries its item list into the segment. `runDagSegment` runs the target as instances, one per item, with a pool limited by `max_concurrent` minus the other steps of the same wave. When all instances settle they fold into one aggregate result for the target (`items`, status, summary), so steps blocked by it run once.
+
+```mermaid
+flowchart LR
+  D{"multi decision"} -->|routes| A["activeSteps = ∪ computeActiveSteps(t)<br/>overwriteSkipped = true"]
+  A --> S[runDagSegment]
+  S --> L[lane steps]
+  S --> F["fan-out target<br/>instances t[0..n-1]"]
+  F --> G[aggregate result]
+```
+
 ### Result Propagation
 
 Results flow through the DAG via interpolation:

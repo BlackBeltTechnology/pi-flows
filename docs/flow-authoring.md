@@ -521,7 +521,8 @@ Run a TypeScript handler exactly like a [code step](#7-code-step), then route on
 |-------|----------|-------------|
 | `id` | Yes | Unique step identifier. Determines the handler filename — must be filesystem-safe. |
 | `type` | Yes | Must be `code-decision`. Not inferred; always explicit. |
-| `branches` | Yes | Map of branch label → target step ID. Must declare **at least 2** branches. |
+| `branches` | Yes | Map of branch label → target step ID. Must declare **at least 2** branches (at least 1 with `multi: true`). |
+| `multi` | No | `true` lets the handler choose zero or more branches. See [Multi-route decisions](#multi-route-decisions). |
 | `inputs` | No | Same as a code step — map of input name → `${{...}}` template string. |
 | `outputs` | No | Optional data outputs the handler must return. **Never include `branch`** — it is reserved. |
 | `target` | No | Override the handler file path. Skips scaffold generation. |
@@ -590,6 +591,7 @@ An agent evaluates options and calls `finish({ branch: "chosen" })` to select th
 | `agent` | Yes | Agent that makes the decision. |
 | `task` | Yes | Context for the decision agent. Template string. |
 | `branches` | Yes | Map of branch name → target step ID. |
+| `multi` | No | `true` lets the agent choose zero or more branches with `finish({ branches })`. See [Multi-route decisions](#multi-route-decisions). |
 | `max_iterations` | No | Required only when a branch target points to an earlier step (a loop). Caps loop-backs, not passes: the body runs at most N + 1 times. See [Loops](#5-loops). |
 
 The guard injects the branch names into the `finish` tool parameters as a union type. The agent must pick one of the declared branch names. A missing or invalid `branch` soft-fails the step: `on_error` routes it, else the flow halts. An `agent-decision` may loop by pointing a branch at an earlier step — see [Loops](#5-loops).
@@ -602,7 +604,7 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
 
 - A `*-decision` node with a branch target pointing to an earlier step **MUST** declare `max_iterations`.
 - `max_iterations: N` caps the number of loop-backs (backward branch edges taken), not total passes. The body runs at most N + 1 times: the first pass plus N re-entries (`max_iterations: 3` → up to 4 passes).
-- When the cap is reached and the decision again picks the backward branch, the engine does not loop; control falls through to the next step in file order.
+- When the cap is reached and the decision again picks the backward branch, the engine does not loop; control falls through to the next step in file order. A `multi: true` decision instead acts as if it chose nothing.
 - On re-entry only the loop body re-runs (target .. decision, plus steps reachable from the target); steps outside it keep their completed results.
 - Retries use a decision step with a backward branch and `max_iterations` — `on_error` cannot point backward.
 - `${{loop.<id>.iteration}}` is the 1-based number of the current pass (pass N shows N) in both the body and the decision; `${{loop.<id>.max}}` is N.
@@ -647,9 +649,92 @@ A **loop** is any `*-decision` node — `agent-decision` or `code-decision` — 
 
 The agent calls `finish({ branch: "fixer" })` to loop or `finish({ branch: "done" })` to exit. A `code-decision` loops the same way — return `{ branch: "fixer" }` from the handler.
 
-**Routing node semantics.** A routing node (`fork`, `agent-decision`, `code-decision`) always executes, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches not taken receive synthetic `skipped` results, whatever the chosen target's step type; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`.
+**Routing node semantics.** A routing node (`fork`, `agent-decision`, `code-decision`) always executes, so its own outputs are always populated. For a loop, a node's outputs reflect the **last** iteration. Forward branches not taken receive synthetic `skipped` results if they have none, whatever the chosen target's step type; an unresolved `${{result.<id>.<field>}}` expands to the empty string — never `undefined`. This applies to every decision, not only forks: a jumped-over branch target now reads `${{result.<id>.status}}` as `skipped` instead of `""`.
 
 > **Migrating from `agent-loop-decision`.** Replace `type: agent-loop-decision` with `type: agent-decision`. Move `loop_target` and `exit_target` into `branches:` (e.g. `branches: { rework: <loop_target>, done: <exit_target> }`) and keep `max_iterations`. The agent calls `finish({ branch: "rework" })` or `finish({ branch: "done" })`.
+
+---
+
+#### Multi-route decisions
+
+`multi: true` on an `agent-decision` or `code-decision` lets it choose **zero or more** branches. One branch is enough for a multi decision.
+
+- **Agent:** calls `finish({ status, summary, branches: [...] })`; `[]` chooses none. `finish({ branch })`, duplicates and unknown labels are rejected (retried, then the decision fails). Classifiers never decide a multi decision; the decider chain is reduced to `[agent]`.
+- **Code handler:** returns exactly one of `{ branch: "x" }`, `{ branches: ["a", "b"] }` or `{ routes: [{ branch, items? }] }`, plus declared data outputs. A missing or extra routing key, wrong types, duplicates, or `items` on a non-fan-out branch soft-fail; an off-map label hard-fails. `/flows:generate` types the return as `{ branch } | { branches } | { routes }`.
+- **Without `multi: true`** `branches` and `routes` are ordinary data outputs and must be declared.
+
+**Lanes.** Every forward branch target must be an `agent` step in the group of agent steps directly after the decision. The chosen targets, and every step reachable from them via `blockedBy`, run in parallel under `max_concurrent`; every other step of that group is `skipped` (replacing an earlier result). A step blocked by several lanes runs once after them. Choosing nothing skips the whole group and continues after it.
+
+```yaml
+- id: plan
+  type: agent-decision
+  agent: planner
+  multi: true
+  task: "Which parts does this change touch? ${{task}}"
+  branches:
+    backend: backend
+    frontend: frontend
+    docs: docs
+
+- id: backend
+  type: agent
+  agent: developer
+  task: "Implement the backend part."
+
+- id: frontend
+  type: agent
+  agent: developer
+  task: "Implement the frontend part."
+
+- id: docs
+  type: agent
+  agent: writer
+  task: "Update the docs."
+
+- id: report
+  type: agent
+  agent: summarizer
+  blockedBy: [backend, frontend, docs]
+  task: "Report what changed."
+```
+
+**Fan-out.** A branch written as `{ to, for_each, max_items }` runs its target once per item. `for_each` is a template that must resolve to an array (typed output or JSON-array string; `""` means `[]`), or `dynamic` when a code-decision returns `routes[].items`. `max_items` defaults to 50 (allowed 1–1000). A non-array or too many items soft-fails the decision (its `on_error` routes; no lane runs).
+
+```yaml
+- id: scan
+  type: code
+  outputs:
+    - name: projects        # e.g. ["api", "web", "cli"]
+
+- id: per-project
+  type: code-decision       # handler returns { branch: "explore" }
+  multi: true
+  branches:
+    explore:
+      to: explore
+      for_each: "${{result.scan.projects}}"
+      max_items: 20
+
+- id: explore
+  type: agent
+  agent: explorer
+  task: "Explore project ${{item}} (item ${{item_index}})."
+
+- id: merge
+  type: agent
+  agent: summarizer
+  blockedBy: [explore]
+  task: "Merge these findings: ${{result.explore.items}}"
+```
+
+- `${{item}}`, `${{item.<field>}}` and `${{item_index}}` work in the fan-out target's `task`, `inputs` and agent body.
+- Steps blocked by the fan-out target (`merge`) run once, after all items.
+- `${{result.explore.items}}` is the ordered list of per-item `{ status, summary, fullOutput, outputs }`. `explore` itself is `complete` only if every item completed (summary like `3 items: 2 complete, 1 failed`); skipped, it reads as `items` `[]`. Use `.items`, not a declared output such as `${{result.explore.notes}}` (validation error).
+- A soft item failure lets the other items finish, then `explore` routes by its `on_error` (else halts). A hard item failure aborts the others and halts.
+
+**Loops.** A backward branch must be chosen alone (with other branches it soft-fails). At `max_iterations` a multi decision acts as if it chose nothing.
+
+**Validation errors:** a target that is not an agent in the next group; two labels to one target; `branches`/`routes`/`items` declared as outputs of a multi code-decision; a multi decision's agent declaring a `branches` output; `${{item…}}` outside a fan-out target; a fan-out target reachable from another branch's target; `for_each` on a non-multi decision or a loop branch; `max_items` outside 1–1000; a multi decision with nothing after it; a step-level classifier `decider:` on a multi agent-decision. Full reference: [flows.md → Multi-Route Decisions](flows.md#multi-route-decisions).
 
 ---
 
@@ -777,6 +862,8 @@ Template expressions `${{...}}` are expanded in `task`, `inputs` values, and `qu
 | `${{flow.input.NAME}}` | A declared flow input (see [Typed flow inputs](#typed-flow-inputs)). Validation error unless `inputs:` declares `NAME`. |
 | `${{loop.STEP_ID.iteration}}` | Current iteration count of a loop decision step. |
 | `${{loop.STEP_ID.max}}` | Max iterations configured for a loop decision step. |
+| `${{item}}` / `${{item.FIELD}}` / `${{item_index}}` | Current item, one of its fields, and its 0-based index — only in a [fan-out](#multi-route-decisions) target. |
+| `${{result.STEP_ID.items}}` | Per-item results of a fan-out target, in input order. |
 
 **Note:** `STEP_ID` in result references is the step's `id` field, not the agent name.
 
