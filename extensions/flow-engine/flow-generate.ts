@@ -57,7 +57,11 @@ export function renderScaffold(step: CodeStep | CodeDecisionStep): string {
   const branchType = branchKeys.length
     ? `type Branch = ${branchKeys.map((k) => `"${k}"`).join(" | ")};`
     : "type Branch = string;";
-  const returnType = isDecision ? "Promise<{ branch: Branch } & Output>" : "Promise<Output>";
+  // A multi code-decision returns exactly one routing key (change: multi-route-decisions).
+  const multi = isDecision && (step as CodeDecisionStep).multi === true;
+  const returnType = multi
+    ? "Promise<({ branch: Branch } | { branches: Branch[] } | { routes: Array<{ branch: Branch; items?: unknown[] }> }) & Output>"
+    : isDecision ? "Promise<{ branch: Branch } & Output>" : "Promise<Output>";
 
   const dataBody = outputKeys.map((k) => `${k}: ""`).join(", ");
   const returnBody = isDecision

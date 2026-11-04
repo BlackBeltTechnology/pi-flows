@@ -353,6 +353,19 @@ export function validateFlowContent(
         if (a) decisionAgents.add(a);
       }
     }
+    // A multi decision's agent finishes with `branches` (change: multi-route-decisions).
+    for (const step of flow.steps) {
+      if (step.stepType !== "agent-decision" || !step.multi) continue;
+      const name = step.agent ?? flow.decision_agent;
+      if (name && (knownAgents.get(name)?.outputs ?? []).some((o) => o.name === "branches")) {
+        diagnostics.push({
+          line: stepPropLine(idx, step.id, "agent") || stepLine(idx, step.id),
+          severity: "error",
+          message: `Decision agent "${name}" declares an output named "branches", which is reserved on the multi decision "${step.id}"`,
+          suggestion: "Rename the output (e.g. \"lanes\")",
+        });
+      }
+    }
     for (const name of decisionAgents) {
       if ((knownAgents.get(name)?.outputs ?? []).some((o) => o.name === "branch")) {
         diagnostics.push({

@@ -5,7 +5,7 @@
 // lifecycle observation. Enables TUI, web, headless, and test adapters.
 // ---------------------------------------------------------------------------
 
-import type { AgentConfig, AgentResult, DecisionEvent, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
+import type { AgentConfig, AgentResult, DecisionEvent, FlowConfig, FlowResult, NodeKind, AgentStartedExtra, ItemRef } from "./types.js";
 
 // ---- FlowIOAdapter --------------------------------------------------------
 
@@ -70,11 +70,12 @@ export interface FlowIOAdapter {
 export interface FlowObserver {
   onFlowStarted?(runId: string, flowName: string, flow: FlowConfig, task: string): void;
   onAgentStarted?(agentName: string, stepId: string, config?: AgentConfig, resolvedModel?: string, extra?: AgentStartedExtra): void;
-  onAgentComplete?(agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string }): void;
-  onToolCall?(agentName: string, stepId: string, toolName: string, input: any): void;
-  onToolResult?(agentName: string, stepId: string, toolName: string, output: any, isError: boolean): void;
-  onAssistantText?(agentName: string, stepId: string, text: string): void;
-  onThinkingText?(agentName: string, stepId: string, text: string): void;
+  onAgentComplete?(agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string; itemIndex?: number; itemCount?: number }): void;
+  // `item` identifies a fan-out instance (change: multi-route-decisions).
+  onToolCall?(agentName: string, stepId: string, toolName: string, input: any, item?: ItemRef): void;
+  onToolResult?(agentName: string, stepId: string, toolName: string, output: any, isError: boolean, item?: ItemRef): void;
+  onAssistantText?(agentName: string, stepId: string, text: string, item?: ItemRef): void;
+  onThinkingText?(agentName: string, stepId: string, text: string, item?: ItemRef): void;
   onLoopIteration?(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void;
   onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string, detail?: { confidence?: number }): void;
   /** One call per decision with every decider attempt (change: classifier-decisions). */

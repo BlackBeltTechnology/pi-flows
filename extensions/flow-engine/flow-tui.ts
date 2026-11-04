@@ -14,6 +14,7 @@ import type {
   FlowResult,
   NodeKind,
   AgentStartedExtra,
+  ItemRef,
 } from "./types.js";
 import type { FlowObserver } from "./flow-io.js";
 import { FlowEventPersister, type OrphanedRun } from "./flow-persist.js";
@@ -28,6 +29,12 @@ import {
   getLastCards,
 } from "../flow-summary/index.js";
 import { Text, Key } from "@earendil-works/pi-tui";
+
+/** Event fields of a fan-out instance (change: multi-route-decisions). */
+/** TUI card key: a fan-out instance gets its own card `<stepId>[i]`. */
+const cardName = (agentName: string, stepId: string, itemIndex?: number) =>
+  itemIndex === undefined ? agentName : `${stepId}[${itemIndex}]`;
+const itemFields = (item?: ItemRef) => (item ? { itemIndex: item.index, itemCount: item.count } : {});
 import { renderBox } from "../flow-dashboard/box-renderer.js";
 import { renderSummaryContent } from "../flow-summary/summary-render.js";
 import { isAutonomousMode, setAutonomousMode } from "../autonomous-mode.js";
@@ -387,6 +394,9 @@ function wireDashboard(dashboard: any, ui: any) {
  * Returns undefined when nothing was routed.
  */
 export function formatDecisionLine(event: DecisionEvent): string | undefined {
+  if (event.routedBy !== undefined && event.labels !== undefined) {
+    return `decided ${event.labels.length ? event.labels.join(", ") : "none"} via ${event.routedBy}`;
+  }
   if (event.routedBy === undefined || event.label === undefined) return undefined;
   const routed = event.attempts.find((a) => a.entry === event.routedBy && a.outcome === "ok");
   const conf = event.routedBy !== "agent" && routed?.confidence !== undefined ? ` (${routed.confidence.toFixed(2)})` : "";
@@ -442,23 +452,25 @@ export class TuiFlowObserver implements FlowObserver {
 
   onAgentStarted(
     agentName: string,
-    _stepId: string,
+    stepId: string,
     config?: AgentConfig,
     resolvedModel?: string,
+    extra?: AgentStartedExtra,
   ): void {
     if (this.dashboard) {
-      this.dashboard.onAgentStarted(agentName, config, resolvedModel);
+      this.dashboard.onAgentStarted(cardName(agentName, stepId, extra?.itemIndex), config, resolvedModel);
       this.renderDashboard!();
     }
   }
 
   onAgentComplete(
     agentName: string,
-    _stepId: string,
+    stepId: string,
     result: AgentResult,
+    extra?: { itemIndex?: number },
   ): void {
     if (this.dashboard) {
-      this.dashboard.onAgentComplete(agentName, result);
+      this.dashboard.onAgentComplete(cardName(agentName, stepId, extra?.itemIndex), result);
       this.renderDashboard!();
     }
     // Notify user immediately when an agent reports "blocked"
@@ -470,39 +482,41 @@ export class TuiFlowObserver implements FlowObserver {
 
   onToolCall(
     agentName: string,
-    _stepId: string,
+    stepId: string,
     toolName: string,
     input: any,
+    item?: ItemRef,
   ): void {
     if (this.dashboard) {
-      this.dashboard.onToolCall(agentName, toolName, input);
+      this.dashboard.onToolCall(cardName(agentName, stepId, item?.index), toolName, input);
       this.renderDashboard!();
     }
   }
 
   onToolResult(
     agentName: string,
-    _stepId: string,
+    stepId: string,
     toolName: string,
     output: any,
     isError: boolean,
+    item?: ItemRef,
   ): void {
     if (this.dashboard) {
-      this.dashboard.onToolResult(agentName, toolName, output, isError);
+      this.dashboard.onToolResult(cardName(agentName, stepId, item?.index), toolName, output, isError);
       this.renderDashboard!();
     }
   }
 
-  onAssistantText(agentName: string, _stepId: string, text: string): void {
+  onAssistantText(agentName: string, stepId: string, text: string, item?: ItemRef): void {
     if (this.dashboard) {
-      this.dashboard.onAssistantText(agentName, text);
+      this.dashboard.onAssistantText(cardName(agentName, stepId, item?.index), text);
       this.renderDashboard!();
     }
   }
 
-  onThinkingText(agentName: string, _stepId: string, text: string): void {
+  onThinkingText(agentName: string, stepId: string, text: string, item?: ItemRef): void {
     if (this.dashboard) {
-      this.dashboard.onThinkingText(agentName, text);
+      this.dashboard.onThinkingText(cardName(agentName, stepId, item?.index), text);
       this.renderDashboard!();
     }
   }
@@ -640,6 +654,7 @@ export class EventEmitObserver implements FlowObserver {
       ...(extra?.modelFallback ? { modelFallback: extra.modelFallback } : {}),
       nodeKind: extra?.nodeKind,
       target: extra?.target,
+      ...(extra?.itemIndex !== undefined ? { itemIndex: extra.itemIndex, itemCount: extra.itemCount } : {}),
       config: config
         ? {
             name: config.name,
@@ -657,12 +672,13 @@ export class EventEmitObserver implements FlowObserver {
     agentName: string,
     stepId: string,
     result: AgentResult,
-    extra?: { nodeKind?: NodeKind; target?: string },
+    extra?: { nodeKind?: NodeKind; target?: string; itemIndex?: number; itemCount?: number },
   ): void {
     this.emit("flow:agent-complete", {
       agentName,
       stepId,
       nodeKind: extra?.nodeKind,
+      ...(extra?.itemIndex !== undefined ? { itemIndex: extra.itemIndex, itemCount: extra.itemCount } : {}),
       result: {
         success: result.success,
         status: result.result?.status,
@@ -674,12 +690,12 @@ export class EventEmitObserver implements FlowObserver {
     });
   }
 
-  onAssistantText(agentName: string, stepId: string, text: string): void {
-    this.emit("flow:assistant-text", { agentName, stepId, text });
+  onAssistantText(agentName: string, stepId: string, text: string, item?: ItemRef): void {
+    this.emit("flow:assistant-text", { agentName, stepId, text, ...itemFields(item) });
   }
 
-  onThinkingText(agentName: string, stepId: string, text: string): void {
-    this.emit("flow:thinking-text", { agentName, stepId, text });
+  onThinkingText(agentName: string, stepId: string, text: string, item?: ItemRef): void {
+    this.emit("flow:thinking-text", { agentName, stepId, text, ...itemFields(item) });
   }
 
   onToolCall(
@@ -687,12 +703,14 @@ export class EventEmitObserver implements FlowObserver {
     stepId: string,
     toolName: string,
     input: any,
+    item?: ItemRef,
   ): void {
     this.emit("flow:subagent-tool-call", {
       agentName,
       stepId,
       toolName,
       input,
+      ...itemFields(item),
     });
   }
 
@@ -702,6 +720,7 @@ export class EventEmitObserver implements FlowObserver {
     toolName: string,
     output: any,
     isError: boolean,
+    item?: ItemRef,
   ): void {
     this.emit("flow:subagent-tool-result", {
       agentName,
@@ -709,6 +728,7 @@ export class EventEmitObserver implements FlowObserver {
       toolName,
       output,
       isError,
+      ...itemFields(item),
     });
   }
 

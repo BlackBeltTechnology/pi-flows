@@ -735,3 +735,123 @@ steps:
     expect(errorsOf(yaml).some((m) => /route/.test(m) && /nothing follows/.test(m))).toBe(true);
   });
 });
+
+// ── 6. Events and display ─────────────────────────────────────────────────
+
+import { EventEmitObserver, formatDecisionLine } from "../extensions/flow-engine/flow-tui.js";
+
+describe("multi decision: events", () => {
+  it("flow:decision of a fan-out carries labels and routes with the item count", async () => {
+    const decisions: DecisionEvent[] = [];
+    const yaml = `name: ev
+description: agent multi decision with fan-out
+steps:
+  - id: scan
+    type: code
+    outputs:
+      - name: projects
+  - id: decide
+    type: agent-decision
+    agent: judge
+    multi: true
+    task: "DECIDE explore?"
+    branches:
+      explore:
+        to: explore
+        for_each: "\${{result.scan.projects}}"
+      docs: docs
+  - id: explore
+    type: agent
+    agent: worker
+    task: "EXPLORE \${{item}}"
+  - id: docs
+    type: agent
+    agent: worker
+    task: "LANE docs"
+  - id: end
+    type: code
+`;
+    const r = await runFauxFlow({
+      flow: load(yaml), agents: AGENTS,
+      codeHandlers: { scan: `export default async () => ({ projects: ["a", "b"] });`, end: `export default async () => ({});` },
+      responder: (x) => (/DECIDE/.test(x) ? ok("explore", { branches: ["explore"] }) : echo(x)),
+      onDecision: (e) => decisions.push(e),
+    });
+    expect(r.status).toBe("success");
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].labels).toEqual(["explore"]);
+    expect(decisions[0].routes).toEqual([{ branch: "explore", itemCount: 2 }]);
+    expect(decisions[0].routedBy).toBe("agent");
+    expect(formatDecisionLine(decisions[0])).toBe("decided explore via agent");
+    expect(formatDecisionLine({ ...decisions[0], labels: [], routes: [], label: undefined })).toBe("decided none via agent");
+  });
+
+  it("instance events carry stepId, itemIndex and itemCount on the flow:* channels", () => {
+    const emitted: Array<[string, any]> = [];
+    const obs = new EventEmitObserver({ events: { emit: (ch: string, d: any) => emitted.push([ch, d]) }, appendEntry: () => undefined } as any);
+    const item = { index: 1, count: 3 };
+    obs.onAssistantText("worker", "explore", "hi", item);
+    obs.onThinkingText("worker", "explore", "hmm", item);
+    obs.onToolCall("worker", "explore", "read", {}, item);
+    obs.onToolResult("worker", "explore", "read", "x", false, item);
+    obs.onAgentStarted("worker", "explore", undefined, undefined, { nodeKind: "agent", itemIndex: 1, itemCount: 3 });
+    const byCh = new Map(emitted.map(([c, d]) => [c, d]));
+    for (const ch of ["flow:assistant-text", "flow:thinking-text", "flow:subagent-tool-call", "flow:subagent-tool-result", "flow:agent-started"]) {
+      expect(byCh.get(ch), ch).toMatchObject({ stepId: "explore", itemIndex: 1, itemCount: 3 });
+    }
+    obs.onAssistantText("worker", "plain", "hi");
+    expect(emitted[emitted.length - 1][1].itemIndex).toBeUndefined();
+  });
+});
+
+// ── 7. Handler scaffold ───────────────────────────────────────────────────
+
+import { renderScaffold } from "../extensions/flow-engine/flow-generate.js";
+
+describe("multi decision: handler scaffold", () => {
+  it("types a multi code-decision's return as { branch } | { branches } | { routes }", () => {
+    const flow = parseFlowYamlString(LANES(CODE_ROUTER), "<multi>");
+    const out = renderScaffold(flow.steps[0] as never);
+    expect(out).toMatch(/\{ branch: Branch \}/);
+    expect(out).toMatch(/\{ branches: Branch\[\] \}/);
+    expect(out).toMatch(/\{ routes: Array<\{ branch: Branch; items\?: unknown\[\] \}> \}/);
+  });
+
+  it("keeps { branch: Branch } & Output for a single code-decision", () => {
+    const flow = parseFlowYamlString(LANES(CODE_ROUTER).replace("    multi: true\n", ""), "<multi>");
+    expect(renderScaffold(flow.steps[0] as never)).toMatch(/Promise<\{ branch: Branch \} & Output>/);
+  });
+});
+
+// ── 8. Reserved `branches` on decision agents ─────────────────────────────
+
+describe("multi decision: reserved branches output", () => {
+  const brancher = parseAgentString(agentMd("brancher", ["branches"]), "<multi>");
+  const withBrancher = [...AGENTS, brancher];
+  const byName = new Map(withBrancher.map((a) => [a.name, a]));
+  const flowWith = (multi: boolean) => LANES(`  - id: route
+    type: agent-decision
+    agent: brancher
+${multi ? "    multi: true\n" : ""}    task: "DECIDE which lanes"
+    branches:
+      backend: backend
+      frontend: frontend
+      docs: docs`);
+
+  it("a multi decision's agent declaring a `branches` output is rejected (validation and run start)", async () => {
+    const errs = validateFlowContent(flowWith(true), () => byName as never, () => true).diagnostics.filter((d) => d.severity === "error");
+    expect(errs.some((d) => /brancher/.test(d.message) && /branches/.test(d.message))).toBe(true);
+    const r = await runFauxFlow({
+      flow: parseFlowYamlString(flowWith(true), "<multi>"), agents: withBrancher,
+      codeHandlers: { after: `export default async () => ({});` },
+      responder: (x) => echo(x),
+    });
+    expect(r.status).toBe("error");
+    expect(r.lastResult.output).toMatch(/not started.*branches/);
+  });
+
+  it("a single decision's agent may still declare a `branches` output", () => {
+    const errs = validateFlowContent(flowWith(false), () => byName as never, () => true).diagnostics.filter((d) => d.severity === "error");
+    expect(errs.filter((d) => /branches/.test(d.message))).toEqual([]);
+  });
+});

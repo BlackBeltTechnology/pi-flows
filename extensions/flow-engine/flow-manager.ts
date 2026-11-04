@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { randomUUID } from "node:crypto";
-import type { AgentConfig, DeciderSpec, FlowConfig, FlowResult, NodeKind, AgentStartedExtra } from "./types.js";
+import type { AgentConfig, DeciderSpec, FlowConfig, FlowResult, NodeKind, AgentStartedExtra, ItemRef } from "./types.js";
 import type { ParentModelSnapshot } from "./model-roles.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
@@ -159,7 +159,7 @@ export class FlowManager {
         const agentConfig = config.getAgents().get(agentName);
         for (const obs of observers) obs.onAgentStarted?.(agentName, stepId, agentConfig, resolvedModel, extra);
       },
-      onAgentComplete: (agentName: string, stepId: string, result: any, extra?: { nodeKind?: NodeKind; target?: string }) => {
+      onAgentComplete: (agentName: string, stepId: string, result: any, extra?: { nodeKind?: NodeKind; target?: string; itemIndex?: number; itemCount?: number }) => {
         // Step-level (message-level) agent failure: surface as a discrete
         // timeline error entry BEFORE the status flip, so observers (and the
         // persisted stream) capture it. Tool errors travel via onToolResult.
@@ -174,17 +174,17 @@ export class FlowManager {
       onExtensionUIRequest: (agentName: string, request: any, respond: (response: any) => void) => {
         ioAdapter.handleExtensionUIRequest(agentName, request, respond);
       },
-      onToolCall: (agentName: string, stepId: string, toolName: string, input: any) => {
-        for (const obs of observers) obs.onToolCall?.(agentName, stepId, toolName, input);
+      onToolCall: (agentName: string, stepId: string, toolName: string, input: any, item?: ItemRef) => {
+        for (const obs of observers) obs.onToolCall?.(agentName, stepId, toolName, input, item);
       },
-      onToolResult: (agentName: string, stepId: string, toolName: string, output: any, isError?: boolean) => {
-        for (const obs of observers) obs.onToolResult?.(agentName, stepId, toolName, output, !!isError);
+      onToolResult: (agentName: string, stepId: string, toolName: string, output: any, isError?: boolean, item?: ItemRef) => {
+        for (const obs of observers) obs.onToolResult?.(agentName, stepId, toolName, output, !!isError, item);
       },
-      onAssistantText: (agentName: string, stepId: string, text: string) => {
-        for (const obs of observers) obs.onAssistantText?.(agentName, stepId, text);
+      onAssistantText: (agentName: string, stepId: string, text: string, item?: ItemRef) => {
+        for (const obs of observers) obs.onAssistantText?.(agentName, stepId, text, item);
       },
-      onThinkingText: (agentName: string, stepId: string, text: string) => {
-        for (const obs of observers) obs.onThinkingText?.(agentName, stepId, text);
+      onThinkingText: (agentName: string, stepId: string, text: string, item?: ItemRef) => {
+        for (const obs of observers) obs.onThinkingText?.(agentName, stepId, text, item);
       },
       onLoopIteration: (stepId: string, iteration: number, maxIterations: number, loopTarget?: string) => {
         for (const obs of observers) obs.onLoopIteration?.(stepId, iteration, maxIterations, loopTarget);
