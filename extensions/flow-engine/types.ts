@@ -241,6 +241,10 @@ export interface ForkStep {
   decider?: DeciderSpec;  // Decider chain for autonomous / auto-decide / "Other"
   state?: Record<string, string>; // Template-expanded classifier state (default { task })
   branchMeans?: Record<string, string>; // label -> criterion, from the `{ to, means }` branch form
+  /** Parent-attached runs: seconds until the question closes with `ask_default` (change: add-flow-parent-mailbox). */
+  ask_timeout_s?: number;
+  /** Option (or list of options for multiSelect) taken on timeout. */
+  ask_default?: string | string[];
 }
 
 export interface AgentDecisionStep {

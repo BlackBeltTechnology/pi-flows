@@ -25,9 +25,12 @@ import { isEditFlowEnabled, setEditFlowFlag, parseEditModeArg } from "./edit-flo
 import { makeEditFlowToolReconciler, applyManageFlowsVisibility } from "./edit-flow-reconcile.js";
 
 import { FlowManager } from "./flow-manager.js";
-import { TuiFlowIOAdapter, HeadlessFlowIOAdapter } from "./flow-io-tui.js";
+import { HeadlessFlowIOAdapter } from "./flow-io-tui.js";
+import { registerFlowRunTool, type DispatchOutcome } from "./tools/flow-run.js";
+import { registerFlowControlTool } from "./tools/flow-control.js";
+import { validateFlowInput } from "./flow-execution.js";
 import { emitPromptAndAwait } from "./flow-prompt.js";
-import { TuiFlowObserver, EventEmitObserver, setupFlowTui, getIsOverlayOpen } from "./flow-tui.js";
+import { TuiFlowObserver, EventEmitObserver, setupFlowTui } from "./flow-tui.js";
 import { findOrphanedRun } from "./flow-persist.js";
 import { listenForPromptBus } from "./prompt-bus-access.js";
 
@@ -213,7 +216,12 @@ export function activate(pi: ExtensionAPI) {
 
   // ── Create FlowManager with headless adapter (upgraded on session_start if hasUI) ──
 
-  const eventEmitObserver = new EventEmitObserver(pi, () => sessionManager);
+  // Markers wait while a parent turn is in progress (change: add-flow-parent-mailbox).
+  const eventEmitObserver = new EventEmitObserver(pi, () => sessionManager, () => {
+    try { return sessionCtx?.isIdle?.() ?? true; } catch { return true; }
+  });
+  // Whether the session has a UI (interactive / RPC) — slash-command runs attach to the parent only then.
+  let sessionHasUI = false;
 
   // Drive a flow run that was interrupted by parent-session close (or for which
   // abort arrives with no live flow) to a terminal state, so a replayed
@@ -263,9 +271,18 @@ export function activate(pi: ExtensionAPI) {
       },
       isAutonomous: () => isAutonomousMode(),
     },
-    new HeadlessFlowIOAdapter(), // Default — replaced by TUI adapter on session_start if hasUI
+    new HeadlessFlowIOAdapter(), // Detached runs never prompt a human (change: add-flow-parent-mailbox)
     [eventEmitObserver],         // EventEmitObserver always active; TuiFlowObserver added if hasUI
   );
+
+  // The parent's turn ended: append lifecycle markers deferred during it.
+  pi.on("agent_end", () => {
+    eventEmitObserver.flushDeferredMarkers();
+  });
+  // Session ends: close parent questions, end a blocked wait, stop timers.
+  pi.on("session_shutdown", () => {
+    flowManager.mailbox.dispose();
+  });
 
   // ── Session start: wire TUI or headless ──
 
@@ -287,9 +304,10 @@ export function activate(pi: ExtensionAPI) {
       // now (before any new flow can launch) so the replayed card clears.
       reconcileOrphanedFlow("session-close");
     }
+    sessionHasUI = !!ctx.hasUI;
     if (ctx.hasUI) {
-      // Upgrade to TUI adapter
-      flowManager.setIOAdapter(new TuiFlowIOAdapter(ctx.ui, getIsOverlayOpen, pi));
+      // Detached runs stay headless; the UI only receives engine notices.
+      flowManager.setIOAdapter(new HeadlessFlowIOAdapter(ctx.ui));
       // Add TUI observer (must be before EventEmitObserver for correct ordering)
       // We insert at position 0 so TuiFlowObserver.onFlowComplete runs first
       // (emits flow:set-summary-context before EventEmitObserver emits flow:complete)
@@ -510,7 +528,7 @@ export function activate(pi: ExtensionAPI) {
           task = result.answer.trim();
         }
 
-        await flowManager.start({ flow, flowName: name, task });
+        await flowManager.start({ flow, flowName: name, task, attached: sessionHasUI });
       },
     });
   }
@@ -543,30 +561,36 @@ export function activate(pi: ExtensionAPI) {
     pi.events.emit("flow:complete", buildDispatchRejection(flowName, reason));
   }
 
-  async function runFlowByName(flowName: string, opts?: { task?: string; flowInput?: Record<string, unknown> }) {
+  // Shared dispatch path for `flow:run` and the `flow_run` tool. Reports its
+  // outcome to the caller; every decline also emits the terminal rejection.
+  async function runFlowByName(
+    flowName: string,
+    opts?: { task?: string; flowInput?: Record<string, unknown>; notifyParent?: boolean },
+  ): Promise<DispatchOutcome> {
+    const reject = (reason: string): DispatchOutcome => {
+      emitDispatchRejection(flowName, reason);
+      return { rejected: reason };
+    };
     // Fresh definitions per run: re-read agent/flow files (no /reload needed).
     if (!flowManager.isRunning) init(pkgRoot, projectRoot);
     const flowConfig = flows.get(flowName);
-    if (!flowConfig) {
-      emitDispatchRejection(flowName, flowNotFoundMessage(flowName));
-      return;
-    }
-    if (flowManager.isRunning) {
-      emitDispatchRejection(flowName, flowAlreadyRunningMessage(flowManager.activeFlowName));
-      return;
-    }
+    if (!flowConfig) return reject(flowNotFoundMessage(flowName));
+    if (flowManager.isRunning) return reject(flowAlreadyRunningMessage(flowManager.activeFlowName));
     const gateMsg = checkGate(flowName);
-    if (gateMsg) {
-      emitDispatchRejection(flowName, gateMsg);
-      return;
-    }
+    if (gateMsg) return reject(gateMsg);
+    // Typed inputs are a pre-start check (typed-flow-input: the run does not start).
+    const inputError = validateFlowInput(flowConfig, opts?.flowInput);
+    if (inputError) return reject(inputError);
     try {
-      await flowManager.start({ flow: flowConfig, flowName, task: opts?.task ?? "", flowInput: opts?.flowInput });
+      return await flowManager.start({
+        flow: flowConfig, flowName, task: opts?.task ?? "", flowInput: opts?.flowInput,
+        attached: opts?.notifyParent === true,
+      });
     } catch (err) {
       // The atomic single-run guard in FlowManager.start() can throw "already
       // running" when a second dispatch races the first before assignment. Convert
       // it to the same observable rejection instead of an unhandled promise rejection.
-      emitDispatchRejection(flowName, err instanceof Error ? err.message : String(err));
+      return reject(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -574,7 +598,22 @@ export function activate(pi: ExtensionAPI) {
   // been removed so every non-start outcome flows through runFlowByName's
   // observable rejection path (and the atomic guard in start()).
   pi.events?.on("flow:run", async (data: any) => {
-    await runFlowByName(data?.flowName, { task: data?.task, flowInput: data?.inputs });
+    await runFlowByName(data?.flowName, { task: data?.task, flowInput: data?.inputs, notifyParent: data?.notifyParent === true });
+  });
+
+  // ── Parent orchestration tools (change: add-flow-parent-mailbox) ──
+  registerFlowRunTool(pi, {
+    getFlow: (name) => { if (!flowManager.isRunning) init(pkgRoot, projectRoot); return flows.get(name); },
+    dispatch: (name, opts) => runFlowByName(name, opts),
+  });
+  registerFlowControlTool(pi, {
+    mailbox: flowManager.mailbox,
+    attachedRun: () => {
+      const runId = flowManager.activeRunId;
+      return runId && flowManager.activeRunAttached ? { runId, flowName: flowManager.activeFlowName ?? "" } : null;
+    },
+    cancel: () => flowManager.abort(),
+    getSessionEntries: () => { try { return sessionManager?.getEntries?.() ?? []; } catch { return []; } },
   });
 
   pi.events.on("flow:rediscover", () => {

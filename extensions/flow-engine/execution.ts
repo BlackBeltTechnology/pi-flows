@@ -212,6 +212,9 @@ export interface SpawnOptions {
   mainSessionManager?: SessionManager;
   extraAgentExtensions?: ExtensionFactory[];
   extraCustomTools?: any[];  // ToolDefinition[] — extension tools to include in the session
+  /** Engine-injected `ask_parent` (parent-attached worker agents): replaces any
+   *  same-named custom tool and is never guard-blocked. See change: add-flow-parent-mailbox. */
+  askParentTool?: any;
   onToolCall?: (toolName: string, input: any) => void;
   onToolResult?: (toolName: string, output: any, isError: boolean) => void;
   onAssistantText?: (text: string) => void;
@@ -439,7 +442,9 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
   // Custom tools (flow_agents, flow_write, …) are passed as full
   // ToolDefinition objects via `customTools`, under their plain names. The SDK
   // adds them to its tool registry.
-  const customTools = options.extraCustomTools ?? [];
+  const customTools = options.askParentTool
+    ? [...(options.extraCustomTools ?? []).filter((t: any) => t?.name !== options.askParentTool.name), options.askParentTool]
+    : (options.extraCustomTools ?? []);
 
   // When the agent sandboxes reads (`access.read`), widen it to include the
   // resolved skill directories so `read` can reach the advertised SKILL.md and
@@ -452,7 +457,7 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
   // Build guard options
   const guardOptions: GuardOptions = {
-    allowedTools: [...effectiveTools, "finish"],
+    allowedTools: [...effectiveTools, "finish", ...(options.askParentTool ? [options.askParentTool.name] : [])],
     requireFinish: true,
     accessRules,
     decisionBranches: options.decisionBranches,
@@ -509,8 +514,8 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
     reload: async () => {},
   };
 
-  // Create subagent UI context — bridges select/confirm/input to the parent
-  // session's AskUserQueue via the onExtensionUIRequest callback.
+  // Create subagent UI context — bridges select/confirm/input through the
+  // onExtensionUIRequest callback (parent question, or cancelled when detached).
   const uiContext = createSubagentUIContext(agent.name, options.onExtensionUIRequest);
 
   // Create agent session.
@@ -878,12 +883,10 @@ export async function spawnAgent(options: SpawnOptions): Promise<AgentResult> {
 
 /**
  * Create an ExtensionUIContext for subagent sessions that bridges
- * select/confirm/input calls to the parent session's AskUserQueue
- * via the onExtensionUIRequest callback.
- *
- * This enables subagent extensions (e.g., ask_user tool) to show
- * UI prompts in the parent session's TUI. Non-interactive methods
- * are no-ops since subagents don't own any TUI surface.
+ * select/confirm/input calls through the onExtensionUIRequest callback:
+ * in a parent-attached run they become parent questions, otherwise they
+ * resolve as cancelled (change: add-flow-parent-mailbox). Non-interactive
+ * methods are no-ops since subagents don't own any TUI surface.
  */
 function createSubagentUIContext(
   agentName: string,
@@ -913,12 +916,14 @@ function createSubagentUIContext(
   };
 
   return {
-    select: (title, selectOptions, _opts) =>
-      bridgeRequest("select", { title, options: selectOptions }) as Promise<string | undefined>,
-    confirm: (title, message, _opts) =>
-      bridgeRequest("confirm", { title, message }) as Promise<boolean>,
-    input: (title, placeholder, _opts) =>
-      bridgeRequest("input", { title, placeholder }) as Promise<string | undefined>,
+    // The prompt's own signal/timeout travel with the request so a parent
+    // question can close on them (change: add-flow-parent-mailbox).
+    select: (title, selectOptions, opts) =>
+      bridgeRequest("select", { title, options: selectOptions, signal: opts?.signal, timeout: opts?.timeout }) as Promise<string | undefined>,
+    confirm: (title, message, opts) =>
+      bridgeRequest("confirm", { title, message, signal: opts?.signal, timeout: opts?.timeout }) as Promise<boolean>,
+    input: (title, placeholder, opts) =>
+      bridgeRequest("input", { title, placeholder, signal: opts?.signal, timeout: opts?.timeout }) as Promise<string | undefined>,
     notify: () => {},
     onTerminalInput: () => () => {},
     setStatus: () => {},

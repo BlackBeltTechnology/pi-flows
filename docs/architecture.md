@@ -238,7 +238,7 @@ Extensions hook into the pi-coding-agent lifecycle:
    - Flow events (pi.events.emit "flow:register-*")
 5. session_start fires:
    - Session auth/model storage captured
-   - TUI adapter wired (if ctx.hasUI)
+   - TUI observer wired; slash-command runs parent-attached (if ctx.hasUI)
 6. Events fire during agent execution:
    - "tool_call" → guard can block
    - flow:subagent-tool-call → observation
@@ -269,7 +269,7 @@ On `session_start`, pi-flows scans persisted `flow-event` entries via `findOrpha
 
 1. Group records by `flowRunId`, pick the latest run (highest `seq`).
 2. If that run has no `flow_complete` record, it is **orphaned**.
-3. For an orphaned run, synthesize a terminal event: emit `flow:complete` live (clearing connected dashboard clients) **and** persist a `flow_complete` record tagged with the orphaned run's `flowRunId` (making the next cold resume idempotent). The synthesized `FlowResult` has `status: "aborted"` and summary `"Flow interrupted — parent session closed"`.
+3. For an orphaned run, first close each question it left open (a persisted `flow_question` without `flow_answer`): emit and persist `flow:answer { via: "cancel" }`. Then synthesize a terminal event: emit `flow:complete` live (clearing connected dashboard clients) **and** persist a `flow_complete` record tagged with the orphaned run's `flowRunId` (making the next cold resume idempotent). The synthesized `FlowResult` has `status: "aborted"` and summary `"Flow interrupted — parent session closed"`.
 4. Seed the resumed persister's `seq` counter past the orphan's max `seq` via `seedSeq(maxSeq)`, so the synthesized terminal record replays **after** the run's mid-run events (ordering correctness).
 
 The `flow:abort` handler also reconciles when there is no live flow:
@@ -287,7 +287,8 @@ flowchart TD
     B --> C{latest run has<br/>flow_complete?}
     C -->|yes| D[no-op — already terminal]
     C -->|no| E[orphaned run]
-    E --> F[emit flow:complete live<br/>clears dashboard clients]
+    E --> Q["emit + persist flow:answer via cancel<br/>for each open question"]
+    Q --> F[emit flow:complete live<br/>clears dashboard clients]
     E --> G["persist flow_complete<br/>status: aborted"]
     E --> H["seedSeq maxSeq<br/>terminal replays last"]
     G --> I[idempotent on next resume]
@@ -297,27 +298,39 @@ No dashboard-side code change is required — the synthesized `flow_complete` ri
 
 ## FlowManager Architecture
 
-The `FlowManager` class is the central orchestration component. It uses an adapter pattern to decouple execution logic from UI:
+The `FlowManager` class is the central orchestration component. It decouples execution logic from UI through a pluggable I/O adapter, observers, and a mailbox for parent-attached runs:
 
-```
-┌──────────────────────────────────────────────────┐
-│ FlowManager                                      │
-│                                                  │
-│  ┌─────────────────┐  ┌───────────────────────┐  │
-│  │ FlowIOAdapter   │  │ FlowObserver[]        │  │
-│  │ (pluggable)     │  │ (pluggable)           │  │
-│  │                 │  │                       │  │
-│  │ - askUser()     │  │ - onFlowStart()       │  │
-│  │ - notify()      │  │ - onAgentStarted()    │  │
-│  │ - selectFlow()  │  │ - onAgentComplete()   │  │
-│  └─────────────────┘  │ - onFlowComplete()    │  │
-│                       │ - onToolCall/Result()  │  │
-│                       └───────────────────────┘  │
-│                                                  │
-│  Adapters:              Observers:               │
-│  - TuiFlowIOAdapter     - TuiFlowObserver        │
-│  - HeadlessFlowIOAdapter- EventEmitObserver       │
-└──────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  FM[FlowManager] --> IO["FlowIOAdapter<br/>HeadlessFlowIOAdapter<br/>askUser · handleExtensionUIRequest · notify"]
+  FM --> OBS["FlowObserver[]<br/>TuiFlowObserver · EventEmitObserver<br/>onFlowStarted · onAgentStarted/Complete · onToolCall/Result<br/>onQuestion · onAnswer · onFlowComplete"]
+  FM --> MB["FlowMailbox<br/>parent-attached runs"]
 ```
 
-At startup, a `HeadlessFlowIOAdapter` is wired. On `session_start` (if `ctx.hasUI`), it's upgraded to a `TuiFlowIOAdapter` and a `TuiFlowObserver` is added.
+The adapter is always a `HeadlessFlowIOAdapter`: flows never open a human dialog. It serves detached runs only — forks take the first option, extension prompts resolve cancelled. On `session_start` (if `ctx.hasUI`) it is replaced by one carrying `ctx.ui` for engine notices, and a `TuiFlowObserver` is added.
+
+### Parent-attached runs and the mailbox
+
+`FlowManager.start({ ..., attached })` returns `{ runId }`. A run is attached when started by `flow_run`, by `flow:run` with `notifyParent: true`, or by a slash command in a UI session; only then does the engine get `FlowRunOptions.parent` (`{ runId, ask }`) bound to the manager's `FlowMailbox`. Without it the run is detached and never asks.
+
+```mermaid
+flowchart LR
+  A[agent ask_parent] --> P
+  X[extension ctx.ui.*] --> P
+  F[fork step] --> P
+  P[FlowRunOptions.parent<br/>runId + ask] --> MB[(FlowMailbox<br/>in FlowManager)]
+  MB -- onQuestion/onAnswer --> OBS[observers<br/>EventEmitObserver emits + persists]
+  MB -- new unseen item --> W{wait registered?}
+  W -- yes --> WK[wake flow_control wait]
+  W -- no --> PU[1 s batch<br/>pi.sendMessage flow:mail<br/>followUp, triggerTurn]
+  FC[flow_control reply] --> MB -- resolve --> P
+```
+
+- **Askers.** `ask_parent` is a per-spawn tool added to worker `agent` steps and fan-out instances (the guard always allows it). Extension prompts from those agents reach the mailbox through the subagent UI bridge, which carries the step, item, signal and timeout. Forks ask with `canDecide` when they have a decider. Decision agents and deciders never ask.
+- **Parking.** Each question parks its asker independently; several may be open at once. Ids are `q-` + 12 hex chars of a UUID. A parked agent keeps its place in its wave.
+- **Closing.** The run's questions close (`via: "cancel"`) when the run promise settles — before observers see `flow:complete` — and on `abort()`. The halt signal and step-abort signals close them earlier. A closed fork question ends the fork cancelled without an unhandled rejection.
+- **Push / wait.** Unseen questions and the run outcome are pushed in one batched visible message unless a `flow_control wait` is blocked, which is woken instead. Empty batches send nothing. `wait` marks what it returns, so returned questions never end a later wait.
+
+### Lifecycle marker turn guard
+
+The `[flow] <name> started` / completion markers (assistant messages that open pi's persistence gate) are appended only while the parent session is idle. A marker due during a model turn — which may hold an unresolved `tool_use` such as `flow_control wait` — is deferred and appended at `agent_end`, still subject to the "no user message" guard.
