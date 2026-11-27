@@ -142,10 +142,20 @@ pi.events.emit("flow:agent-error", {
 ```
 This event fires from `FlowManager.onAgentComplete` (the fan-out point where all agent steps complete) when `result.success === false`. It gives the dashboard's timeline `{kind: "error"}` entry a producer. Tool errors continue to travel via `flow:subagent-tool-result` with `isError: true`.
 
+**Question lifecycle: `flow:question` / `flow:answer`** (change `add-flow-parent-mailbox`) — parent-attached runs emit one event per question opened and closed. Both are run-scoped (stamped with `runId`) and persisted via `FLOW_EVENT_NAME_MAP`: `flow:question` → `flow_question`, `flow:answer` → `flow_answer`. Emitted by `EventEmitObserver.onQuestion` / `onAnswer` in `extensions/flow-engine/flow-tui.ts`:
+```typescript
+// flow:question
+{ question_id, runId, stepId, agent, item?, kind: "agent" | "extension" | "fork",
+  question, options?, multiSelect?, allowCustom?, canDecide?, timeoutS?, default? }
+// flow:answer
+{ question_id, runId, stepId, agent, kind, via: "reply" | "timeout" | "cancel" }
+```
+A `flow_question` without a matching `flow_answer` (same `question_id`) is still open — the dashboard can render the step as "waiting on parent" from that alone. Separately, the engine pushes new questions and the run end to the parent session as a custom message (`FlowManager`, `extensions/flow-engine/flow-manager.ts`): `pi.sendMessage({ customType: "flow:mail", content, display: true }, { deliverAs: "followUp", triggerTurn: true })`. It is a session message, not a `flow:*` bus event, and is not in `FLOW_EVENT_NAME_MAP`.
+
 **Reconstruction is the dashboard's responsibility.** A branch in `pi-agent-dashboard/packages/shared/src/state-replay.ts` must:
 1. Extract and re-forward all `flow-event` entries (ordered by `seq`) from the session.
 2. Feed them through the existing idempotent `reduceFlowEvent` to rebuild flow cards.
-3. Add `FLOW_EVENT_MAP["flow:agent-error"] = "flow_agent_error"` to the wire protocol.
+3. Add `FLOW_EVENT_MAP["flow:agent-error"] = "flow_agent_error"` (and `flow:question` → `flow_question`, `flow:answer` → `flow_answer`) to the wire protocol.
 4. Add a `flow_agent_error` reducer case in the flows-plugin state-store.
 
 See `openspec/changes/persist-flow-runs/DASHBOARD-DELEGATION-BRIEF.md` for the full dashboard-side specification.

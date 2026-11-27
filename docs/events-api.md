@@ -288,7 +288,7 @@ Listen to these events to observe a running flow.
 
 Every core lifecycle payload below carries a `runId: string` — an engine-minted identifier that is stable for the duration of one run and distinct across runs. It is minted once by `FlowManager.start()` and stamped onto every live payload, so it is present in **headless/RPC sessions too**, not only under the TUI.
 
-The core set carrying `runId`: `flow:flow-started`, `flow:agent-started`, `flow:agent-complete`, `flow:assistant-text`, `flow:thinking-text`, `flow:subagent-tool-call`, `flow:subagent-tool-result`, `flow:auto-decision`, `flow:decision`, `flow:loop-iteration`, `flow:agent-error`, `flow:complete`. On `flow:complete` the payload is a `FlowResult`, which carries it as `FlowResult.runId`.
+The core set carrying `runId`: `flow:flow-started`, `flow:agent-started`, `flow:agent-complete`, `flow:assistant-text`, `flow:thinking-text`, `flow:subagent-tool-call`, `flow:subagent-tool-result`, `flow:auto-decision`, `flow:decision`, `flow:loop-iteration`, `flow:agent-error`, `flow:question`, `flow:answer`, `flow:complete`. On `flow:complete` the payload is a `FlowResult`, which carries it as `FlowResult.runId`.
 
 Use `runId` to correlate interleaved events when a host multiplexes several sessions, and to discard stale events from a previous run.
 
@@ -479,6 +479,51 @@ pi.events.on("flow:loop-iteration", (data: {
 
 ---
 
+### `flow:question`
+
+A [parent-attached](flows.md#parent-attached-runs) run opened a question: a worker agent's `ask_parent`, an agent extension prompt (`ctx.ui.*`), or a fork step. Persisted as `flow_question`.
+
+```typescript
+pi.events.on("flow:question", (data: {
+  runId:        string;
+  question_id:  string;                          // "q-" + 12 hex chars, unique within the process
+  stepId:       string;
+  agent:        string;
+  item?:        { index: number; count: number }; // fan-out instance
+  kind:         "agent" | "extension" | "fork";
+  question:     string;
+  options?:     string[];
+  multiSelect?: boolean;
+  allowCustom?: boolean;
+  canDecide?:   boolean;                         // fork: delegation to its decider is offered
+  timeoutS?:    number;
+  default?:     string | string[];
+}) => { ... });
+```
+
+Several questions may be open at once (parallel steps, fan-out instances, extension prompts).
+
+---
+
+### `flow:answer`
+
+A question closed. Persisted as `flow_answer`.
+
+```typescript
+pi.events.on("flow:answer", (data: {
+  runId:       string;
+  question_id: string;
+  stepId:      string;
+  agent:       string;
+  kind:        "agent" | "extension" | "fork";
+  via:         "reply" | "timeout" | "cancel";
+}) => { ... });
+```
+
+Every open question closes — `via: "cancel"` — when the run ends for any reason (success, error, hard-fail halt, cancel) or its step is aborted, always **before** the run's `flow:complete`. Orphan reconciliation on resume persists `flow:answer { question_id, via: "cancel", runId }` for each question left open, before the run's terminal record.
+
+---
+
 ### `flow:complete`
 
 Emitted when the flow finishes (success, error, or abort).
@@ -626,7 +671,9 @@ Programmatically trigger a flow by name. This is the single programmatic entry p
 pi.events.emit("flow:run", { flowName: "my-flow" });
 ```
 
-**Payload:** `{ flowName: string }`
+**Payload:** `{ flowName: string; task?: string; inputs?: Record<string, unknown>; notifyParent?: boolean }`
+
+`notifyParent: true` makes the run [parent-attached](flows.md#parent-attached-runs): its questions and its end are pushed to the session that emitted the event, which answers with `flow_control`. Without it the run is detached and never asks anyone. The main-session [`flow_run`](tools-reference.md#flow_run) tool uses this same dispatch path with `notifyParent: true`.
 
 #### Dispatch is always observable
 
@@ -654,13 +701,16 @@ The rejection payload guarantees these stable top-level paths:
 
 It **omits `results`** — so a host's post-flow summary is not generated for a run that never started — and carries **no `runId`**, because no run was ever minted.
 
-**The three decline reasons:**
+**The decline reasons:**
 
 | Cause | `reason` |
 |---|---|
 | Unknown flow | `Flow "<name>" no longer exists — it may have been deleted` |
 | A flow is already running | `A flow is already running (<activeFlowName>)` |
 | Blocked by a gate | the gate's own message |
+| Invalid typed inputs (missing required input, type mismatch) | the input diagnostic |
+
+Typed inputs are a pre-start check: a declined dispatch emits no `flow:flow-started`.
 
 A consumer that never observed `flow_started` can render the outcome from `status === "rejected"` plus `reason` alone — no correlation with an earlier event is required.
 
@@ -791,7 +841,7 @@ pi.events.on("flow:delete-result", (data: {
 
 ### `flow:prompt-request` / `flow:prompt-response`
 
-Low-level prompt bus used internally. Prefer `ctx.ui.*` methods or the `ask_user` tool.
+Low-level prompt bus used internally (main session). Prefer `ctx.ui.*` methods or the `ask_user` tool. Flow agents do not use it: their questions go to the parent through [`flow:question`](#flowquestion).
 
 ```typescript
 // Emit a prompt

@@ -10,6 +10,7 @@ import type { AgentConfig, DeciderSpec, FlowConfig, FlowResult, NodeKind, AgentS
 import type { ParentModelSnapshot } from "./model-roles.js";
 import type { FlowIOAdapter, FlowObserver } from "./flow-io.js";
 import type { ExtensionAPI, Skill } from "@earendil-works/pi-coding-agent";
+import { FlowMailbox } from "./flow-mailbox.js";
 
 
 // ---- Configuration (non-TUI deps) -----------------------------------------
@@ -43,13 +44,28 @@ export class FlowManager {
     abortController: AbortController;
     flowName: string;
     runId: string;
+    attached: boolean;
   } | null = null;
+
+  /** Questions of parent-attached runs (change: add-flow-parent-mailbox). */
+  readonly mailbox: FlowMailbox;
 
   constructor(
     private config: FlowManagerConfig,
     private ioAdapter: FlowIOAdapter,
     private observers: FlowObserver[],
-  ) {}
+  ) {
+    this.mailbox = new FlowMailbox({
+      onQuestion: (q) => { for (const obs of this.observers) obs.onQuestion?.(q); },
+      onAnswer: (q, via) => { for (const obs of this.observers) obs.onAnswer?.(q, via); },
+      push: (text) => {
+        this.config.getPi().sendMessage?.(
+          { customType: "flow:mail", content: text, display: true },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
+      },
+    });
+  }
 
   get isRunning(): boolean {
     return this._activeFlow !== null;
@@ -62,6 +78,11 @@ export class FlowManager {
   /** Engine-minted identity of the in-flight run, or null when idle. */
   get activeRunId(): string | null {
     return this._activeFlow?.runId ?? null;
+  }
+
+  /** Whether the in-flight run is parent-attached. */
+  get activeRunAttached(): boolean {
+    return this._activeFlow?.attached ?? false;
   }
 
   /** Replace the I/O adapter (e.g., when switching from headless to TUI after session_start). */
@@ -81,6 +102,7 @@ export class FlowManager {
 
   abort(): void {
     this.ioAdapter.onFlowEnd?.();
+    if (this._activeFlow) this.mailbox.closeRun(this._activeFlow.runId);
     this._activeFlow?.abortController.abort();
   }
 
@@ -89,15 +111,19 @@ export class FlowManager {
     flowName: string;
     task: string;
     flowInput?: Record<string, unknown>;
-  }): Promise<void> {
+    /** Parent-attached: questions go to the parent session (change: add-flow-parent-mailbox). */
+    attached?: boolean;
+  }): Promise<{ runId: string }> {
     if (this._activeFlow) {
       throw new Error("A flow is already running");
     }
 
     const { flow, flowName, task, flowInput } = options;
+    const attached = options.attached === true;
     const abortController = new AbortController();
     const runId = randomUUID();
-    const { config, ioAdapter, observers } = this;
+    const { config, ioAdapter, observers, mailbox } = this;
+    if (attached) mailbox.startRun(runId, flowName);
 
     // Build the run promise via a synchronous-prologue async IIFE so `_activeFlow`
     // is assigned BEFORE the first `await` suspends — closing the check-to-assign
@@ -148,12 +174,13 @@ export class FlowManager {
       pi: config.getPi(),
       getAgent: (agentName) => config.getAgents().get(agentName),
       getSkill: (skillName) => config.getSkill(skillName),
+      ...(attached ? { parent: { runId, ask: (spec, signal) => mailbox.ask(runId, spec, signal) } } : {}),
       askUser: async (question, type, askOptions, extra) => {
-        const r = await ioAdapter.askUser(question, type as any, askOptions, { ...extra, signal: abortController.signal });
-        return {
-          answer: Array.isArray(r.answer) ? r.answer.join(', ') : r.answer,
-          notes: r.notes,
-        };
+        const signal = extra?.signal
+          ? AbortSignal.any([extra.signal, abortController.signal])
+          : abortController.signal;
+        const r = await ioAdapter.askUser(question, type as any, askOptions, { ...extra, signal });
+        return { answer: r.answer, notes: r.notes };
       },
       onAgentStarted: (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => {
         const agentConfig = config.getAgents().get(agentName);
@@ -192,7 +219,21 @@ export class FlowManager {
       });
     })();
 
-    this._activeFlow = { promise, abortController, flowName, runId };
+    this._activeFlow = { promise, abortController, flowName, runId, attached };
+
+    // A parent-attached run closes its questions and records its outcome for
+    // the parent BEFORE observers see flow:complete (answers persist first).
+    let settled = false;
+    const settleMailbox = (r: FlowResult) => {
+      if (!attached || settled) return;
+      settled = true;
+      mailbox.endRun({
+        runId,
+        flowName,
+        status: r.status ?? "error",
+        summary: r.lastResult?.result?.summary ?? "",
+      });
+    };
 
     // Fire-and-forget with lifecycle cleanup
     promise
@@ -200,6 +241,7 @@ export class FlowManager {
         this._activeFlow = null;
         ioAdapter.onFlowEnd?.();
         flowResult.runId = runId;
+        settleMailbox(flowResult);
         for (const obs of observers) obs.onFlowComplete?.(flowName, flowResult);
       })
       .catch((err: any) => {
@@ -228,7 +270,10 @@ export class FlowManager {
           status: wasAborted ? "aborted" : "error",
           runId,
         };
+        settleMailbox(errorResult);
         for (const obs of observers) obs.onFlowComplete?.(flowName, errorResult);
       });
+
+    return { runId };
   }
 }

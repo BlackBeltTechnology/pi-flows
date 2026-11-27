@@ -10,7 +10,10 @@ pi-flows registers a set of tools that are exposed to agents running inside flow
 |------|---------|--------------|
 | `ask_user` | Main session | `registerAskUserTool` |
 | `subagent` | Main session | `registerSubagentTool` |
+| `flow_run` | Main session | `registerFlowRunTool` |
+| `flow_control` | Main session | `registerFlowControlTool` |
 | `finish` | Subagent sessions | Guard extension (per-session) |
+| `ask_parent` | Worker agents of a parent-attached run | Engine (per-spawn) |
 | `flow_agents` | Main session (inactive by default) | `registerFlowAgentsTool` |
 | `flow_write` | Main session (inactive by default) | `registerFlowWriteTool` |
 
@@ -28,9 +31,9 @@ External packages can add tools to subagent sessions via `flow:register-tool`. S
 
 ### `ask_user`
 
-Ask the user a structured question from within an agent. Supports free-text input, single-select, and yes/no confirm.
+Ask the user a structured question. Supports free-text input, single-select, and yes/no confirm.
 
-**Available in:** Main session, all subagent sessions.
+**Available in:** Main session only. Flow agents never ask the human directly: they ask the parent session with [`ask_parent`](#ask_parent), and the parent model escalates with `ask_user` when it cannot decide.
 
 **Parameters:**
 ```typescript
@@ -51,7 +54,59 @@ Ask the user a structured question from within an agent. Supports free-text inpu
 
 For `confirm`, `answer` is `true` or `false`. For `multiSelect`, `answer` is an array of selected strings. For `allowCustom` with "Other (describe)", the agent receives the user's free-text description.
 
-**Usage in agent system prompt:** Agents can call `ask_user` to gather clarification mid-task. In autonomous mode, `ask_user` is blocked in subagent sessions — agents must make decisions autonomously.
+---
+
+### `flow_run`
+
+Start a flow in the background as its orchestrator. The run is **parent-attached**: questions from its agents, extension prompts and forks come back to this session (see [Parent-attached runs](flows.md#parent-attached-runs)).
+
+**Available in:** Main session.
+
+**Parameters:**
+```typescript
+{
+  flow:    string;                    // Flow command name, e.g. "batch:apply"
+  task?:   string;                    // Task text
+  inputs?: Record<string, unknown>;   // Typed flow inputs
+}
+```
+
+**Returns:** at once with `details.runId` while the flow runs. Dispatches through the same path as [`flow:run`](events-api.md#flowrun) with `notifyParent: true`, so the same pre-start checks apply (flow exists, no run active, gate, typed inputs). A declined dispatch returns `isError: true` with the decline reason — the same text the rejection `flow:complete` carries (also emitted). A missing `task` on a `task_required` flow is an argument error; nothing is dispatched.
+
+In print/JSON mode a pushed message may never get a turn — use `flow_control wait`.
+
+---
+
+### `flow_control`
+
+Drive the parent-attached run started with `flow_run` (or `flow:run` with `notifyParent: true`, or a slash command in a UI session).
+
+**Available in:** Main session.
+
+**Parameters:**
+```typescript
+{
+  action:       "wait" | "reply" | "status" | "cancel";
+  timeout_s?:   number;                 // wait: default 300, max 600
+  question_id?: string;                 // reply (single)
+  answer?:      string | string[];      // reply: option, list (multiSelect) or free text
+  notes?:       string;                 // reply: notes / steering for a delegated fork
+  decide?:      boolean;                // reply: delegate a fork to its decider
+  replies?:     Array<{ question_id: string; answer?: string | string[]; notes?: string; decide?: boolean }>;
+}
+```
+
+**Actions:**
+- `wait` — returns at once with the open questions not returned by an earlier `wait` and the run outcome if not yet returned; otherwise blocks until a new question, the run end, the timeout or abort. Questions already returned stay listed as "still open" but never end a later wait. With no attached run and nothing unreported it returns at once (`nothingToWait`).
+- `reply` — one answer (`question_id` + `answer` or `decide`) or several (`replies`). Per question: `answered`, `invalid` (with the reason and the valid options; the question stays open) or `not_pending` (closed, timed out, or unknown). Each accepted answer resumes its asker.
+- `status` — run id, flow, node statuses (from the read-only run-state projection, as `flow_results runs`) and open questions. No side effect: a later `wait` still returns unseen questions.
+- `cancel` — cancel the run; it ends `aborted` and its open questions close.
+
+`status` and `cancel` act only on a parent-attached run: with none active (or a detached run active) they report "No parent-attached run is active" and the run keeps going.
+
+**Answer rules:** with `options`, an answer must name one option, a list with `multiSelect`, or free text with `allowCustom`. Fork questions: `decide: true` (+`notes`) or free text delegate to the fork's decider — only when the fork has one; otherwise they are `invalid`.
+
+**Push:** for a parent-attached run, new questions and the run end are batched (1 s) into one visible custom message (`customType: "flow:mail"`, `deliverAs: "followUp"`, `triggerTurn: true`) listing each question's id, step, agent, item, options, delegation offer and timeout. Nothing is pushed while the parent is blocked in `wait`; an empty batch sends nothing.
 
 ---
 
@@ -283,12 +338,36 @@ Submit the agent's final structured result. **Every agent must call `finish` as 
 
 ---
 
+### `ask_parent`
+
+Ask the parent session (the orchestrating model) a question. Injected into every worker `agent` step — including fan-out instances — of a parent-attached run, regardless of its `tools:` list (the guard always allows it). Decision agents and deciders do not get it. Autonomous mode does not disable it. Detached runs have no `ask_parent`.
+
+**Parameters:**
+```typescript
+{
+  question:     string;     // Non-empty
+  options?:     string[];   // Allowed answers
+  multiSelect?: boolean;    // Several options (answer is a list)
+  allowCustom?: boolean;    // Free text besides the options
+  timeout_s?:   number;     // Integer 1..86400; no timeout by default
+  default?:     string;     // Returned on timeout; needs timeout_s; must be an option unless allowCustom
+}
+```
+
+**Returns:** the parent's answer text (a multi-select list joined with `, `; reply notes appended). The call parks until the parent replies. On timeout it returns `default`, or without one a built-in text telling the agent to decide itself and state its assumption. If the question closes (run ended, step aborted) it returns an error result. Invalid arguments return an error result and open no question.
+
+**Extension prompts:** in the same agents, `ctx.ui.select` / `confirm` / `input` called by extension tools also become parent questions (`confirm` → options `yes` / `no`); the prompt's own `signal` / `timeout` close them. In detached runs, decision agents and deciders, they resolve cancelled.
+
+---
+
 ## Tool Availability Matrix
 
 | Tool | Main session LLM | Flow agent | External package agent |
 |------|:---:|:---:|:---:|
-| `ask_user` | ✓ | ✓ (blocked in autonomous) | ✓ |
+| `ask_user` | ✓ | — | — |
+| `ask_parent` | — | ✓ (worker agents, parent-attached runs) | ✓ (same) |
 | `subagent` | ✓ | — | — |
+| `flow_run` / `flow_control` | ✓ | — | — |
 | `flow_agents` | ✓ (inactive unless `flows.editFlow`) | — | — |
 | `flow_write` | ✓ (inactive unless `flows.editFlow`) | — | — |
 | `finish` | — | ✓ | ✓ |

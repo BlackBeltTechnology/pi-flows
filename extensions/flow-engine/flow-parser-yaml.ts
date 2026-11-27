@@ -185,8 +185,35 @@ function parseForkStep(raw: any, source: string): ForkStep {
   if (raw.agent) step.agent = String(raw.agent);
   if (raw.task) step.task = String(raw.task);
   if (raw.on_error) step.on_error = String(raw.on_error);
+  parseForkAsk(raw, step, source);
 
   return step;
+}
+
+/**
+ * Fork `ask_timeout_s` + `ask_default` (parent-attached runs): both or
+ * neither; timeout an integer 1..86400; default among the options (each entry
+ * of a list for multiSelect). See change: add-flow-parent-mailbox.
+ */
+function parseForkAsk(raw: any, step: ForkStep, source: string): void {
+  const hasT = raw.ask_timeout_s !== undefined;
+  const hasD = raw.ask_default !== undefined;
+  if (!hasT && !hasD) return;
+  const where = `Fork "${raw.id}" (${source})`;
+  if (!hasT) throw new Error(`${where}: ask_default needs ask_timeout_s`);
+  if (!hasD) throw new Error(`${where}: ask_timeout_s needs ask_default`);
+  const t = Number(raw.ask_timeout_s);
+  if (!Number.isInteger(t) || t < 1 || t > 86400) {
+    throw new Error(`${where}: ask_timeout_s must be an integer from 1 to 86400`);
+  }
+  const d: string[] = Array.isArray(raw.ask_default) ? raw.ask_default.map(String) : [String(raw.ask_default)];
+  if (Array.isArray(raw.ask_default) && !step.multiSelect) throw new Error(`${where}: a list ask_default needs multiSelect`);
+  const bad = d.filter((x) => !step.options.includes(x));
+  if (bad.length || d.length === 0) {
+    throw new Error(`${where}: ask_default must be one of the options (${step.options.join(", ")}), got ${bad.join(", ") || "nothing"}`);
+  }
+  step.ask_timeout_s = t;
+  step.ask_default = Array.isArray(raw.ask_default) ? d : d[0];
 }
 
 function parseAgentDecisionStep(raw: any, source: string): AgentDecisionStep {

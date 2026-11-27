@@ -15,6 +15,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 
 const autonomous = vi.hoisted(() => ({ on: false }));
@@ -386,13 +387,18 @@ describe("cancel and scope", () => {
         "  - id: b\n    type: agent\n    agent: boom\n    task: crash",
       ].join("\n") + "\n",
     };
-    const t = await boot(flows, { worker: agentMd("worker"), boom: agentMd("boom") });
-    // `boom` answers with a provider error → soft failure without on_error → halt.
-    // It fails only once `a`'s question is open, so the halt hits a parked asker.
-    t.parent.faux.setResponses(Array.from({ length: 80 }, () => async (ctx: any) => {
-      if (!/crash/.test(lastUserText(ctx))) return responder(ctx);
-      await t.until(() => t.of("flow:question").length === 1);
-      return fauxAssistantMessage([], { stopReason: "error", errorMessage: "boom" });
+    // `boom` (a parallel agent sibling) waits in a bash tool until `a`'s
+    // question is open, then fails with a provider error (soft, no on_error →
+    // halt) — so the halt hits a parked asker. The wait happens in a tool, not
+    // in the faux response factory, which would serialize the model calls.
+    const flag = join(tmpdir(), `pfm-asked-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const t = await boot(flows, { worker: agentMd("worker"), boom: agentMd("boom", "bash") });
+    t.host.pi.events.on("flow:question", () => writeFileSync(flag, "1"));
+    t.parent.faux.setResponses(Array.from({ length: 80 }, () => (ctx: any) => {
+      const msgs = ctx?.messages ?? [];
+      if (!JSON.stringify(msgs).includes("crash")) return responder(ctx);
+      if (msgs[msgs.length - 1]?.role === "toolResult") return fauxAssistantMessage([], { stopReason: "error", errorMessage: "boom" });
+      return fauxAssistantMessage([fauxToolCall("bash", { command: `while [ ! -f '${flag}' ]; do sleep 0.05; done` })]);
     }));
     await t.run({ flow: "t:halt", task: "go" });
     const done = await t.complete();
@@ -470,7 +476,7 @@ describe("fork steps ask the parent", () => {
     const done = await t.complete();
     expect(done.results["do-fix"].status).not.toBe("skipped");
     expect(done.results["do-skip"].status).not.toBe("skipped");
-    expect(typeof done.forks.choose.answer).toBe("string");
+    expect(done.forks.choose.answer).toEqual(["fix", "skip"]);
   });
 
   it("a fork with ask_timeout_s takes ask_default on timeout", async () => {

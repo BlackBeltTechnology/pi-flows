@@ -50,7 +50,7 @@ inputs:
   count: { type: number }
 ```
 
-A run accepts a structured `inputs` object alongside the `task` string across every invocation path (slash command, the `flow:run` event's `inputs` field, and the programmatic run API). Provided inputs are validated against the schema — a missing `required` input or a type mismatch fails the run start. A flow with no `inputs:` schema is still startable with only `task`. Declared inputs are referenceable as `${{flow.input.<name>}}` and follow the same typed-delivery rules as result outputs (typed to code handlers when wired as a whole value, JIT-serialized to compact JSON in text).
+A run accepts a structured `inputs` object alongside the `task` string across every invocation path (slash command, the `flow:run` event's `inputs` field, the `flow_run` tool's `inputs`, and the programmatic run API). Provided inputs are validated against the schema — a missing `required` input or a type mismatch fails the run start. Via `flow:run` / `flow_run` this is a pre-start check: the dispatch is declined (rejection `flow:complete`, no `flow:flow-started`). A flow with no `inputs:` schema is still startable with only `task`. Declared inputs are referenceable as `${{flow.input.<name>}}` and follow the same typed-delivery rules as result outputs (typed to code handlers when wired as a whole value, JIT-serialized to compact JSON in text).
 
 > **Command name = file path, not `name:` field.** The slash command is derived from the file path:
 >
@@ -126,7 +126,7 @@ steps:
 
 ### Fork Step
 
-Present options to the user (interactive mode) or let a decision agent / decider chain choose (autonomous mode). The selected option determines which branch runs.
+Ask the parent session to choose (parent-attached run) or let the decider chain / first option decide (detached run). The selected option determines which branch runs. Forks never open a human dialog; the parent model escalates to the user with its own `ask_user` when it must.
 
 **Syntax:**
 
@@ -140,6 +140,8 @@ Present options to the user (interactive mode) or let a decision agent / decider
       Full refactor: refactor-step
     allowCustom: true
     agent: router-agent
+    ask_timeout_s: 600         # optional, with ask_default
+    ask_default: Quick fix
 ```
 
 **Field reference:**
@@ -147,41 +149,72 @@ Present options to the user (interactive mode) or let a decision agent / decider
 | Field | Required | Description |
 |-------|:--------:|-------------|
 | `type` | ✓ | Must be `fork`. |
-| `question` | ✓ | Question displayed to the user |
+| `question` | ✓ | Question sent to the parent |
 | `options` | ✓ | Comma-separated or YAML list of choices |
 | `branches` | ✓ | Map of option text → step ID |
-| `allowCustom` | | Appends "Other (describe)" to the prompt. The typed text is mapped to a branch by the fork's decider chain (see [Free text](#fork-free-text-other-describe)). Offered when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or the `flows.decider` setting is set; otherwise validation only warns. |
+| `allowCustom` | | Lets the parent answer with free text, which the fork's decider chain maps to a branch (see [Free text](#fork-free-text)). Accepted only when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or the `flows.decider` setting is set; otherwise validation only warns. |
 | `multiSelect` | | Allow selecting multiple options. Each selected branch runs exactly once, sequentially. |
-| `agent` | | Decision agent for this fork (autonomous decisions, "Auto-decide", "Other" free text). Optional: without it the agent is picked by [Decision agent selection](#decision-agent-selection). |
+| `agent` | | Decision agent for this fork (autonomous decisions, delegation by the parent, free text). Optional: without it the agent is picked by [Decision agent selection](#decision-agent-selection). |
 | `decider` | | Decider chain for this fork (see [Decider chain](#decider-chain-classifier-decisions)). |
 | `task` | | Task description for the decision agent. Defaults to question + options. |
+| `ask_timeout_s` | | Parent-attached runs: seconds (integer 1–86400) until the question closes and the fork takes `ask_default`. Requires `ask_default`. |
+| `ask_default` | | Option taken on timeout; a list of options only with `multiSelect`. Must be among `options`. Requires `ask_timeout_s`. Loading and validation reject a missing pair, an out-of-range timeout or a default not among the options. |
 
 **Behavior:**
 
 - **Single-select:** Routes to one branch. Unselected branches are skipped (synthetic "skipped" results stored).
-- **Multi-select:** Each selected branch runs exactly once, sequentially; unselected branches get synthetic skipped results. Execution then continues after the branches.
-- **After selection:** User is prompted for optional notes (Enter to skip). Fork context is **automatically injected** into the branch step's system prompt.
+- **Multi-select:** Each selected branch runs exactly once, sequentially; unselected branches get synthetic skipped results. Execution then continues after the branches. The fork answer is recorded as the list.
+- **After selection:** The reply's `notes` become the fork's notes. Fork context is **automatically injected** into the branch step's system prompt.
 
-**Autonomous mode:** When alt+a is active, every fork skips the user prompt and is decided by its [decider chain](#decider-chain-classifier-decisions). Entries are tried in order; the first trusted, valid label routes (so listed classifiers run before `agent`). The `agent` entry (the default chain is `[agent]`) runs the decision agent: the step's `agent:`, else the flow's `decision_agent:`, else the setting `flows.decisionAgent`, else the built-in `flow-decision` (see [Decision agent selection](#decision-agent-selection)). An `agent:` on the fork is not required. If every entry fails, the step fails (routed by `on_error` when set); there is no default branch.
+**Parent-attached run:** the fork always asks the parent (see [Parent-attached runs](#parent-attached-runs)), whatever the autonomous toggle. The parent replies with `flow_control reply`:
 
-**Interactive mode:** The user is prompted. The prompt adds:
-
-| Extra option | Offered when | Result |
+| Reply | Accepted when | Result |
 |---|---|---|
-| `Other (describe)` | `allowCustom: true` | User types free text. The decider chain maps it to a branch. |
-| `Auto-decide (let AI choose)` | The fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or the setting `flows.decider` is set | Decided as in autonomous mode. Autonomous mode is switched on. |
+| `answer: "<option>"` (a list with `multiSelect`) | always | Routes to the branch(es); `notes` become the fork's notes. |
+| `decide: true` (+ `notes`) | the fork has a decider | Resolved by the [decider chain](#decider-chain-classifier-decisions), steered by `notes`. |
+| free text | the fork has a decider and `allowCustom: true` | Resolved by the decider chain with the text as guidance (see [Free text](#fork-free-text)). |
 
-The setting `flows.decisionAgent` alone does not add `Auto-decide`.
+"Has a decider": the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or the setting `flows.decider` is set. Without one, `decide` and free text are rejected as invalid (the question stays open). Delegating never changes the global autonomous setting. If a delegated chain produces no valid branch, the fork routes to `on_error` when set; otherwise the parent is asked once more, with the reason, accepting only the options. On `ask_timeout_s` the fork takes `ask_default`. If the question closes (run ended, halt, step aborted) the fork ends cancelled and no branch runs.
 
-#### Fork free text (Other / describe)
+**Detached run, autonomous mode:** When alt+a is active, every fork is decided by its [decider chain](#decider-chain-classifier-decisions). Entries are tried in order; the first trusted, valid label routes (so listed classifiers run before `agent`). The `agent` entry (the default chain is `[agent]`) runs the decision agent: the step's `agent:`, else the flow's `decision_agent:`, else the setting `flows.decisionAgent`, else the built-in `flow-decision` (see [Decision agent selection](#decision-agent-selection)). An `agent:` on the fork is not required. If every entry fails, the step fails (routed by `on_error` when set); there is no default branch.
 
-When the user picks `Other (describe)` and types text:
+**Detached run, autonomous mode off:** the fork takes its first option without asking anyone.
+
+The setting `flows.decisionAgent` alone does not make a fork delegable.
+
+#### Fork free text
+
+When the parent replies with free text (`allowCustom: true`, fork has a decider):
 
 - The text goes to the same decider chain as an autonomous fork. The agent entry sees it appended to the task; a classifier sees it as `userText` in its state.
 - The agent entry uses the same decision agent selection as above (step `agent:` → flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`).
-- The text is stored as the fork's notes and injected into the branch step. The "Optional notes" prompt is skipped.
-- If every entry fails (no valid branch), the user is told and the fork is asked again with the same options. No branch is chosen by default.
-- `Other` and Auto-decide are offered when the fork has `agent:`, a `decider:` chain, the flow has `decision_agent:`, or `flows.decider` is set. If none of the flow-visible ones is present, validation only warns, since `flows.decider` may still route it.
+- The text is the decider's guidance.
+- If every entry fails (no valid branch), the fork routes to `on_error` when set, else the parent is asked once more with options only. No branch is chosen by default.
+- Free text and `decide` are accepted when the fork has `agent:`, a `decider:` chain, the flow has `decision_agent:`, or `flows.decider` is set. If none of the flow-visible ones is present, validation only warns on `allowCustom`, since `flows.decider` may still route it.
+
+### Parent-attached runs
+
+A run is **parent-attached** when started by the main-session [`flow_run`](tools-reference.md#flow_run) tool, by [`flow:run`](events-api.md#flowrun) with `notifyParent: true`, or by a slash command in a session with a UI (interactive or RPC). Every other run — host automations without `notifyParent`, slash commands in print/JSON mode, programmatic `runFlow` — is **detached** and never asks anyone.
+
+```mermaid
+flowchart LR
+  A[worker agent<br/>ask_parent] --> MB[(mailbox)]
+  X[agent extension<br/>ctx.ui.select/confirm/input] --> MB
+  F[fork step] --> MB
+  MB -- flow:mail push<br/>or flow_control wait --> P[parent model]
+  P -- flow_control reply --> MB
+  P -. ask_user when it cannot decide .-> H((user))
+```
+
+In an attached run:
+
+- Worker `agent` steps, including fan-out instances, get [`ask_parent`](tools-reference.md#ask_parent) regardless of their `tools:` list. Decision agents and deciders do not.
+- `ctx.ui.select` / `confirm` / `input` from a worker agent's extension tools become parent questions (`confirm` → `yes` / `no`).
+- Forks ask the parent (above).
+
+Several questions may be open at once; each has an id (`q-` + 12 hex chars) and records run, step, agent, fan-out item and kind (`agent` / `extension` / `fork`). Each asker parks independently until the parent replies, its timeout fires, or the question closes. Questions close when the run ends for any reason (including hard-fail halt and cancel) or their step is aborted. New questions and the run end are pushed to the parent as one batched `flow:mail` message; the parent can also block in `flow_control wait`. See [`flow_control`](tools-reference.md#flow_control).
+
+In a detached run: forks use the decider chain in autonomous mode, else the first option; extension prompts resolve cancelled; agents have no `ask_parent`.
 
 ---
 
@@ -301,7 +334,7 @@ If the decider returns a missing or invalid `branch` (not in `branches`), the st
 
 ### Decision agent selection
 
-For an autonomously decided `fork` and for every `agent-decision` step, the agent is the first of:
+For an autonomously decided or delegated `fork` and for every `agent-decision` step, the agent is the first of:
 
 1. the step's `agent:`;
 2. the flow's top-level `decision_agent:`;
@@ -324,7 +357,7 @@ steps:
 
 ### Decider chain (classifier decisions)
 
-Every agent-made decision (autonomous `fork`, a fork's "Other" free text, `agent-decision`) is answered by an ordered **decider chain**. Entries:
+Every agent-made decision (autonomous or delegated `fork`, a fork's free-text answer, `agent-decision`) is answered by an ordered **decider chain**. Entries:
 
 | Entry | Meaning |
 |---|---|
@@ -361,7 +394,7 @@ steps:
 
 **Trust.** `calibrated` accepts a System One answer only in `enforce` mode. `confidence` accepts confidence ≥ `min_confidence`. `auto` behaves as `calibrated` when a System One calibration record exists for that backend and decision point (the dashboard writes these), else as `confidence`. An untrusted answer is a *shadow* answer: it is recorded and the chain continues.
 
-**Failure.** A label that is not a branch is a failed attempt; so is an agent that returns no valid branch. When every entry fails, an interactive fork asks the user again; otherwise the step fails with an error listing each attempt. There is no silent first-branch default.
+**Failure.** A label that is not a branch is a failed attempt; so is an agent that returns no valid branch. When every entry fails, a fork delegated by the parent routes to `on_error` when set, else asks the parent once more with options only; otherwise the step fails with an error listing each attempt. There is no silent first-branch default.
 
 **Multi decisions.** Classifiers never decide a `multi: true` decision: the chain is reduced to `[agent]`. A step-level `decider:` with a classifier entry on a multi `agent-decision` is a validation error; a flow-level or settings chain is filtered silently.
 

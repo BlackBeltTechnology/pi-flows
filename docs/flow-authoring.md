@@ -464,7 +464,13 @@ The primary step type. Dispatches a named agent with an optional task and inputs
 
 #### 2. Fork step
 
-Presents a choice to the user and routes to different steps based on the selection. In autonomous mode no prompt is shown: the fork is decided by its decider chain, and the `agent` entry uses the step `agent:`, else the flow `decision_agent:`, else `flows.decisionAgent`, else the built-in `flow-decision`.
+Asks a question and routes to different steps based on the selected option. Forks never open a human dialog (the parent model escalates with its own `ask_user` when it must):
+
+- **Parent-attached run** ([Parent-attached runs](flows.md#parent-attached-runs)): the question goes to the main session's model, which replies with the option(s) — or, when the fork has a decider, with `decide: true` (+ `notes`) or free text (`allowCustom`) to delegate to the decider chain. A delegation that yields no valid branch routes to `on_error` when set; otherwise the parent is asked once more, accepting only the options. Optional `ask_timeout_s` + `ask_default` close the question with a default option.
+- **Detached run:** in autonomous mode the fork is decided by its decider chain (the `agent` entry uses the step `agent:`, else the flow `decision_agent:`, else `flows.decisionAgent`, else the built-in `flow-decision`); otherwise it takes the first option.
+
+Full reference: [flows.md → Fork Step](flows.md#fork-step), [Fork free text](flows.md#fork-free-text).
+
 
 ```yaml
 - id: choose-strategy
@@ -481,22 +487,26 @@ Presents a choice to the user and routes to different steps based on the selecti
   agent: flow-decision    # optional — decision agent for this fork
   task: >
     Choose the best strategy based on: ${{result.analyzer.summary}}
-  allowCustom: false      # optional — adds "Other (describe)" option
+  allowCustom: false      # optional — parent may answer with free text (needs a decider)
   multiSelect: false      # optional — allow selecting multiple options
+  ask_timeout_s: 600      # optional, with ask_default — parent-attached runs only
+  ask_default: Fast path (minimal change)
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `id` | Yes | Unique step identifier. |
-| `question` | Yes | Question shown to the user (or agent in autonomous mode). Template string. |
+| `question` | Yes | Question sent to the parent session (or decider in a detached autonomous run). Template string. |
 | `options` | Yes | List of choice strings. |
 | `branches` | Yes | Map of option text → target step ID. Keys must match options **exactly**. |
-| `agent` | No | Decision agent for this fork (autonomous mode, "Auto-decide", `allowCustom` freetext). Without it: flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`. |
+| `agent` | No | Decision agent for this fork (autonomous mode, parent delegation via `decide`, `allowCustom` free text). Without it: flow `decision_agent:` → `flows.decisionAgent` → `flow-decision`. |
 | `task` | No | Context for the auto-deciding agent. Template string. |
-| `allowCustom` | No | Appends an "Other (describe)" option (interactive mode). The decider chain maps the typed text to a branch; if it cannot, the user is asked again. Offered when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or `flows.decider` is set; otherwise validation only warns. |
+| `allowCustom` | No | Lets the parent answer with free text, which the decider chain maps to a branch; if it cannot, the fork routes to `on_error` when set, else the parent is asked once more with options only. Accepted when the fork has `agent:`, a `decider:` chain (step or flow), the flow has `decision_agent:`, or `flows.decider` is set; otherwise validation only warns. |
 | `multiSelect` | No | Allow multiple selections. Each selected branch runs exactly once, sequentially; unselected branches get synthetic skipped results; execution continues after the branches. The selected options are joined and passed as context. |
+| `ask_timeout_s` | No | Parent-attached runs: seconds (integer 1–86400) until the question closes and the fork takes `ask_default`. Requires `ask_default`. |
+| `ask_default` | No | Option taken on timeout (a list only with `multiSelect`). Must be among `options`. Requires `ask_timeout_s`. |
 
-**Fork context injection:** The chosen option, user notes, and decision source (user or agent) are automatically injected into the branch step's system prompt — no manual wiring needed.
+**Fork context injection:** The chosen option, the reply's notes, and decision source (user or agent) are automatically injected into the branch step's system prompt — no manual wiring needed.
 
 ---
 

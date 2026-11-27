@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import type { AgentConfig, AgentResult, DecisionEvent, FlowConfig, FlowResult, NodeKind, AgentStartedExtra, ItemRef } from "./types.js";
+import type { CloseVia, OpenQuestion } from "./flow-mailbox.js";
 
 // ---- FlowIOAdapter --------------------------------------------------------
 
@@ -85,4 +86,8 @@ export interface FlowObserver {
   // {kind:"error"} timeline entry.
   onError?(agentName: string, stepId: string, text: string): void;
   onFlowComplete?(flowName: string, result: FlowResult): void;
+  /** A parent-attached run opened a question (change: add-flow-parent-mailbox). */
+  onQuestion?(question: OpenQuestion): void;
+  /** A question closed: answered, timed out or cancelled. */
+  onAnswer?(question: OpenQuestion, via: CloseVia): void;
 }

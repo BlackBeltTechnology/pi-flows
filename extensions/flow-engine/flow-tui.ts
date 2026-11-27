@@ -17,6 +17,7 @@ import type {
   ItemRef,
 } from "./types.js";
 import type { FlowObserver } from "./flow-io.js";
+import type { CloseVia, OpenQuestion } from "./flow-mailbox.js";
 import { FlowEventPersister, type OrphanedRun } from "./flow-persist.js";
 import type { FlowManager } from "./flow-manager.js";
 import { GridComponent } from "../flow-dashboard/grid-component.js";
@@ -594,8 +595,13 @@ export class EventEmitObserver implements FlowObserver {
   // attribute each event to its run (and the persister records the supplied id).
   private currentRunId = "";
 
-  constructor(private pi: ExtensionAPI, getSessionManager?: () => any) {
-    this.persister = new FlowEventPersister(pi, getSessionManager);
+  constructor(private pi: ExtensionAPI, getSessionManager?: () => any, isIdle?: () => boolean) {
+    this.persister = new FlowEventPersister(pi, getSessionManager, isIdle);
+  }
+
+  /** The parent's turn ended: append lifecycle markers deferred during it. */
+  flushDeferredMarkers(): void {
+    this.persister.flushDeferredMarkers();
   }
 
   // Emit the event live AND durably record it (best-effort) so the run
@@ -782,6 +788,16 @@ export class EventEmitObserver implements FlowObserver {
     this.emit("flow:agent-error", { agentName, stepId, text });
   }
 
+  // Parent-attached question lifecycle (change: add-flow-parent-mailbox).
+  // `runId` on the question is the run's own id (same as currentRunId).
+  onQuestion(q: OpenQuestion): void {
+    this.emit("flow:question", { ...q });
+  }
+
+  onAnswer(q: OpenQuestion, via: CloseVia): void {
+    this.emit("flow:answer", { question_id: q.question_id, stepId: q.stepId, agent: q.agent, kind: q.kind, via });
+  }
+
   // Drive an orphaned flow run (one with no terminal record) to a terminal
   // state: emit `flow:complete` live so connected clients clear immediately,
   // and persist a `flow_complete` record tagged with the ORPHANED run's
@@ -814,15 +830,16 @@ export class EventEmitObserver implements FlowObserver {
       status: "aborted",
       runId: orphan.flowRunId,
     };
+    // Questions left open by the interrupted run close first (answers before
+    // the terminal record). See change: add-flow-parent-mailbox.
+    for (const question_id of orphan.openQuestionIds ?? []) {
+      const answer = { question_id, via: "cancel", runId: orphan.flowRunId };
+      this.pi.events.emit("flow:answer", answer);
+      this.persister.persistTerminal(orphan.flowRunId, answer, "flow_answer");
+    }
     this.pi.events.emit("flow:complete", result);
     this.persister.persistTerminal(orphan.flowRunId, result);
   }
-}
-
-// ---- isOverlayOpen (exported for TuiFlowIOAdapter) -------------------------
-
-export function getIsOverlayOpen(): boolean {
-  return overlayOpen;
 }
 
 // ---- Braille spinner frames (for summary widget) --------------------------

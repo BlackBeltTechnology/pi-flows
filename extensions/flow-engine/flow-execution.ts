@@ -8,6 +8,8 @@ import { resolveAgentModel, type ParentModelSnapshot } from "./model-roles.js";
 import { parseResult, hasArtifactElement } from "./result-parser.js";
 
 import { raceWithAbort } from "./abort-utils.js";
+import type { QuestionResult, QuestionSpec } from "./flow-mailbox.js";
+import { makeAskParentTool } from "./tools/ask-parent.js";
 import { reservedOutputProblems } from "./reserved-outputs.js";
 import { decide, describeAttempts, resolveDecider } from "./decider/chain.js";
 import { buildQuestion, decisionAgentContext } from "./decider/question.js";
@@ -99,7 +101,13 @@ export interface FlowRunOptions {
   pi: ExtensionAPI;
   getAgent: (name: string) => any;  // AgentConfig lookup
   getSkill?: (name: string) => Skill | undefined;
-  askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string; notes?: string }>;
+  askUser: (question: string, type: string, options?: string[], extra?: any) => Promise<{ answer: string | string[]; notes?: string }>;
+  /**
+   * Parent-attached run: questions go to the parent session through this
+   * handle (fork steps, worker agents' `ask_parent`, extension prompts).
+   * Absent → detached (headless). See change: add-flow-parent-mailbox.
+   */
+  parent?: { runId: string; ask: (spec: QuestionSpec, signal?: AbortSignal) => Promise<QuestionResult> };
   onAgentStarted?: (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => void;
   onAgentComplete?: (agentName: string, stepId: string, result: AgentResult, extra?: { nodeKind?: NodeKind; target?: string; itemIndex?: number; itemCount?: number }) => void;
   // `item` is set for a fan-out instance (change: multi-route-decisions).
@@ -941,13 +949,19 @@ async function executeAgentStep(
     mainSessionManager: options.mainSessionManager,
     extraAgentExtensions: options.extraAgentExtensions,
     extraCustomTools: filterExtensionTools(options.extraCustomTools, agentConfig.tools),
+    // Parent-attached worker agents ask the parent (change: add-flow-parent-mailbox).
+    ...(options.parent
+      ? { askParentTool: makeAskParentTool(options.parent.ask, { stepId: step.id, agent: step.agent, ...(ref ? { item: ref } : {}) }) }
+      : {}),
     onToolCall: (name, input) => options.onToolCall?.(step.agent, step.id, name, input, ref),
     onToolResult: (name, output, err) => options.onToolResult?.(step.agent, step.id, name, output, err, ref),
     onAssistantText: (text) => options.onAssistantText?.(step.agent, step.id, text, ref),
     onThinkingText: (text) => options.onThinkingText?.(step.agent, step.id, text, ref),
-    onExtensionUIRequest: options.onExtensionUIRequest
-      ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond, { stepId: step.id, ...(ref ? { item: ref } : {}) })
-      : undefined,
+    onExtensionUIRequest: options.parent
+      ? (request, respond) => askParentForExtensionPrompt(options, request, respond, { stepId: step.id, agent: step.agent, ...(ref ? { item: ref } : {}) })
+      : options.onExtensionUIRequest
+        ? (request, respond) => options.onExtensionUIRequest!(step.agent, request, respond, { stepId: step.id, ...(ref ? { item: ref } : {}) })
+        : undefined,
     signal: options.signal,
     ...pre.spawn,
   });
@@ -1188,12 +1202,135 @@ async function decideForkBranch(
   return { stepResult: { nextStepId: step.branches[branch], agentResult: run.result }, exhausted: false };
 }
 
+/**
+ * A worker agent's extension prompt (`ctx.ui.select/confirm/input`) in a
+ * parent-attached run becomes a parent question. See change: add-flow-parent-mailbox.
+ */
+function askParentForExtensionPrompt(
+  options: FlowRunOptions,
+  request: { method: string; title?: string; message?: string; options?: string[]; signal?: AbortSignal; timeout?: number },
+  respond: (response: any) => void,
+  where: { stepId: string; agent: string; item?: ItemRef },
+): void {
+  const { method } = request;
+  if (!options.parent || (method !== "select" && method !== "confirm" && method !== "input")) {
+    respond({ cancelled: true });
+    return;
+  }
+  const question = method === "confirm" && request.message ? `${request.title ?? ""}\n${request.message}`.trim() : (request.title ?? "");
+  const opts = method === "select" ? request.options : method === "confirm" ? ["yes", "no"] : undefined;
+  const signal = request.signal && options.signal ? AbortSignal.any([options.signal, request.signal]) : (request.signal ?? options.signal);
+  const timeoutS = request.timeout && request.timeout > 0 ? Math.max(1, Math.ceil(request.timeout / 1000)) : undefined;
+  options.parent.ask(
+    { ...where, kind: "extension", question, ...(opts ? { options: opts } : {}), ...(timeoutS ? { timeoutS } : {}) },
+    signal,
+  ).then((r) => {
+    if (r.via !== "reply") return respond({ cancelled: true });
+    const a = Array.isArray(r.answer) ? r.answer.join(", ") : r.answer;
+    if (method === "confirm") return respond({ confirmed: a === "yes" });
+    respond({ value: a });
+  }).catch(() => {
+    try { respond({ cancelled: true }); } catch { /* the prompt is gone */ }
+  });
+}
+
+/**
+ * A parent-attached fork asks the parent (autonomous mode does not apply).
+ * `reask` set → the one retry after an exhausted delegation: options only.
+ */
+async function executeForkViaParent(
+  step: ForkStep,
+  ctx: FlowContext,
+  options: FlowRunOptions,
+  question: string,
+  reask?: string,
+): Promise<StepResult> {
+  const forkAgentName = step.agent || "fork";
+  options.onAgentStarted?.(forkAgentName, step.id, undefined, { nodeKind: "fork" });
+  const canDecide = !reask && hasAutoDecider(step, options);
+  const r = await options.parent!.ask({
+    stepId: step.id,
+    agent: forkAgentName,
+    kind: "fork",
+    question: reask ? `${reask}\n\n${question}` : question,
+    options: step.options,
+    ...(step.multiSelect ? { multiSelect: true } : {}),
+    allowCustom: !reask && !!step.allowCustom,
+    canDecide,
+    ...(step.ask_timeout_s ? { timeoutS: step.ask_timeout_s, default: step.ask_default } : {}),
+  }, options.signal);
+  if (r.via === "cancel" || (r.via === "timeout" && r.answer === undefined)) throw new FlowCancelledError();
+
+  const delegate = r.via === "reply" && (r.decide || (typeof r.answer === "string" && !step.options.includes(r.answer)));
+  if (delegate) {
+    const steer = r.decide ? r.notes : (r.answer as string);
+    options.onAgentComplete?.(forkAgentName, step.id, forkResult(steer || "Auto-decide"), { nodeKind: "fork" });
+    const decided = await decideForkBranch(step, ctx, options, steer || undefined);
+    if (!decided.exhausted || step.on_error) return decided.stepResult;
+    if (options.signal?.aborted) throw new FlowCancelledError();
+    return executeForkViaParent(step, ctx, options, question,
+      `No decider produced a valid branch for this fork. Pick one of the options.`);
+  }
+  const answer = r.answer as string | string[];
+  return applyForkAnswer(step, ctx, options, forkAgentName, answer, r.via === "reply" ? r.notes : undefined);
+}
+
+const forkResult = (summary: string): AgentResult => ({
+  success: true, output: summary, stderr: "", exitCode: 0,
+  result: { status: "complete" as const, files: [], artifacts: "", summary },
+  toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
+});
+
+/** Route a fork by the chosen option(s). The answer is recorded as given (a list for multi-select). */
+async function applyForkAnswer(
+  step: ForkStep,
+  ctx: FlowContext,
+  options: FlowRunOptions,
+  forkAgentName: string,
+  answer: string | string[],
+  notes?: string,
+): Promise<StepResult> {
+  const text = Array.isArray(answer) ? answer.join(", ") : answer;
+  options.onAgentComplete?.(forkAgentName, step.id, forkResult(`Selected: ${text}`), { nodeKind: "fork" });
+  // Pre-existing runtime contract: a multi-select answer is recorded as the list.
+  ctx.forks[step.id] = { answer: answer as string, notes };
+
+  // Multi-select: execute all selected branches sequentially
+  if (step.multiSelect && Array.isArray(answer)) {
+    let lastResult: StepResult = {};
+    const ranBranches: string[] = [];
+    for (const ans of answer) {
+      const branchStepId = step.branches[ans];
+      if (!branchStepId) continue;
+      ranBranches.push(branchStepId);
+      // Autowire fork context for each branch (with all selected options)
+      storeForkContext(ctx, step, branchStepId, text, notes);
+      const branchStep = ctx.steps.find(s => s.id === branchStepId);
+      if (branchStep) {
+        lastResult = await executeStep(branchStep, ctx, options);
+        if (lastResult.agentResult) {
+          storeResult(ctx, branchStep.id, lastResult.agentResult);
+        }
+      }
+    }
+    return { ranBranches };
+  }
+
+  const nextStepId = step.branches[text];
+  // Store fork context for autowiring into the branch step
+  if (nextStepId) storeForkContext(ctx, step, nextStepId, text, notes);
+  return { nextStepId };
+}
+
 async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRunOptions): Promise<StepResult> {
   const expandedQuestion = expandTemplateVariables(step.question, {
     task: ctx.task, inputs: {},
     results: ctx.results,
     loopCounters: ctx.loopCounters, loopMaxIterations: ctx.loopMaxIterations, flowInput: ctx.flowInput,
   });
+
+  // ── Parent-attached run: the parent answers (change: add-flow-parent-mailbox) ──
+  if (options.parent) return executeForkViaParent(step, ctx, options, expandedQuestion);
 
   // ── Autonomous mode: auto-decide via agent (named agent, or built-in flow-decision) ──
   if (options.isAutonomous?.()) {
@@ -1214,59 +1351,20 @@ async function executeForkStep(step: ForkStep, ctx: FlowContext, options: FlowRu
 
   const response = await options.askUser(expandedQuestion, "select", step.options, extra);
 
-  const makeForkResult = (summary: string): AgentResult => ({
-    success: true, output: summary, stderr: "", exitCode: 0,
-    result: { status: "complete" as const, files: [], artifacts: "", summary },
-    toolCalls: [], duration: 0, tokens: { input: 0, output: 0 },
-  });
-
   // Handle auto-decide: user chose to let the agent decide this fork
   if (response.answer === "__auto_decide__" && canAutoDecide) {
-    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult("Auto-decide"), { nodeKind: "fork" });
+    options.onAgentComplete?.(forkAgentName, step.id, forkResult("Auto-decide"), { nodeKind: "fork" });
     return askAgainIfExhausted(step, ctx, options, await decideForkBranch(step, ctx, options));
   }
 
   // Handle custom-decide: user typed freetext via "Other (describe)"
   if (response.answer === "__custom_decide__" && canAutoDecide) {
-    options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(response.notes || "Custom"), { nodeKind: "fork" });
+    options.onAgentComplete?.(forkAgentName, step.id, forkResult(response.notes || "Custom"), { nodeKind: "fork" });
     return askAgainIfExhausted(step, ctx, options, await decideForkBranch(step, ctx, options, response.notes));
   }
 
   // User selected an option directly
-  options.onAgentComplete?.(forkAgentName, step.id, makeForkResult(`Selected: ${response.answer}`), { nodeKind: "fork" });
-
-  ctx.forks[step.id] = response;
-
-  // Multi-select: execute all selected branches sequentially
-  if (step.multiSelect && Array.isArray(response.answer)) {
-    let lastResult: StepResult = {};
-    const ranBranches: string[] = [];
-    const selectedOptions = response.answer as unknown as string[];
-    for (const ans of selectedOptions) {
-      const branchStepId = step.branches[ans];
-      if (!branchStepId) continue;
-      ranBranches.push(branchStepId);
-      // Autowire fork context for each branch (with all selected options)
-      storeForkContext(ctx, step, branchStepId, selectedOptions.join(", "), response.notes);
-      const branchStep = ctx.steps.find(s => s.id === branchStepId);
-      if (branchStep) {
-        lastResult = await executeStep(branchStep, ctx, options);
-        if (lastResult.agentResult) {
-          storeResult(ctx, branchStep.id, lastResult.agentResult);
-        }
-      }
-    }
-    return { ranBranches };
-  }
-
-  const nextStepId = step.branches[response.answer];
-
-  // Store fork context for autowiring into the branch step
-  if (nextStepId) {
-    storeForkContext(ctx, step, nextStepId, response.answer, response.notes);
-  }
-
-  return { nextStepId };
+  return applyForkAnswer(step, ctx, options, forkAgentName, response.answer, response.notes);
 }
 
 /** A fork can be decided without the user when it has an agent, a decider chain or a flow decision_agent. */
@@ -1607,7 +1705,7 @@ async function runDecision(a: RunDecisionArgs): Promise<DecisionRun> {
  * Returns an error message on the first violation, or null when valid.
  * (change: flow-typed-io-and-run-state)
  */
-function validateFlowInput(flow: FlowConfig, input: Record<string, unknown> | undefined): string | null {
+export function validateFlowInput(flow: FlowConfig, input: Record<string, unknown> | undefined): string | null {
   if (!flow.inputs) return null;
   const provided = input ?? {};
   for (const [name, decl] of Object.entries(flow.inputs)) {

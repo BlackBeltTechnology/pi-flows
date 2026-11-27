@@ -137,6 +137,8 @@ interface ForkStep {
   multiSelect?: boolean;
   agent?:      string;
   task?:       string;
+  ask_timeout_s?: number;              // parent-attached runs: 1..86400, with ask_default
+  ask_default?:   string | string[];   // option taken on timeout (list only with multiSelect)
 }
 
 interface AgentDecisionStep {
@@ -420,7 +422,9 @@ interface FlowRunOptions {
   getAgent:            (name: string) => AgentConfig | undefined;
   getSkill?:           (name: string) => Skill | undefined;
   askUser:             (question: string, type: string, options?: string[], extra?: any)
-                         => Promise<{ answer: string; notes?: string }>;
+                         => Promise<{ answer: string | string[]; notes?: string }>;  // list for multi-select
+  // Parent-attached run: questions go to the parent session. Absent → detached.
+  parent?:             { runId: string; ask: (spec: QuestionSpec, signal?: AbortSignal) => Promise<QuestionResult> };
   // Callbacks
   onAgentStarted?:     (agentName: string, stepId: string, resolvedModel?: string, extra?: AgentStartedExtra) => void;
   onAgentComplete?:    (agentName: string, stepId: string, result: AgentResult,
@@ -437,6 +441,34 @@ interface FlowRunOptions {
   onNotify?:           (message: string) => void;
   isAutonomous?:       () => boolean;
   signal?:             AbortSignal;
+}
+```
+
+**`parent`** — set by `FlowManager` only for parent-attached runs. With it, fork steps, worker agents' `ask_parent` and their extension prompts (`ctx.ui.*`) ask through `parent.ask`, and `askUser` / `isAutonomous` are not consulted for forks. Without it (a plain `runFlow` call) the run is detached: forks call `askUser` (or the decider chain when `isAutonomous()`), agents get no `ask_parent`, and extension prompts resolve cancelled. `QuestionSpec` / `QuestionResult` are defined in `extensions/flow-engine/flow-mailbox.ts` (not re-exported from `index.js`):
+
+```typescript
+interface QuestionSpec {
+  stepId:       string;
+  agent:        string;
+  item?:        ItemRef;                  // fan-out instance
+  kind:         "agent" | "extension" | "fork";
+  question:     string;
+  options?:     string[];
+  multiSelect?: boolean;
+  allowCustom?: boolean;
+  canDecide?:   boolean;                  // fork: delegation to its decider offered
+  timeoutS?:    number;
+  default?:     string | string[];
+}
+
+type QuestionResult =
+  | { via: "reply"; answer: string | string[]; notes?: string; decide?: boolean }
+  | { via: "timeout"; answer?: string | string[] }
+  | { via: "cancel" };
+
+interface OpenQuestion extends QuestionSpec {
+  question_id: string;                    // "q-" + 12 hex chars
+  runId:       string;
 }
 ```
 
@@ -465,9 +497,13 @@ Extension points for the `FlowManager`.
 
 ```typescript
 interface FlowIOAdapter {
-  askUser(question: string, type: string, options?: string[], extra?: any): Promise<{ answer: string; notes?: string }>;
-  onFlowStart?(flowName: string): void;
+  askUser(question: string, type: "select" | "confirm" | "input" | "multiselect",
+          options?: string[], extra?: AskUserExtra): Promise<AskUserResult>;  // AskUserResult.answer: string | string[]
+  handleExtensionUIRequest(agentName: string, request: { id: string; method: string; [key: string]: any },
+                           respond: (response: any) => void): void;
+  onFlowStart?(): void;
   onFlowEnd?(): void;
+  notify?(message: string): void;
 }
 
 interface FlowObserver {
@@ -483,8 +519,12 @@ interface FlowObserver {
   onLoopIteration?(stepId: string, iteration: number, maxIterations: number, loopTarget?: string): void;
   onAutoDecision?(forkId: string, agentName: string, chosenBranch: string, targetStepId: string): void;
   onFlowComplete?(result: FlowResult): void;
+  onQuestion?(question: OpenQuestion): void;                                   // parent-attached run opened a question
+  onAnswer?(question: OpenQuestion, via: "reply" | "timeout" | "cancel"): void; // it closed
 }
 ```
+
+The only adapter is `HeadlessFlowIOAdapter(ui?)` (`flow-io-tui.ts`, not re-exported from `index.js`): forks take the first option, extension UI requests resolve cancelled, and `notify` forwards to `ui.notify` when a `ui` is given. Flows never open a human dialog; the former `TuiFlowIOAdapter` / `AskUserQueue` were removed.
 
 ---
 
@@ -509,7 +549,7 @@ const result = await runFlow({
   cwd:      process.cwd(),
   getAgent: (name) => agents.get(name),
   askUser:  async (question, type, options) => {
-    // Handle UI prompts — return answer synchronously or via stdin
+    // Detached run: answer fork prompts (no `parent` → nothing asks a parent)
     console.log(question);
     return { answer: options?.[0] ?? "yes" };
   },
@@ -776,13 +816,20 @@ class FlowManager {
 
   get isRunning(): boolean;
   get activeFlowName(): string | null;
+  get activeRunId(): string | null;
+  get activeRunAttached(): boolean;
+  readonly mailbox: FlowMailbox;          // questions of parent-attached runs
 
   setIOAdapter(adapter: FlowIOAdapter): void;
   addObserver(observer: FlowObserver): void;
   insertObserver(observer: FlowObserver): void;
 
-  abort(): void;
-  start(options: { flow: FlowConfig; flowName: string; task: string }): Promise<void>;
+  abort(): void;                          // also closes the run's open questions
+  start(options: {
+    flow: FlowConfig; flowName: string; task: string;
+    flowInput?: Record<string, unknown>;
+    attached?: boolean;                   // parent-attached: questions go to the parent session
+  }): Promise<{ runId: string }>;
 }
 
 interface FlowManagerConfig {
@@ -798,6 +845,8 @@ interface FlowManagerConfig {
   isAutonomous:           () => boolean;
 }
 ```
+
+`start` with `attached: true` hands the engine `FlowRunOptions.parent` bound to `mailbox`. When the run settles, its open questions close (`via: "cancel"`) and its outcome is recorded for the parent **before** observers get `onFlowComplete`. The mailbox pushes new questions and the run end to the parent as a batched `flow:mail` custom message (`deliverAs: "followUp"`, `triggerTurn: true`). `FlowMailbox` (`flow-mailbox.ts`, not re-exported from `index.js`) backs the `flow_control` tool: `ask(runId, spec, signal)`, `reply(input)`, `wait({ timeoutS, signal })`, `open()`, `closeRun(runId)`.
 
 ---
 

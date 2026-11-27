@@ -5,6 +5,27 @@ All notable changes to pi-flows will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Flows ask the main session** (`add-flow-parent-mailbox`). A flow run started by the new `flow_run` tool, by `flow:run` with `notifyParent: true`, or by a slash command in a session with a UI is *parent-attached*: its questions go to the main session's model, which answers (escalating to the user with its own `ask_user` when it must).
+  - Worker agents get `ask_parent` (park until answered; optional `timeout_s` + `default` steering text on timeout). Agent extension prompts (`ctx.ui.select/confirm/input`) and fork steps ask the same way; forks may delegate to their decider (`decide`) and declare `ask_timeout_s` / `ask_default`.
+  - Several questions can be open at once (parallel steps, fan-out instances); new questions and the run end are pushed in one batched `flow:mail` message (`followUp` + `triggerTurn`).
+  - `flow_control` (`wait` / `reply` / `status` / `cancel`) drives the run; `wait` returns on a new question or the run end.
+  - Events `flow:question` / `flow:answer` (run-scoped, persisted as `flow_question` / `flow_answer`); resume reconciliation closes questions left open.
+
+### Changed
+
+- **Breaking — no human dialogs from flows.** The TUI/dashboard dialog adapter (`TuiFlowIOAdapter`, `AskUserQueue`) is removed. Attached runs ask the main model; detached runs (host automations without `notifyParent`, print-mode slash commands, programmatic `runFlow`) never ask: forks use the decider in autonomous mode, else the first option; extension prompts resolve cancelled. The autonomous toggle no longer affects attached runs.
+- **Behaviour change — typed inputs are a pre-start check for `flow:run`.** Missing or mistyped inputs decline the dispatch (rejection `flow:complete`, no `flow:flow-started`), as the typed-flow-input contract already required.
+- Lifecycle markers are deferred while the main session's model turn is in progress and appended at `agent_end`.
+- `FlowManager.start` returns `{ runId }`; `FlowRunOptions` gains `parent`; `askUser` answers may be lists; `FlowObserver` gains `onQuestion` / `onAnswer`.
+
+### Fixed
+
+- Multi-select fork answers are no longer joined into one string by the flow manager (selected branches did not run).
+
 ## [v0.10.0] - 2026-11-04
 
 ### Added

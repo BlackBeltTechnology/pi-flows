@@ -33,6 +33,9 @@ export const FLOW_EVENT_NAME_MAP: Record<string, string> = {
   "flow:decision": "flow_decision",
   "flow:loop-iteration": "flow_loop_iteration",
   "flow:agent-error": "flow_agent_error",
+  // Parent-attached question lifecycle (change: add-flow-parent-mailbox).
+  "flow:question": "flow_question",
+  "flow:answer": "flow_answer",
   "flow:complete": "flow_complete",
 };
 
@@ -44,6 +47,8 @@ export interface OrphanedRun {
   maxSeq: number;
   // flowName from the run's flow_started record, when available.
   flowName: string;
+  // Questions persisted as opened but never answered (change: add-flow-parent-mailbox).
+  openQuestionIds?: string[];
 }
 
 // Scan persisted session entries for the most recent flow run that never
@@ -56,7 +61,7 @@ export function findOrphanedRun(entries: unknown): OrphanedRun | null {
   if (!Array.isArray(entries)) return null;
   let globalMaxSeq = -1;
   // Per-run aggregate: max seq seen, whether terminal, and flowName.
-  const runs = new Map<string, { maxSeq: number; terminal: boolean; flowName: string }>();
+  const runs = new Map<string, { maxSeq: number; terminal: boolean; flowName: string; open: Set<string> }>();
   for (const entry of entries) {
     const e = entry as { customType?: string; data?: FlowEventRecord };
     if (!e || e.customType !== FLOW_EVENT_ENTRY_TYPE || !e.data) continue;
@@ -64,9 +69,14 @@ export function findOrphanedRun(entries: unknown): OrphanedRun | null {
     if (typeof rec.seq === "number" && rec.seq > globalMaxSeq) globalMaxSeq = rec.seq;
     const runId = rec.flowRunId;
     if (!runId) continue;
-    const agg = runs.get(runId) ?? { maxSeq: -1, terminal: false, flowName: "" };
+    const agg = runs.get(runId) ?? { maxSeq: -1, terminal: false, flowName: "", open: new Set<string>() };
     if (typeof rec.seq === "number" && rec.seq > agg.maxSeq) agg.maxSeq = rec.seq;
     if (rec.eventType === "flow_complete") agg.terminal = true;
+    const qid = (rec.data as { question_id?: unknown } | undefined)?.question_id;
+    if (typeof qid === "string") {
+      if (rec.eventType === "flow_question") agg.open.add(qid);
+      if (rec.eventType === "flow_answer") agg.open.delete(qid);
+    }
     if (rec.eventType === "flow_started" && rec.data && typeof rec.data === "object") {
       const name = (rec.data as { flowName?: unknown }).flowName;
       if (typeof name === "string") agg.flowName = name;
@@ -82,7 +92,10 @@ export function findOrphanedRun(entries: unknown): OrphanedRun | null {
   }
   const latest = runs.get(latestId)!;
   if (latest.terminal) return null;
-  return { flowRunId: latestId, maxSeq: globalMaxSeq, flowName: latest.flowName };
+  return {
+    flowRunId: latestId, maxSeq: globalMaxSeq, flowName: latest.flowName,
+    ...(latest.open.size ? { openQuestionIds: [...latest.open] } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -173,13 +186,25 @@ export function projectRuns(entries: unknown): ProjectedRun[] {
 export class FlowEventPersister {
   private seq = 0;
   private flowRunId = "";
+  // Markers due while a parent turn was in progress (change: add-flow-parent-mailbox).
+  private deferredMarkers: string[] = [];
 
   constructor(
     private readonly pi: ExtensionAPI,
     // Lazy accessor for the main session's SessionManager (captured on
     // session_start). Used to open pi's flush gate via a marker message.
     private readonly getSessionManager?: () => any,
+    // Whether the parent session is idle (no model turn in progress). A turn
+    // may hold an unresolved tool_use, so markers wait for its end.
+    private readonly isIdle?: () => boolean,
   ) {}
+
+  /** Append markers deferred during a parent turn; call when the turn ended. */
+  flushDeferredMarkers(): void {
+    const due = this.deferredMarkers;
+    this.deferredMarkers = [];
+    for (const text of due) this.appendMarkerNow(text);
+  }
 
   // Append a NON-EMPTY assistant marker to the main session so pi's sticky
   // `hasAssistant` flush gate opens and buffered flow-event entries are written
@@ -222,6 +247,16 @@ export class FlowEventPersister {
   }
 
   private appendMarker(text: string): void {
+    let idle = true;
+    try { idle = this.isIdle?.() ?? true; } catch { idle = true; }
+    if (!idle) {
+      this.deferredMarkers.push(text);
+      return;
+    }
+    this.appendMarkerNow(text);
+  }
+
+  private appendMarkerNow(text: string): void {
     const sm = this.getSessionManager?.();
     if (!sm || typeof sm.appendMessage !== "function") return;
     if (this.sessionHasUserMessage(sm)) return;
@@ -268,10 +303,10 @@ export class FlowEventPersister {
   // Persist a terminal `flow_complete` record tagged with an EXPLICIT
   // flowRunId (the orphaned run's), bypassing the channel-driven flowRunId.
   // Used by resume/abort reconciliation. Best-effort; never throws.
-  persistTerminal(flowRunId: string, data: unknown): void {
+  persistTerminal(flowRunId: string, data: unknown, eventType = "flow_complete"): void {
     const record: FlowEventRecord = {
       seq: this.seq++,
-      eventType: "flow_complete",
+      eventType,
       data,
       flowRunId,
     };

@@ -109,7 +109,7 @@ In a parent-attached run, `ctx.ui.select`, `confirm` and `input` called by a wor
 - **THEN** the question SHALL close with `via: "cancel"` and the prompt SHALL resolve as cancelled
 
 ### Requirement: Fork steps ask the parent
-A fork in a parent-attached run SHALL ask the parent with its expanded question and options, honouring `multiSelect`, regardless of autonomous mode. The answer SHALL select the branch(es); reply notes SHALL become the fork's notes; the recorded fork answer SHALL stay text (selections joined).
+A fork in a parent-attached run SHALL ask the parent with its expanded question and options, honouring `multiSelect`, regardless of autonomous mode. The answer SHALL select the branch(es); reply notes SHALL become the fork's notes; the fork answer SHALL be recorded as given (a list for multi-select).
 
 #### Scenario: Parent picks a branch
 - **WHEN** a fork with options `["fix", "skip"]` asks and the parent replies `"skip"` with notes `"flaky test"`

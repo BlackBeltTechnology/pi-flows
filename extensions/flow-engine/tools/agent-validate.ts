@@ -31,6 +31,9 @@ const BASE_TOOLS = new Set([
   "find",
   "ls",
   "bash",
+  // Injected by the engine into worker agents of parent-attached runs; declaring
+  // it is harmless (change: add-flow-parent-mailbox).
+  "ask_parent",
 ]);
 
 import { RESERVED_FINISH_OUTPUTS } from "../reserved-outputs.js";
