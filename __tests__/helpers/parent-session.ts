@@ -52,11 +52,20 @@ export function fakeExtensionHost() {
     on: (name: string, h: Handler) => { add(bus, name, h); return () => undefined; },
     emit: (name: string, data?: any) => { for (const h of bus.get(name) ?? []) h(data); },
   };
+  // Captured registrations / outputs (inert for tests that ignore them).
+  const tools = new Map<string, any>();
+  const commands = new Map<string, any>();
+  const sent: Array<{ message: any; options: any }> = [];
+  const entries: Array<{ customType: string; data: any }> = [];
   const base: Record<string, unknown> = {
     on: (name: string, h: Handler) => add(lifecycle, name, h),
     events,
     getActiveTools: () => [],
     getAllTools: () => [],
+    registerTool: (def: any) => { tools.set(def.name, def); },
+    registerCommand: (name: string, def: any) => { commands.set(name, def); },
+    sendMessage: (message: any, options?: any) => { sent.push({ message, options }); },
+    appendEntry: (customType: string, data: any) => { entries.push({ customType, data }); },
   };
   const pi = new Proxy(base, {
     get: (t, p: string) => (p in t ? t[p] : () => undefined),
@@ -64,6 +73,20 @@ export function fakeExtensionHost() {
 
   return {
     pi,
+    /** Tools registered via `pi.registerTool`, by name. */
+    tools,
+    /** Commands registered via `pi.registerCommand`, by name. */
+    commands,
+    /** Messages sent via `pi.sendMessage` (message + delivery options). */
+    sent,
+    /** Entries appended via `pi.appendEntry`. */
+    entries,
+    /** Call a registered tool's `execute` the way pi does. */
+    async callTool(name: string, params: any, signal?: AbortSignal, ctx: any = {}) {
+      const t = tools.get(name);
+      if (!t) throw new Error(`tool ${name} not registered`);
+      return t.execute(`call-${name}-${Date.now()}`, params, signal, () => undefined, ctx);
+    },
     /** Fire a pi lifecycle event (e.g. session_start) and await all handlers. */
     async fire(name: string, ctx: any) {
       for (const h of lifecycle.get(name) ?? []) await h({ type: name }, ctx);
